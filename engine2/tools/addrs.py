@@ -1,0 +1,83 @@
+"""The engine's working-RAM addresses, read out of the assembler source.
+
+WHY THIS FILE EXISTS.  SOLID, MARK, QUADS and the march's buckets are plain
+`equ`s in engine2/src/march.asm and engine2/src/kernel.asm, and rasm's .sym
+file does not carry equs -- only labels.  So every harness that wanted to
+read the live 16x16 map or the quad list had its own copy of the number, and
+there were TWELVE of them.
+
+When the whole block moved up one page to make room for raster_joint, the
+engine was fine and every one of those harnesses started reading the page
+below: emu_verify3 reported "player is in an open cell, SOLID = 12" and
+"door (5,3) starts shut: SOLID = 0" -- four failures that looked like game
+bugs and were nothing but stale constants.  A harness that reads the wrong
+address does not fail loudly, it fails PLAUSIBLY, which is worse.
+
+So the numbers are parsed from the source that defines them.  Move an equ
+and every harness follows; delete one and the import fails immediately
+instead of silently reading whatever is at the old address.
+"""
+
+import os
+import re
+
+SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                   "src")
+
+# symbol -> the file that defines it
+_WHERE = {
+    "FTAB": "march.asm",
+    "SOLID": "march.asm",
+    "MARK": "march.asm",
+    "BUCKETS": "march.asm",
+    "BUCKHI": "march.asm",
+    "BUCKSZ": "march.asm",
+    "MSTKBOT": "march.asm",
+    "MSTKTOP": "march.asm",
+    "QUADS": "memmap.inc",
+    # ...and one OFFSET rather than an address, because a harness that wants
+    # the bucket write pointers needs both halves and hardcoding either half
+    # loses the same way.  emu_pacefit.py had FTAB_BPTR = #33E0 -- FTAB's
+    # address from two moves ago, plus this offset -- and so read eight
+    # bytes of the flood stack, got zero candidate faces on every state,
+    # and made nrej = -nq.  That is a PLAUSIBLE failure, not a loud one:
+    # the frame estimate quietly went 8 ms under and the least-squares fit
+    # for C_FACE/C_REJ went singular.
+    "O_BPTR": "march.asm",
+}
+
+_EQU = r"^\s*%s\s+equ\s+(#?[0-9A-Fa-f]+)\s*(?:;.*)?$"
+
+
+def _num(tok):
+    return int(tok[1:], 16) if tok.startswith("#") else int(tok)
+
+
+def _read(name):
+    path = os.path.join(SRC, _WHERE[name])
+    pat = re.compile(_EQU % re.escape(name), re.MULTILINE)
+    with open(path) as f:
+        m = pat.search(f.read())
+    if not m:
+        raise KeyError(f"{name} is not an `equ` in src/{_WHERE[name]} any more")
+    return _num(m.group(1))
+
+
+_CACHE = {}
+
+
+def __getattr__(name):
+    if name not in _WHERE:
+        raise AttributeError(name)
+    if name not in _CACHE:
+        _CACHE[name] = _read(name)
+    return _CACHE[name]
+
+
+def all_():
+    return {k: _read(k) for k in _WHERE}
+
+
+if __name__ == "__main__":
+    for k, v in sorted(all_().items(), key=lambda kv: kv[1]):
+        print(f"  {k:8s} = #{v:04X}  ({v})")

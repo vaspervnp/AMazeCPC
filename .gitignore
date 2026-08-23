@@ -1,0 +1,5 @@
+build/
+src/gen_equ.inc
+src/gen_data.inc
+__pycache__/
+*.pyc

@@ -1,0 +1,461 @@
+"""MEASURE the frame PERIOD of build/amaze.dsk, exactly, per vsync.
+
+    python3 engine2/tools/emu_pace.py [nstates]     the state sweep
+    python3 engine2/tools/emu_pace.py walk          walking speed, held UP
+
+WHY NOT AN AVERAGE.  emu_fps.py counts (frame_ctr) over 200 CPC frames and
+divides, which hides everything: a run of 80 ms frames with one 140 ms
+frame in it averages to 85 and looks locked.  This samples (frame_ctr)
+FIVE TIMES PER VSYNC and reports the gap between each pair of successive
+increments on its own, so a single long frame anywhere in the run shows up
+as its own entry in the histogram.  "Locked" here means every gap of every
+state was the same number of vsyncs -- nothing weaker.
+
+Five samples per vsync, not one, because the increment happens at the top
+of main_loop, ~0.7 ms after the flip, i.e. at a fixed but ARBITRARY phase
+inside the period: sampled once per vsync it sits right on a sample
+boundary for some states and gets read one sample early, which reads out
+as a 4-vsync frame that never happened.  At 4 ms a sample a 5-vsync period
+is 24.96 samples against a 4-vsync one's 19.97 and the two cannot be
+confused.
+"""
+
+import collections
+import addrs
+import os
+import struct
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_E2 = os.path.dirname(_HERE)
+_ROOT = os.path.dirname(_E2)
+sys.path.insert(0, os.path.expanduser("~/cpcemu"))
+
+from cpc import CPC                                          # noqa: E402
+import cpc as cpcmod                                         # noqa: E402
+
+DSK = os.path.join(_ROOT, "build", "amaze.dsk")
+SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
+SOLID = addrs.SOLID
+VSYNC_MS = 19.968                       # 312 lines x 64 us
+
+# main3.asm's PACE_FRAMES, read from the source so this file cannot drift
+# from the disc it is measuring.
+PACE_N = int([l.split()[2] for l in open(os.path.join(_E2, "src",
+                                                      "main3.asm"))
+              if l.startswith("PACE_FRAMES equ")][0])
+
+# The six states the old four-chunk pad held at a steady 140 ms, as
+# (cell x, cell y, heading).  They are the reason this file exists.
+OUTLIERS = [(14, 7, 48), (14, 6, 24), (14, 1, 24),
+            (1, 5, 12), (1, 9, 12), (1, 13, 68)]
+
+# ...and the five the cost accumulator held OFF THE VSYNC GRID entirely,
+# back when pace_wait returned instead of waiting once the budget was
+# spent: 109.2-110.5 ms (5.47 periods) and 119.8 ms where everything else
+# was 99.84.  Full (plr_x, plr_y, heading), because the whole point is
+# that they are not on a whole-cell centre.
+OFFGRID = [(0x0160, 0x0DE0, 69), (0x0160, 0x0DE0, 67),
+           (0x0150, 0x0DF0, 67), (0x0AC8, 0x0588, 7),
+           (0x0E88, 0x0AE0, 48)]
+
+# ...and the states the WEAPON spilled, back when gun_step and gun_draw
+# were charged to nobody.  Each of these is internally CONSTANT -- it sits
+# at a rock-steady 139.8 ms -- which is why the check below has to compare
+# every state against PACE_N and not merely against itself: a state that
+# is reliably one period late passes "internally constant" and passes "on
+# the vsync grid", and the old sweep would only have seen it as a second
+# bar in the histogram.  MEASURED with main3.asm's GUN_CHARGED at 0.
+#     (0x0652, 0x0262, 6)    steady 139.8 ms
+#     (0x0378, 0x0740, 39)   steady 139.8 ms
+# Both were found by HOLDING KEYS, not by the lattice sample -- neither is
+# on a whole-cell centre -- and both read 6 vsyncs again the moment C_GUN
+# is charged.  They are named here so the fix is checked on the states
+# that actually broke, every run, and not only by a random sample.
+SPILL = [(0x0652, 0x0262, 6), (0x0378, 0x0740, 39)]
+
+# ...and the states the weapon USED TO spill on.  THIS LIST IS CLOSED AND
+# IT IS KEPT, which is the point of it.
+#
+# The 28x46 sprite cost 3425-4152 us depending on where the bob was, so
+# C_GUN had to be 4500 to stay a one-sided bound, and at 4500 pacescan.py
+# named exactly these 28 states of 4055040 as asking for a 6th wait --
+# 26 of which then measured a rock-steady 139.8 ms on the booted disc
+# while 600 uniformly sampled states on the SAME disc all read 119.81.
+#
+# The art is 28x38 again, the bench reads 3307.7 us worst, C_GUN is 3400,
+# and C_QUAD was RE-SEARCHED against that: 780/22 is the largest charge
+# with zero over-budget states over all 4055040.  So these 28 are no
+# longer over budget -- and they are still the 28 heaviest packers in the
+# maze, so they stay here as the seed that proves it.  A uniform sample
+# cannot find 28 states in four million; only naming them can.  If any of
+# them ever reads 139.8 again, the search has to be re-run -- NOT C_GUN
+# lowered, which is the failure GUN_CHARGED exists to document.
+OVERBUDGET = [(0x0140, 0x0DE0, 68), (0x0140, 0x0500, 15),
+              (0x0140, 0x0508, 15), (0x0140, 0x0510, 15),
+              (0x0758, 0x06F8, 56), (0x0750, 0x06F8, 56),
+              (0x0760, 0x06F0, 55), (0x0760, 0x06E8, 55),
+              (0x0770, 0x06F8, 55), (0x0768, 0x06E0, 55),
+              (0x0770, 0x06F0, 55), (0x0768, 0x06E8, 55),
+              (0x0768, 0x06F0, 55), (0x0750, 0x06E0, 56),
+              (0x0748, 0x06F0, 56), (0x0748, 0x06E8, 56),
+              (0x0750, 0x06E8, 56), (0x0768, 0x06F8, 55),
+              (0x0748, 0x06E0, 56), (0x0750, 0x06F0, 56),
+              (0x0740, 0x06F0, 56), (0x0740, 0x06E8, 56),
+              (0x0150, 0x0DD0, 68), (0x0760, 0x06F8, 55),
+              (0x0758, 0x06F8, 55), (0x0148, 0x0DE0, 68)]
+
+
+def lattice_offsets():
+    """THE SUB-CELL OFFSETS A WALKING PLAYER CAN ACTUALLY LAND ON.
+
+    This is the lattice the previous version of this sweep got wrong, and
+    getting it wrong is why it reported 100.00% locked while five
+    reachable states sat at 109.2 and 119.8 ms.  It sampled offsets at
+    multiples of 32/256; the movement STEP is 24/256 of a cell per game
+    frame (game.asm), so walking lands on 128 + 24k (mod 256) and their
+    wrap, and gcd(24,256) = 8 closes that on every multiple of 8.  A
+    32/256 grid meets that set only at four of its thirty-two points."""
+    return sorted(set((128 + 24 * k) % 256 for k in range(64)))
+
+
+def syms():
+    out = {}
+    for line in open(SYM):
+        p = line.split()
+        if len(p) >= 2 and p[1].startswith("#"):
+            out[p[0].upper()] = int(p[1][1:], 16)
+    return out
+
+
+class Rig:
+    def __init__(self):
+        self.s = syms()
+        self.c = CPC()
+        self.c.insert_disc(DSK)
+        self.c.run_frames(150)
+        self.c.type_text('RUN"DISC\n')
+        self.c.run_frames(500)
+        self.solid = self.c.read_ram(SOLID, 256)
+        # DI / LD SP,#3FF0 / JP main_loop, in the free RAM at #39C0.  See
+        # place() for why teleporting the player needs it.
+        self.c.write_ram(0x39C0, bytes([0xF3, 0x31, 0xF0, 0x3F, 0xC3])
+                         + struct.pack("<H", self.s["MAIN_LOOP"]))
+
+    def ctr(self):
+        """(frame_ctr) LOW BYTE ONLY -- and that is not an optimisation.
+
+        main3.asm bumps the counter with `ld hl,(frame_ctr) / inc hl /
+        ld (frame_ctr),hl`, and LD (nn),HL stores L and then H in two
+        separate memory cycles.  Read the sixteen bits from outside and
+        the read can land BETWEEN those two writes.  Nothing happens on
+        255 frames out of 256, because only L changes; on the frame the
+        low byte WRAPS, the pair reads 02FF -> 0200, a delta of 0xFF01,
+        and periods() divides by the delta -- so the period comes out as
+        0.0000 ms, followed by 0.0010 ms when H catches up.
+
+        MEASURED, not deduced: seed the counter at 02FF and single-step
+        the running game a microsecond at a time and both readings appear,
+        in that order.  They are what put a "0 vsyncs" bar in a sweep of
+        9464 frames and reported a state as unlocked; a frame drawn in
+        zero milliseconds is not a cadence defect, it is a torn read.
+
+        A one-byte read cannot tear, the period is 120 ms against a 250 us
+        sample so the delta is always 1, and 256 frames is far more than
+        any run here needs."""
+        return self.c.peek(self.s["FRAME_CTR"])
+
+    def place(self, px, py, a, settle=14):
+        """Teleport the player and RESTART the main loop.
+
+        Writing (plr_x) while the game is running is not safe and the
+        restart is not cosmetic: the march reads the player's cell again,
+        after march_setup has already seeded the frustum from the old one,
+        so a write that lands between the two gives the flood a seed and a
+        position that disagree.  It then walks far past the seven cells it
+        is bounded by and overruns the 128-entry flood stack into the face
+        buckets and the code below them.  MEASURED: one run in eighty
+        teleports ended with the Z80 executing the back buffer.  A real
+        player never teleports, so this is the harness's problem and the
+        harness fixes it -- jump to the stub above, which resets SP and
+        re-enters main_loop, and no frame ever sees a torn position."""
+        self.c.write_ram(self.s["PLR_X"], struct.pack("<H", px))
+        self.c.write_ram(self.s["PLR_Y"], struct.pack("<H", py))
+        self.c.poke(self.s["PLR_A"], a)
+        self.c.set_pc(0x39C0)
+        self.c.run_frames(settle)
+
+    def periods(self, nframes=8, step=250):
+        """-> [RAW MILLISECONDS] between successive (frame_ctr) increments.
+
+        250 us a sample, eighty times per vsync, and the answer is NOT
+        rounded to a vsync count.  Both of those matter.  Rounding hides
+        the only interesting failure: a frame that free-runs is 109.2 ms,
+        which is 5.47 periods, and a sweep that reports vsync counts will
+        call that either 5 or 6 and never notice.  And sampling once per
+        emulated CPC frame manufactures readings that never happened,
+        because the increment sits at a fixed but arbitrary phase inside
+        the period."""
+        last = self.ctr()
+        at, out, i = None, [], 0
+        limit = int(nframes * 260000 / step) + 400
+        while len(out) < nframes and i < limit:
+            self.c.run_us(step)
+            i += 1
+            n = self.ctr()
+            if n != last:
+                d = (n - last) & 0xFF
+                if at is not None:
+                    out.append((i - at) * step / 1000.0 / d)
+                at, last = i, n
+        return out
+
+    def periods_r12(self, nframes=6, step=250):
+        """The same period off the CRTC R12 flip register -- a SECOND,
+        independent observable, so a claim about the cadence does not rest
+        on one variable in RAM."""
+        last = self.c.crtc_screen_addr
+        at, out, i = None, [], 0
+        limit = int(nframes * 260000 / step) + 400
+        while len(out) < nframes and i < limit:
+            self.c.run_us(step)
+            i += 1
+            n = self.c.crtc_screen_addr
+            if n != last:
+                if at is not None:
+                    out.append((i - at) * step / 1000.0)
+                at, last = i, n
+        return out
+
+    def walked(self, n=90, seed=11):
+        """States reached by ACTUALLY HOLDING KEYS from random starts --
+        the only sampler that cannot miss a lattice."""
+        import random
+        rnd = random.Random(seed)
+        pool = [((cx << 8) | 128, (cy << 8) | 128, a)
+                for cy in range(16) for cx in range(16)
+                for a in range(0, 72, 3)
+                if reachable(self.solid, (cx << 8) | 128, (cy << 8) | 128)]
+        out = []
+        for _ in range(n):
+            px, py, a = rnd.choice(pool)
+            self.place(px, py, a, settle=10)
+            k = rnd.choice([cpcmod.KEY_UP, cpcmod.KEY_DOWN])
+            self.c.key_down(k)
+            self.c.run_frames(rnd.randint(3, 40))
+            self.c.key_up(k)
+            if rnd.random() < 0.5:
+                k2 = rnd.choice([cpcmod.KEY_LEFT, cpcmod.KEY_RIGHT])
+                self.c.key_down(k2)
+                self.c.run_frames(rnd.randint(2, 20))
+                self.c.key_up(k2)
+            self.c.run_frames(4)
+            out.append((
+                struct.unpack("<H", self.c.read_ram(self.s["PLR_X"], 2))[0],
+                struct.unpack("<H", self.c.read_ram(self.s["PLR_Y"], 2))[0],
+                self.c.peek(self.s["PLR_A"])))
+        return out
+
+
+def reachable(solid, px, py, rad=64):
+    """The player's 0.25-cell collision box clear of every solid cell --
+    the same test game.asm's movement makes, so the same state space."""
+    cx, cy, fx, fy = px >> 8, py >> 8, px & 255, py & 255
+    if solid[cy * 16 + cx]:
+        return False
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            if not (dx or dy):
+                continue
+            i, j = cx + dx, cy + dy
+            if not (0 <= i < 16 and 0 <= j < 16) or solid[j * 16 + i]:
+                ex = 0 if dx == 0 else (fx if dx < 0 else 256 - fx)
+                ey = 0 if dy == 0 else (fy if dy < 0 else 256 - fy)
+                if ex * ex + ey * ey < rad * rad:
+                    return False
+    return True
+
+
+def sweep(n=1400, seed=8191, nwalk=90):
+    import random
+    g = Rig()
+    rnd = random.Random(seed)
+    offs = lattice_offsets()
+    pool = [((cx << 8) | ox, (cy << 8) | oy, a)
+            for cy in range(16) for cx in range(16)
+            for ox in offs for oy in offs for a in range(72)
+            if reachable(g.solid, (cx << 8) | ox, (cy << 8) | oy)]
+    named = ([((cx << 8) | 128, (cy << 8) | 128, a) for cx, cy, a in OUTLIERS]
+             + list(OFFGRID) + list(SPILL) + list(OVERBUDGET))
+    walk_states = g.walked(nwalk)
+    states = named + walk_states + rnd.sample(
+        pool, max(0, n - len(named) - len(walk_states)))
+    print(f"{len(offs)} sub-cell offsets on the 24/256 movement lattice -> "
+          f"{len(pool)} reachable states (0.25-cell box x 72 headings)")
+    print(f"MEASURING {len(states)}: {len(named)} named bad states, "
+          f"{len(walk_states)} reached by HOLDING KEYS, the rest sampled")
+    print("period read at 250 us and NOT rounded to vsyncs\n")
+
+    hist = collections.Counter()
+    bad = []
+    for k, (px, py, a) in enumerate(states):
+        g.place(px, py, a)
+        per = g.periods()
+        if not per:
+            continue
+        for p in per:
+            hist[round(p, 1)] += 1
+        grid = all(abs(p / VSYNC_MS - round(p / VSYNC_MS)) < 0.06
+                   for p in per)
+        same = max(per) - min(per) < 0.6
+        # ...AND ON THE RIGHT MULTIPLE.  A state that spends every frame
+        # at 7 vsyncs is on the grid and is internally constant, so the
+        # two tests above both pass it -- and that is exactly the shape of
+        # the failure an uncharged unit produces.  The period has to be
+        # PACE_N, not just steady.
+        onpace = all(round(p / VSYNC_MS) == PACE_N for p in per)
+        if k < len(named) or not (grid and same and onpace):
+            note = ("" if grid and same and onpace
+                    else "  <-- NOT A VSYNC MULTIPLE" if not grid
+                    else "  <-- MIXED" if not same
+                    else "  <-- %d VSYNCS, NOT %d"
+                         % (round(max(per) / VSYNC_MS), PACE_N))
+            tag = "named" if k < len(named) else "sampled"
+            print(f"  ({px:04X},{py:04X}) a={a:2d}  "
+                  f"{tag:10s} ctr {sorted(set(round(p,1) for p in per))} "
+                  f"r12 {sorted(set(round(p,1) for p in g.periods_r12()))}"
+                  f"{note}")
+        if not (grid and same and onpace):
+            bad.append((px, py, a, per))
+        if k and k % 200 == 0:
+            print(f"    {k}/{len(states)} states, "
+                  f"{sum(hist.values())} frames so far")
+
+    tot = sum(hist.values())
+    print(f"\n=== PERIOD, {tot} game frames over {len(states)} states, "
+          f"250 us sampling")
+    # Bucket by the NEAREST whole vsync, but keep the raw spread inside
+    # each bucket on show: a 250 us sampling grid reads one true 119.808
+    # ms period as either 119.75 or 120.00, and that is the sampler, not
+    # the machine.  Anything that is not within 6% of a whole vsync is
+    # counted separately by `bad` above and cannot land in a bucket.
+    vs = collections.defaultdict(list)
+    for p, c in hist.items():
+        vs[int(round(p / VSYNC_MS))] += [p] * c
+    for v in sorted(vs):
+        raw = vs[v]
+        print(f"    {v} vsyncs = {v*VSYNC_MS:6.2f} ms = "
+              f"{1000.0/(v*VSYNC_MS):5.2f} fps   {len(raw):6d}  "
+              f"{100.0*len(raw)/tot:6.2f}%   "
+              f"(raw {min(raw):.1f}..{max(raw):.1f} ms)")
+    locked = len(vs) == 1 and sorted(vs)[0] == PACE_N and not bad
+    print(f"\n    LOCKED: {locked}"
+          + ("" if locked else f"  -- {len(vs)} different periods, "
+                               f"{len(bad)} states off {PACE_N} vsyncs"))
+    if bad:
+        print("    states to name in SPILL / OFFGRID at the head of this "
+              "file:")
+        for px, py, a, per in bad[:20]:
+            print(f"      (0x{px:04X}, 0x{py:04X}, {a}),   "
+                  f"{sorted(set(round(p,1) for p in per))} ms")
+    return 0 if locked else 1
+
+
+def corridors(g):
+    """Two long straight runs of different view cost, as
+    (name, start px, start py, heading, axis, sign)."""
+    solid = g.solid
+
+    def openp(x, y):
+        return 0 <= x < 16 and 0 <= y < 16 and not solid[y * 16 + x]
+    out = []
+    for y in range(16):
+        for x in range(16):
+            if not openp(x, y):
+                continue
+            n = 0
+            while openp(x + n + 1, y):
+                n += 1
+            if n >= 4 and not openp(x - 1, y):
+                out.append((f"east from ({x},{y}), {n} cells",
+                            (x << 8) | 128, (y << 8) | 128, 0, "x", n))
+    for x in range(16):
+        for y in range(16):
+            if not openp(x, y):
+                continue
+            n = 0
+            while openp(x, y + n + 1):
+                n += 1
+            if n >= 4 and not openp(x, y - 1):
+                out.append((f"south from ({x},{y}), {n} cells",
+                            (x << 8) | 128, (y << 8) | 128, 18, "y", n))
+    return out
+
+
+def walk(seconds=4.0):
+    """Hold UP in two corridors of different view cost and MEASURE
+    cells/s.  This is the thing the player actually feels, and the only
+    reason the period has to be constant."""
+    g = Rig()
+    runs = corridors(g)
+    # Rank them by what they cost to DRAW, not by length: the point of the
+    # test is that two views of different cost walk at the same speed.
+    cost = {}
+    for r in runs:
+        g.place(r[1], r[2], r[3], settle=12)
+        c = (0, 0)
+        for _ in range(6):
+            g.c.run_frames(2)
+            c = max(c, (g.c.peek(g.s["FG_NQUAD"]),
+                        g.c.peek(g.s["M_VISITED"])))
+        cost[r[0]] = c
+    runs.sort(key=lambda r: cost[r[0]])
+    picks = [runs[0], runs[len(runs) // 2], runs[-1]]
+    nframes = int(round(seconds * 1000.0 / (PACE_N * VSYNC_MS)))
+    print(f"holding UP for exactly {nframes} game frames in {len(picks)} "
+          f"corridors")
+    print("  'cells' and 'quads' are the marched cells and the drawn quads "
+          "of the view --\n  the cost the period used to depend on.  The "
+          "run is counted in GAME FRAMES,\n  not in a fixed window, so "
+          "the seconds below are measured and not assumed.\n")
+    print("%-30s %5s %5s %8s %8s %9s %11s" %
+          ("corridor", "cells", "quads", "seconds", "cells", "cells/s",
+           "cells/frame"))
+    res = []
+    for name, px, py, a, axis, _n in picks:
+        g.place(px, py, a, settle=20)
+        cq = cost[name]
+        sym = g.s["PLR_X" if axis == "x" else "PLR_Y"]
+        g.c.key_down(cpcmod.KEY_UP)
+        n0 = g.ctr()                        # sync to a frame boundary
+        while g.ctr() == n0:
+            g.c.run_us(2000)
+        n0 = g.ctr()
+        p0 = struct.unpack("<H", g.c.read_ram(sym, 2))[0]
+        us = 0
+        while ((g.ctr() - n0) & 0xFF) < nframes:      # ctr() is 8-bit; see it
+            g.c.run_us(2000)
+            us += 2000
+        p1 = struct.unpack("<H", g.c.read_ram(sym, 2))[0]
+        g.c.key_up(cpcmod.KEY_UP)
+        cells = (p1 - p0) / 256.0
+        secs = us / 1e6
+        print("%-30s %5d %5d %8.4f %8.3f %9.4f %11.5f" %
+              (name, cq[1], cq[0], secs, cells, cells / secs,
+               cells / nframes))
+        res.append(cells / secs)
+        g.c.run_frames(10)
+    lo, hi = min(res), max(res)
+    print(f"\n    spread {hi/lo:.4f}x  ({lo:.4f} .. {hi:.4f} cells/s)")
+    return 0
+
+
+def main():
+    a = sys.argv[1] if len(sys.argv) > 1 else "1400"
+    if a == "walk":
+        return walk()
+    return sweep(int(a))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
