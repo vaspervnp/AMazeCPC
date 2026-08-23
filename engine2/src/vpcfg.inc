@@ -360,4 +360,32 @@ COURSES      equ 0
 ;  period is the one the whole of main3.asm's pacing note is about:
 ;  119.81 ms, 8.35 fps, locked over the whole reachable state space.
 ; ------------------------------------------------------------------
+;  THAT ROUND WENT IN, AND THEN THE SHAPE WAS WRONG A SECOND TIME -- not
+;  in the figure but in WHERE THE HOOK SAT.  Charging
+;  base + C_CBAND*bands + C_COLR*rows_drawn is tighter than the flat
+;  number, and rc_column took it AFTER its own setup, so the u division,
+;  the two Bresenham probes, the CTABT lookup and the row range were
+;  billed to the previous hook -- a 60 us C_CEDGE, on a raked face.
+;  emu_rcol.py atomic, per INTERVAL: charged 60, measured 1883.  The disc
+;  read [10, 11, 13] vsyncs for it.
+;
+;  IT IS NOW ONE HOOK PER PAIR, TAKEN FIRST, and the figure went back to
+;  an UPPER bound to make that possible: two bands and the full row range
+;  plus C_CEDGE per row the taller column adds, computed from the two
+;  probes and nothing else, so it can be charged before the u division
+;  and the table lookup rather than after them.  The tighter figure could
+;  come to zero on a fully occluded pair, and a pair with no hook is a
+;  pair with no interval boundary, which was the whole defect.  The edge
+;  runs gave up their own hooks to the same unit.
+;
+;  Exhaustive over all 6967296 reachable states (pacescan.py):
+;
+;      4 waits 0.186%   5  58.234%   6  41.567%   7  0.012%
+;      worst charged frame 123102 us, 0 states asking for an eighth wait
+;
+;  -- PACE_FRAMES 8, 159.74 ms, 6.26 fps.  THAT IS pacescan's NUMBER AND
+;  NOT THE DISC'S: emu_rcol.py atomic and emu_verify3.py have not been run
+;  against this build, and pacescan replays the charge, so it cannot see a
+;  charge that is still wrong.  See TODO.md section 0.
+; ------------------------------------------------------------------
 VPCOL        equ 1

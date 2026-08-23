@@ -87,7 +87,7 @@ def _one(px, py, a):
     cbytes = cpairs = 0
     for q in reversed(quads):            # painter order backwards = near first
         for (_p, _u, _j, _r0, _r1, _s, bands, _st,
-             edges) in cm.face_columns(q, c, cover):
+             edges, _r0t, _r1t) in cm.face_columns(q, c, cover):
             for b0, b1, _ix in bands:
                 cpairs += 1
                 cbytes += 2 * (b1 - b0 + 1)

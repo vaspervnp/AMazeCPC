@@ -690,44 +690,6 @@ rc_hacc                         ; A = the remainder to add
 ;  rc_column -- one PAIR of byte columns of one face.
 ; =====================================================================
 rc_column
-    ; ---- u = CTEX_BW * N / D, both ends clamped.  N and D can leave
-    ;      their legal range at the outermost pair, where the sample
-    ;      column is outside the face; clamping u is what the model's
-    ;      min/max on t2 does, and it is one compare each.
-    ld   hl,(rc_den)
-    bit  7,h
-    jr   nz,rc_u0               ; D <= 0
-    ld   a,h
-    or   l
-    jr   z,rc_u0
-    ex   de,hl                  ; DE = D
-    ld   hl,(rc_num)
-    bit  7,h
-    jr   nz,rc_u0               ; N < 0
-    or   a
-    sbc  hl,de
-    jr   c,rc_udo
-    ld   a,CTEX_BW-1            ; N >= D: the far end
-    jr   rc_uclamp
-rc_u0
-    xor  a
-    jr   rc_uclamp
-rc_udo
-    add  hl,de                  ; HL = N again
-    call rc_udiv                ; A = the four-bit quotient
-rc_uclamp
-    ld   c,a
-    ld   a,(rc_flip)
-    or   a
-    jr   z,rc_unf
-    ld   a,CTEX_BW-1
-    sub  c
-    ld   c,a
-rc_unf
-    ld   a,(rc_texpg)
-    add  a,c
-    ld   (rc_page),a            ; the texture page: base + u
-
     ; ---- EACH BYTE COLUMN OF THE PAIR HAS ITS OWN j, half a pair-step
     ;      either side of the centre sample, and that difference IS the
     ;      silhouette staircase.  MEASURED over 9424 pairs from 400 real
@@ -775,25 +737,6 @@ rc_jleft
 rc_jset
     ld   (rc_eofs),a            ; which byte of the pair is the tall one
 
-    ; ---- CTABT IS INDEXED BY h IN QUARTER SCANLINES, not by j.  Indexing
-    ;      it by j threw away the bottom four bits the projector went to
-    ;      the trouble of computing: across adjacent pairs, while h moved
-    ;      less than a whole scanline j did not move at all, so the mortar
-    ;      courses ran dead flat and then every one of them jumped at
-    ;      once.  See colmodel.ctab.  4*(h >> 2) is h & ~3, so the finer
-    ;      index costs an AND where the coarse one cost two shifts.
-    ld   hl,(rc_hs)
-    call rc_tix
-    ld   e,(hl)
-    inc  hl
-    ld   d,(hl)
-    inc  hl
-    ld   (rc_step),de
-    ld   e,(hl)
-    inc  hl
-    ld   d,(hl)
-    ld   (rc_idx0),de
-
     ; ---- the row range: RC_RC -+ j, clipped to the viewport
     ld   hl,(rc_j)
     ld   a,h
@@ -822,77 +765,158 @@ rc_r1ok
     ld   (rc_r1),a
 rc_rows
 
-    if RC_PACED
-    ; ---- WHAT THIS PAIR COSTS, roomed and charged before a pixel of it
-    ;      is drawn.  It is charged HERE, and not before the row range is
-    ;      known, because BOTH terms that matter are known here and were
-    ;      guesses before it: how many BANDS this face will draw at this
-    ;      pair, and how many SCANLINES they add up to.
-    ;
-    ;      MEASURED on the booted disc, engine2/tools/emu_rcol.py, by a
-    ;      sweep that varies the band count and the scanline count
-    ;      independently (full viewport / quarter height / one row tall):
-    ;
-    ;          a pair drawing TWO bands   1015 us + 19.48 per scanline
-    ;          a pair drawing ONE band     650 us + 19.48 per scanline
-    ;
-    ;      i.e. 285 fixed per pair and 365 per band, and C_COLS / C_CBAND
-    ;      / C_COLR are those rounded up.
-    ;
-    ;      A FLAT PER-PAIR CHARGE DOES NOT FIT, and that is not a matter
-    ;      of picking a bigger number.  One constant covering both a
-    ;      96-scanline two-band pair and a one-row one-band pair has to
-    ;      bound the first, so it over-charges the second by 450 us; and
-    ;      charging the FULL row range 2j+1 rather than the rows actually
-    ;      drawn over-charges every pair a nearer face has already cut.
-    ;      On a frame full of overlapping faces that compounds: the worst
-    ;      charged frame came to 185134 us, which is eleven vsync periods
-    ;      for about seven periods of work.  An over-charge costs periods
-    ;      exactly as an under-charge does -- see main3.asm -- and this is
-    ;      the shape, not the size, being wrong.
-    ld   hl,(rc_pup)
-    ld   c,(hl)                 ; up
-    ld   b,0                    ; bands
-    ld   e,0                    ; scanlines
-    ld   a,(rc_r0)
-    cp   c
-    jr   nc,rc_pc1
-    inc  b
-    ld   a,c
-    ld   hl,rc_r0
-    sub  (hl)                   ; the upper band's rows
-    ld   e,a
-rc_pc1
-    ld   hl,(rc_pdn)
-    ld   c,(hl)                 ; dn
-    ld   a,(rc_r1)
-    cp   c
-    jr   c,rc_pc2
-    sub  c
-    inc  a                      ; the lower band's rows
-    add  a,e
-    ld   e,a
-    inc  b
-rc_pc2
-    ld   a,b
+    ; the taller column's own row range, clipped to the viewport
+    ld   hl,(rc_jt)
+    ld   a,h
     or   a
-    jr   z,rc_pcdone            ; this face draws nothing here
-    ld   a,e
+    jr   nz,rc_etbig
+    ld   a,l
+    cp   RC_RC
+    jr   c,rc_etsml
+rc_etbig
+    xor  a
+    ld   (rc_r0t),a
+    ld   a,VP_H-1
+    ld   (rc_r1t),a
+    jr   rc_etrows
+rc_etsml
+    ld   c,a
+    ld   a,RC_RC
+    sub  c
+    ld   (rc_r0t),a
+    ld   a,RC_RC
+    add  a,c
+    cp   VP_H
+    jr   c,rc_et1ok
+    ld   a,VP_H-1
+rc_et1ok
+    ld   (rc_r1t),a
+rc_etrows
+
+    if RC_PACED
+    ; ---- WHAT THIS PAIR COSTS, ROOMED AND CHARGED IN FRONT OF ALL OF IT.
+    ;
+    ;      THIS HOOK USED TO SIT AFTER THE SETUP ABOVE, and that is what
+    ;      broke the frame lock.  Room-then-charge bills the work in FRONT
+    ;      of a hook to the PREVIOUS hook, so the u division, the two
+    ;      Bresenham probes, the CTABT lookup and the row range -- about a
+    ;      microsecond in a thousand of the whole rasteriser -- were all
+    ;      billed to whatever hook came before them, which on a raked face
+    ;      is a 60 us edge run.  MEASURED, engine2/tools/emu_rcol.py
+    ;      atomic 2, with the hook in its old place:
+    ;
+    ;          hook 33: charged   60   MEASURED 1883   UNDER by 1823 us
+    ;          hook 47: charged   60   MEASURED 1673   UNDER by 1613 us
+    ;          hook 22: charged 3362   MEASURED 5101   UNDER by 1739 us
+    ;
+    ;      An under-charged interval overruns the 19968 us period, the
+    ;      yield lands past the vsync edge and the frame silently takes
+    ;      another one.  That is the whole of emu_verify3.py's [10,11,13].
+    ;
+    ;      SO THERE IS ONE HOOK PER PAIR AND IT IS THE FIRST THING THE
+    ;      PAIR DOES.  An interval is then exactly one pair -- this hook
+    ;      to the next pair's -- and what it has to cover is this pair's
+    ;      drawing, rc_pnext's step, and the NEXT pair's probes and row
+    ;      ranges.  Only the probes and the row ranges can precede a hook
+    ;      at all, and they are a fixed cost per pair, so C_COLS covers
+    ;      them the same way it covered this pair's own setup before: the
+    ;      setup is split across two consecutive pairs and sums the same.
+    ;
+    ;      AND THE CHARGE IS AN UPPER BOUND, NOT AN EXACT FIGURE.  It
+    ;      bills TWO bands and the FULL row range, before the occlusion
+    ;      interval cuts either of them down, and the taller column's
+    ;      extra rows before the same interval clips those.  That is the
+    ;      safe direction, and it is what makes the hook UNCONDITIONAL:
+    ;      the exact figure was skipped entirely on a pair whose bands
+    ;      were fully occluded, which left that pair with no hook of its
+    ;      own and merged it into a neighbour's interval.  A pair that
+    ;      draws nothing is cheap, so over-charging it costs little; a
+    ;      pair with no hook costs a period.
+    ;
+    ;      C_CEDGE is one EDGE row, and the edge runs no longer take hooks
+    ;      of their own -- they are inside this pair's interval and this
+    ;      charge, which is what "one hook per pair" means.
+    ld   a,(rc_r1)
+    ld   hl,rc_r0
+    sub  (hl)
+    inc  a                      ; the pair's own rows, 1..VP_H
+    ld   c,a
+    ld   a,(rc_r1t)
+    ld   hl,rc_r0t
+    sub  (hl)
+    inc  a                      ; the taller column's rows, >= the pair's
+    sub  c                      ; ...so this is the EDGE rows, 0..VP_H-1
+    ld   de,C_CEDGE
+    call rc_mul8                ; rc_mul8 keeps C and DE
+    push hl
+    ld   a,c
     ld   de,C_COLR
-    call rc_mul8                ; HL = scanlines * C_COLR
-    ld   de,C_COLS
+    call rc_mul8
+    pop  de
     add  hl,de
-    ld   de,C_CBAND
+    ld   de,C_COLS+2*C_CBAND
     add  hl,de
-    dec  b
-    jr   z,rc_pcgo
-    add  hl,de                  ; ...and the second band, if there is one
-rc_pcgo
     ld   b,h
     ld   c,l
     call cost_unit
-rc_pcdone
     endif
+
+    ; ---- u = CTEX_BW * N / D, both ends clamped.  N and D can leave
+    ;      their legal range at the outermost pair, where the sample
+    ;      column is outside the face; clamping u is what the model's
+    ;      min/max on t2 does, and it is one compare each.
+    ld   hl,(rc_den)
+    bit  7,h
+    jr   nz,rc_u0               ; D <= 0
+    ld   a,h
+    or   l
+    jr   z,rc_u0
+    ex   de,hl                  ; DE = D
+    ld   hl,(rc_num)
+    bit  7,h
+    jr   nz,rc_u0               ; N < 0
+    or   a
+    sbc  hl,de
+    jr   c,rc_udo
+    ld   a,CTEX_BW-1            ; N >= D: the far end
+    jr   rc_uclamp
+rc_u0
+    xor  a
+    jr   rc_uclamp
+rc_udo
+    add  hl,de                  ; HL = N again
+    call rc_udiv                ; A = the four-bit quotient
+rc_uclamp
+    ld   c,a
+    ld   a,(rc_flip)
+    or   a
+    jr   z,rc_unf
+    ld   a,CTEX_BW-1
+    sub  c
+    ld   c,a
+rc_unf
+    ld   a,(rc_texpg)
+    add  a,c
+    ld   (rc_page),a            ; the texture page: base + u
+
+    ; ---- CTABT IS INDEXED BY h IN QUARTER SCANLINES, not by j.  Indexing
+    ;      it by j threw away the bottom four bits the projector went to
+    ;      the trouble of computing: across adjacent pairs, while h moved
+    ;      less than a whole scanline j did not move at all, so the mortar
+    ;      courses ran dead flat and then every one of them jumped at
+    ;      once.  See colmodel.ctab.  4*(h >> 2) is h & ~3, so the finer
+    ;      index costs an AND where the coarse one cost two shifts.
+    ld   hl,(rc_hs)
+    call rc_tix
+    ld   e,(hl)
+    inc  hl
+    ld   d,(hl)
+    inc  hl
+    ld   (rc_step),de
+    ld   e,(hl)
+    inc  hl
+    ld   d,(hl)
+    ld   (rc_idx0),de
 
     ; ---- BAND ABOVE THE HORIZON: rows r0 .. up-1.  Its texture
     ;      coordinate is CTABT's idx0 with no arithmetic at all, because
@@ -1008,33 +1032,6 @@ rc_nobanddn
     ld   d,(hl)
     ld   (rc_eidx0),de
 
-    ; the taller column's own row range, clipped to the viewport
-    ld   hl,(rc_jt)
-    ld   a,h
-    or   a
-    jr   nz,rc_etbig
-    ld   a,l
-    cp   RC_RC
-    jr   c,rc_etsml
-rc_etbig
-    xor  a
-    ld   (rc_r0t),a
-    ld   a,VP_H-1
-    ld   (rc_r1t),a
-    jr   rc_etrows
-rc_etsml
-    ld   c,a
-    ld   a,RC_RC
-    sub  c
-    ld   (rc_r0t),a
-    ld   a,RC_RC
-    add  a,c
-    cp   VP_H
-    jr   c,rc_et1ok
-    ld   a,VP_H-1
-rc_et1ok
-    ld   (rc_r1t),a
-rc_etrows
 
     ; the byte column: 2*p + which side
     ld   a,(rc_p)
@@ -1074,14 +1071,6 @@ rc_eugo
     ld   (rc_erow),a
     ld   hl,(rc_eidx0)
     ld   (rc_eidx),hl
-    if RC_PACED
-    ld   a,(rc_en)              ; the edge rows, charged before they draw
-    ld   de,C_CEDGE
-    call rc_mul8
-    ld   b,h
-    ld   c,l
-    call cost_unit
-    endif
     call rc_edge
 rc_noup
 
@@ -1111,22 +1100,11 @@ rc_ed1
     ld   de,(rc_eidx0)
     add  hl,de
     ld   (rc_eidx),hl
-    if RC_PACED
-    ld   a,(rc_en)              ; the edge rows, charged before they draw
-    ld   de,C_CEDGE
-    call rc_mul8
-    ld   b,h
-    ld   c,l
-    call cost_unit
-    endif
     call rc_edge
 rc_nodn
     jr   rc_edone
-rc_noedge
-    ld   a,(rc_r0)
-    ld   (rc_r0t),a
-    ld   a,(rc_r1)
-    ld   (rc_r1t),a
+rc_noedge                       ; jt == j on this path, so (rc_r0t) and
+                                ; (rc_r1t) already hold the pair's own range
 rc_edone
 
     ; ---- and the pair's covered interval grows to the TALLER column's

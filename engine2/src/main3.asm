@@ -332,20 +332,29 @@ SCR_BACK    equ #8000
 ;  no way round it:
 ;
 ;      VPCOL 0   flat spans     PACE_FRAMES 6   119.81 ms   8.35 fps
-;      VPCOL 1   textured cols  PACE_FRAMES 10  199.68 ms   5.01 fps
+;      VPCOL 1   textured cols  PACE_FRAMES 8   159.74 ms   6.26 fps
 ;
-;  EXHAUSTIVE over all 4055040 reachable states (pacescan.py) with the
-;  column renderer's own measured charges, the worst charged frame is
-;  160860 us against the span renderer's 104024, and the distribution of
-;  waits the greedy rule asks for is
+;  EXHAUSTIVE over all 6967296 reachable states (pacescan.py) with the
+;  column renderer's charge as rastcol.asm now takes it -- ONE upper-bound
+;  unit per pair, at the top of rc_column, and no separate edge hooks:
 ;
-;      3 waits 0.001%   4  10.27%   5  71.89%   6  14.65%
-;      7 waits 2.99%    8   0.20%
+;      4 waits  0.186%   5  58.234%   6  41.567%   7  0.012%
+;      worst charged frame 123102 us
+;      0 states of 6967296 ask for an eighth wait
 ;
-;  -- so eight waits is what the budget has to be, and nine periods is
+;  -- so seven waits is what the budget has to be and eight periods is
 ;  what the frame takes.  Set VPCOL back to 0 and put this back to 6.
+;
+;  THE OLD FIGURES HERE (8 waits, worst 160860 us over 4055040 states)
+;  WERE READ OFF A CHARGE THE DISC DID NOT TAKE.  The hook sat after
+;  rc_column's setup, so pacescan was replaying a unit sequence with a
+;  1823 us hole in it -- see the hook's note in rastcol.asm -- and the
+;  state count moved with tools/world.py besides.  BOTH numbers above are
+;  pacescan's, which is a PACKING check over the model's charge, and the
+;  charge is only one-sided if emu_rcol.py `atomic` says it is.  Neither
+;  that nor emu_verify3.py has been run against this build.
 ; ---------------------------------------------------------------------
-PACE_FRAMES equ 10
+PACE_FRAMES equ 8
 
 ;  IT IS ONE UNCONDITIONAL LINE AND THE ASSERT IS WHY.  Writing it as
 ;  `if VPCOL / 8 / else / 6 / endif` assembles perfectly and breaks the
@@ -356,7 +365,7 @@ PACE_FRAMES equ 10
 ;  hardcoded addresses engine2/tools/addrs.py exists to remove.  So there
 ;  is one line, and an assert that fires the moment it disagrees with the
 ;  renderer it is paired with.
-    assert (VPCOL == 0 && PACE_FRAMES == 6) || (VPCOL == 1 && PACE_FRAMES == 10)
+    assert (VPCOL == 0 && PACE_FRAMES == 6) || (VPCOL == 1 && PACE_FRAMES == 8)
 
 ; ---------------------------------------------------------------------
 ;  GUN -- draw the first-person weapon (engine2/src/gun.asm).  0 builds

@@ -416,12 +416,16 @@ def face_columns(q, c, cover=None):
         # ...and the taller column's own rows, above and below, in ONE
         # byte column.  They carry the taller column's own mapping, so
         # the texture spans its real extent rather than the short one's.
+        # THE TALLER COLUMN'S ROW RANGE IS COMPUTED WHETHER OR NOT THERE
+        # ARE EDGE ROWS, because rc_column's charge needs it before it
+        # knows either -- see the hook at the top of rc_column.  When
+        # jt == js it comes out equal to the pair's own range, which is
+        # what the asm's rc_noedge relies on.
+        r0t = max(0, c.CYH - jt)
+        r1t = min(c.VP_H - 1, c.CYH + jt)
         edges = []
-        r0t, r1t = r0, r1
         if jt > js:
             stept, idx0t = tab[tix(ht)]
-            r0t = max(0, c.CYH - jt)
-            r1t = min(c.VP_H - 1, c.CYH + jt)
             e1 = min(r0 - 1, up[p])
             if r0t <= e1:
                 edges.append((r0t, e1, idx0t, ofs))
@@ -429,7 +433,8 @@ def face_columns(q, c, cover=None):
             if e0 <= r1t:
                 edges.append((e0, r1t,
                               (idx0t + (e0 - r0t) * stept) & 0xFFFF, ofs))
-        yield p, u, j, r0, r1, step, bands, stept if jt > js else step, edges
+        yield (p, u, j, r0, r1, step, bands,
+               stept if jt > js else step, edges, r0t, r1t)
 
         # THE INTERVAL IS RECORDED OVER THE TALLER COLUMN.  It has to pick
         # one, because rc_up / rc_dn are per PAIR and the edge rows cover
@@ -452,13 +457,22 @@ def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
     """-> the microsecond charges rastcol.asm takes, in order.
 
     THE TWIN OF THE COST HOOKS, the way pacemodel.quad_units is the twin
-    of main3.asm:pace_quad.  One C_CFACE per face that gets past the
-    open-pair scan (rc_face), then, per PAIR that draws anything,
-    C_COLS + C_CBAND per band + C_COLR per scanline of those bands
-    (rc_column).  The bands are the ones the occlusion interval leaves,
-    so the charge shrinks with the work rather than with the geometry --
-    see the note on the constants in main3.asm for why a flat per-pair
-    charge over the full row range does not fit.
+    of main3.asm:pace_quad.  One C_CFACE + C_CSKIP per pair in range for
+    each face that reaches the open-pair scan (rc_face), then ONE unit per
+    PAIR rc_column is called on -- an upper bound on the whole pair, taken
+    at the top of rc_column before any of its setup:
+
+        C_COLS + 2*C_CBAND + C_COLR*rows + C_CEDGE*(tall_rows - rows)
+
+    where `rows` is the pair's full row range 2j+1 clipped to the viewport
+    and `tall_rows` the same for the taller of its two byte columns.  The
+    edge runs take no hook of their own.
+
+    IT IS AN UPPER BOUND AND NOT THE EXACT FIGURE, deliberately.  Charging
+    the bands the occlusion interval actually leaves is tighter, but it
+    comes to zero on a pair whose middle a nearer face has taken, and a
+    pair with no hook is a pair with no interval boundary -- which is the
+    defect this replaced.  See the hook's own note in rastcol.asm.
     """
     cover = new_cover(c)
     npair = c.VP_BW // 2
@@ -478,23 +492,32 @@ def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
         if all(cover[0][p] == 0 and cover[1][p] > c.VP_H - 1
                for p in range(pa, pb)):
             continue
-        for (_p, _u, _j, _r0, _r1, _s, bands,
-             _st, edges) in face_columns(q, c, cover):
-            # ONE UNIT PER HOOK, IN THE ASM'S OWN ORDER.  rc_column
-            # charges the pair, and then charges each EDGE RUN separately
-            # just before it draws it -- so folding the edge rows into the
-            # pair's charge, as this did, gave the model FEWER units than
-            # the machine takes and misaligned every one after the first
-            # edge.  pacescan then replayed a unit sequence the disc never
-            # executes, which is why it reported nine waits while the disc
-            # took twelve.  MEASURED by emu_rcol.py's `atomic`, which
-            # cross-checks the charge the Z80 is about to take at hook k
-            # against the model's k'th unit: `model 2492 vs z80 60`.
-            if bands:
-                rows = sum(b1 - b0 + 1 for b0, b1, _ix in bands)
-                out.append(c_cols + c_cband * len(bands) + c_colr * rows)
-            for e0, e1, _ix, _o in edges:
-                out.append(c_cedge * (e1 - e0 + 1))
+        for (_p, _u, _j, r0, r1, _s, _bands,
+             _st, _edges, r0t, r1t) in face_columns(q, c, cover):
+            # ONE UNIT PER PAIR, AND IT IS THE PAIR'S FIRST ACT.  rc_column
+            # takes a single hook at its top and the edge runs take none,
+            # so the model appends exactly one unit per pair it walks --
+            # unconditionally, including a pair whose bands are fully
+            # occluded, because the asm charges that pair too.
+            #
+            # TWO THINGS HERE HAVE EACH BROKEN THE LOCK ONCE, and both are
+            # about the unit SEQUENCE and not the total.  Folding the edge
+            # rows into the pair's charge while rc_column still took a
+            # C_CEDGE hook per edge run gave the model FEWER units than the
+            # machine, and misaligned every one after the first edge: 28
+            # model units against 54 machine hooks on one state, which
+            # emu_rcol.py `atomic` prints as `model 2492 vs z80 60`.  And
+            # skipping the unit on a pair that drew no bands gave the model
+            # a unit the machine did not take.  Now there is one hook per
+            # pair on both sides and nothing to align.
+            #
+            # THE FIGURE IS AN UPPER BOUND, matching the asm exactly: two
+            # bands and the pair's FULL row range, before the occlusion
+            # interval cuts either, plus C_CEDGE for each row the taller
+            # column adds on top of that range.
+            rows = r1 - r0 + 1
+            out.append(c_cols + 2 * c_cband + c_colr * rows
+                       + c_cedge * ((r1t - r0t + 1) - rows))
     return out
 
 
@@ -531,7 +554,7 @@ def render(quads, c=None, pages_wall=None, pages_door=None):
     for q in reversed(quads):
         pages = pd if (q[4] & 1) else pw
         for (p, u, _j, _r0, _r1, step, bands,
-             stept, edges) in face_columns(q, c, cover):
+             stept, edges, _r0t, _r1t) in face_columns(q, c, cover):
             page = pages[u]
             for br0, br1, idx in bands:
                 pairs += 1
