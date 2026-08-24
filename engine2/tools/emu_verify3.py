@@ -94,6 +94,26 @@ SOLID = addrs.SOLID                          # the kernel's live 16x16 map
 PACE_N = int([l.split()[2] for l in open(os.path.join(_E2, "src", "main3.asm"))
               if l.startswith("PACE_FRAMES equ")][0])
 
+# How long a door must take to run, in GAME frames.  A door steps once a
+# frame from DOOR_SHUT to DOOR_OPEN (game.asm:doors_step), so the run IS
+# the difference between them -- read it out of the source rather than
+# writing the answer down here, the same way PACE_FRAMES is read above.
+_G = open(os.path.join(_E2, "src", "game.asm")).read().split("\n")
+
+
+def _equ(name):
+    for line in _G:
+        p = line.split()
+        if len(p) >= 3 and p[0] == name and p[1] == "equ":
+            return int(p[2])
+    raise SystemExit(f"{name} not found in game.asm")
+
+
+DOOR_MIN_FRAMES = 6
+assert _equ("DOOR_OPEN") - _equ("DOOR_SHUT") >= DOOR_MIN_FRAMES, (
+    "game.asm's door runs in %d frames, under the %d this checks for"
+    % (_equ("DOOR_OPEN") - _equ("DOOR_SHUT"), DOOR_MIN_FRAMES))
+
 
 def syms():
     out = {}
@@ -281,6 +301,37 @@ def main():
     c.run_frames(60)
     check(c.peek(SOLID + door) == 2, "SPACE shuts it again",
           f"SOLID = {c.peek(SOLID + door)}")
+
+    # ---- AND IT RUNS GRADUALLY, one door_st step per GAME frame.
+    #
+    # SPACE has to be down across a whole game frame to be seen -- keys
+    # are polled once a frame and a frame is PACE_FRAMES vsyncs -- but it
+    # must be RELEASED before the run ends or door_act fires again and
+    # sends the door back the other way.  So hold through exactly one
+    # game frame, then sample door_st per game frame.
+    g.place(nx * 256 + 128, ny * 256 + 128, head)
+    c.run_frames(30)
+    st_addr = g.s["DOOR_ST"]
+    c.key_down(cpcmod.KEY_SPACE)
+    seen, last, held = [], g.frames(), 0
+    for _ in range(1500):
+        c.run_us(2000)
+        f = g.frames()
+        if f == last:
+            continue
+        last = f
+        held += 1
+        if held == 1:
+            c.key_up(cpcmod.KEY_SPACE)
+        seen.append((c.peek(st_addr), c.peek(SOLID + door)))
+        if c.peek(SOLID + door) == 0:
+            break
+    run = len(seen)
+    steps = sorted(set(s for s, _ in seen))
+    check(run >= DOOR_MIN_FRAMES,
+          f"the door takes at least {DOOR_MIN_FRAMES} frames to open",
+          f"{run} game frames, door_st {steps[0]}..{steps[-1]} "
+          f"one step a frame, passable on the last")
 
     print("\n7  FRAME PERIOD (measured, one gap at a time, five samples a"
           " vsync)")

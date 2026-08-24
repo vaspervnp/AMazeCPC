@@ -111,8 +111,28 @@
 
 STEP        equ 24          ; 8.8 cell units per game frame
 PRAD        equ 64          ; collision half-width, 8.8 (= 0.25 cell)
+; ---------------------------------------------------------------------
+;  A DOOR RUNS ONE STEP A GAME FRAME, from DOOR_SHUT to DOOR_OPEN and
+;  back, so the number of frames it takes IS the difference between them
+;  -- six here, and doors_step is what walks it.  It was four.
+;
+;  SOLID CLEARS ONLY AT DOOR_OPEN (doors_step, ds_apply), so the door
+;  blocks the player for the whole run and becomes passable on the frame
+;  it finishes.  That is deliberate: SOLID is read by the march for
+;  OPACITY and by coll_free for COLLISION, and a door that cleared early
+;  would be walk-through-able while it still looks shut.
+;
+;  AND THAT SHARED ARRAY IS WHY THE RUN IS NOT YET VISIBLE.  door_st is a
+;  real intermediate state -- shot_amaze3.py photographs it -- but the
+;  quad record carries only (kind, k), so a door part way open is still
+;  drawn as a whole door face.  Drawing the run needs the doorway to be
+;  SEE-THROUGH before it is WALKABLE, i.e. opacity and solidity split
+;  into two tests, and the room beyond marched through the opening.
+;  Until then this constant sets how long the door is shut for, not how
+;  it looks.
+; ---------------------------------------------------------------------
 DOOR_SHUT   equ 2
-DOOR_OPEN   equ 6
+DOOR_OPEN   equ 8           ; 8 - 2 = SIX frames to run, one step each
 MAXDOORS    equ 8
 DOOR_REACH  equ 320         ; 1.25 cells, 8.8, for the nearest-door search
 
