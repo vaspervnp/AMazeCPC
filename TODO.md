@@ -209,6 +209,38 @@ work is `tst_rcol.asm`'s: an abort hook plus an exact repetition count.
 
 Do **nothing** here until §1 is closed.
 
+**AND "LESS DETAIL FOR DISTANT WALLS" IS NOT ONE OF THEM — MEASURED.**
+The intuition is that far walls could be drawn cheaply. Two measurements
+kill it, and they are worth keeping because the reasoning is seductive:
+
+1. `engine2/tools/lodbreak.py` (new) attributes every microsecond of the
+   raster charge to the DEPTH of the face that caused it. A far face
+   fills almost nothing — 19 scanlines a pair at k=7 against 96 at k=1 —
+   so its FILL is only 12% of what it costs. Making its pixels cheaper
+   (flat colour instead of texture) is worth 7.2% of the rasteriser at a
+   k>=4 cut, because it removes the cheapest part.
+
+2. So the target is the per-pair SETUP, which is 52% of a far face and
+   runs identically whether the wall is 96 scanlines tall or 6. A LOD
+   path was BUILT — one half height per pair from the Bresenham already
+   carried, no `rc_hbwd`/`rc_hfwd`, no second `rc_jof`, no edge runs, no
+   second `CTABT` — and benched against the same states with it off:
+
+       RC_LODK 0   65618 us/frame
+       RC_LODK 4   63710 us/frame
+       saved        1908 us/frame = 2.9%, i.e. 258 us per LOD pair
+
+   **258 of `C_COLS`'s 1800.** The probes, the divide and the CTABT
+   lookup are only 14% of a pair; the other ~1540 us is band setup, the
+   fill loop's entry and exit, `rc_pnext`'s step and the charge
+   arithmetic — none of which any level of detail removes.
+
+The estimate that justified building it said 22.6%. It was wrong by 7x
+because it assumed a LOD pair would cost 500 us instead of 1800. The asm
+was reverted; `lodbreak.py` is kept, because the breakdown it prints is
+the thing that says where to look. **The per-pair fixed cost is the
+lever, and (a) below is what attacks it.**
+
 These matter more than they used to. A doors-open frame charges up to
 219,851 µs against a 175,104 µs budget, so about **45 ms has to come out
 of the frame** before the period locks with doors open — and shrinking
