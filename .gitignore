@@ -3,3 +3,7 @@ src/gen_equ.inc
 src/gen_data.inc
 __pycache__/
 *.pyc
+
+# rasm drops this beside the source when a build FAILS -- an assert firing
+# is enough.  It is not the disc and nothing reads it.
+rasmoutput.bin

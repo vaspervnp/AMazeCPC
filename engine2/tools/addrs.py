@@ -44,6 +44,18 @@ _WHERE = {
     # the frame estimate quietly went 8 ms under and the least-squares fit
     # for C_FACE/C_REJ went singular.
     "O_BPTR": "march.asm",
+    # The door tables moved out of the code segment and into the free RAM
+    # above QUADS when MAXDOORS grew, so they are `equ`s now -- and rasm
+    # puts only LABELS in the .sym file, never equs.  emu_verify3 read
+    # DOOR_ST out of the symbol table and would simply have stopped
+    # finding it.
+    "DOORTAB": "game.asm",
+    "DOOR_IDX": "game.asm",
+    "DOOR_ST": "game.asm",
+    "DOOR_TG": "game.asm",
+    "MAXDOORS": "game.asm",
+    "DOOR_SHUT": "game.asm",
+    "DOOR_OPEN": "game.asm",
 }
 
 _EQU = r"^\s*%s\s+equ\s+(#?[0-9A-Fa-f]+)\s*(?:;.*)?$"
@@ -54,8 +66,14 @@ def _num(tok):
 
 
 def _read(name):
+    # CASE-INSENSITIVE, because the asm is not consistent about it and the
+    # caller should not have to know: march.asm writes SOLID and BUCKHI in
+    # capitals, game.asm writes door_idx and door_st in lower case, and
+    # both are equs of exactly the same kind.  Matching case-sensitively
+    # made addrs.DOOR_IDX raise "not an `equ` any more" for a symbol
+    # sitting right there in the file.
     path = os.path.join(SRC, _WHERE[name])
-    pat = re.compile(_EQU % re.escape(name), re.MULTILINE)
+    pat = re.compile(_EQU % re.escape(name), re.MULTILINE | re.IGNORECASE)
     with open(path) as f:
         m = pat.search(f.read())
     if not m:

@@ -29,6 +29,11 @@ C_TAIL = 1450        # flip + game_step + the head of the loop, MEASURED
                      # 1305.9 us worst with keys HELD (emu_holes.py).  It
                      # was 1050, fitted to a game_step nobody was pressing
                      # anything during.
+C_DANIM = 1300       # door_shrink -- one pass over the finished quad
+                     # list scaling the door faces, so a door's run is
+                     # VISIBLE.  Charged on EVERY frame because the
+                     # hook is unconditional, even though it returns at
+                     # once unless a door is mid-run.
 C_DOORACT = 900      # door_act, MEASURED 756.6 us worst -- the SPACE
                      # press edge, charged where it happens by game.asm
                      # through cost_add rather than added to C_TAIL and
@@ -108,7 +113,8 @@ GUN_CHARGED = _equ("GUN_CHARGED", 1)
 # wrong in the same way.  A model that keeps its own copy of a constant
 # cannot catch that; one that reads the disc's can only be wrong if the
 # disc is.
-for _n in ("C_TAIL", "C_DOORACT", "C_BG", "C_MSETUP", "C_CELL", "C_FACE",
+for _n in ("C_TAIL", "C_DOORACT", "C_DANIM", "C_BG", "C_MSETUP", "C_CELL",
+           "C_FACE",
            "C_REJ", "C_CLIP", "C_HUD", "C_GUN",
            "C_QSET", "C_BLINE", "C_WPAIR", "C_CHUNK", "C_PMUL", "C_WSTEP",
            "C_JOINT"):
@@ -346,6 +352,10 @@ def units(ncell, faces, quads, cyh):
     # had.  At 7400 us a face, a frame with several jointed faces is tens
     # of milliseconds heavier than that number: the exhaustive answer was
     # not slightly stale, it was about a different program.
+    # ...then the door animation, which walks the finished quad list
+    # between project_all and the rasteriser (main3.asm).  It is charged
+    # on every frame because the hook is unconditional.
+    u.append((0, C_DANIM, C_DANIM))
     if VPCOL:
         # ONE WALK OVER THE WHOLE LIST, not one per quad: the column
         # renderer's charge depends on what the NEARER faces have already

@@ -38,6 +38,7 @@ sys.path.insert(0, _HERE)
 
 PRAD = 64                       # game.asm's collision half-width, 8.8
 NTOP = 40                       # worst-charged states kept, for benching
+DOOR_SHUT = 2                   # SOLID's code for a shut door (game.asm)
 
 
 def coll_free(solid, px, py):
@@ -53,10 +54,27 @@ def coll_free(solid, px, py):
     return True
 
 
-def positions():
+def open_doors(solid):
+    """-> a copy of SOLID with every shut door (2) opened (0).
+
+    THE HEAVY CASE THE SWEEP NEVER SAW.  This file builds SOLID straight
+    from the map, where every door reads 2 -- i.e. SHUT and opaque -- so
+    for its whole life it swept only frames in which the flood stops at
+    every doorway.  A door the player has opened is transparent, the
+    flood pours through it into the next room, and the frame is much
+    bigger: MEASURED exhaustively, cells popped 16 -> 36, quads 8 -> 14,
+    and bucket 7 goes from 4.07% of states to 44.25%.  Those are the
+    worst frames in the game and none of them was ever replayed.
+    """
+    return bytes(0 if v == DOOR_SHUT else v for v in solid)
+
+
+def positions(doors=False):
     import emu_frame as ef
     import emu_pace as ep
     _grid, solid = ef.load()
+    if doors:
+        solid = open_doors(solid)
     offs = ep.lattice_offsets()
     out = []
     for cy in range(16):
@@ -72,10 +90,10 @@ def positions():
 _W = {}
 
 
-def _init(ovr=None):
+def _init(ovr=None, doors=False):
     import pacemodel as pm
     import rastermodel as rm
-    solid, _pos = positions()
+    solid, _pos = positions(doors)
     # THE ONLY WAY THIS MODEL'S CONSTANTS EVER DIFFER FROM THE DISC'S.
     # pacemodel reads every C_* out of main3.asm on import; `sweep` below
     # needs to ask what a DIFFERENT C_QUAD would do without rebuilding
@@ -202,10 +220,28 @@ def sweep(jobs=None):
 
 
 def main(jobs=None):
+    """Sweep BOTH door configurations and fail if either misses.
+
+    A door the player has opened is transparent to the march, so the
+    flood pours through the doorway and the frame grows -- see
+    open_doors().  Sweeping only the map's own SOLID, in which every
+    door is shut, replays the LIGHT half of the game.
+    """
+    rc = 0
+    for doors in (False, True):
+        print("\n" + "=" * 68)
+        print("DOORS " + ("ALL OPEN -- the flood sees through every doorway"
+                          if doors else "ALL SHUT -- the map as it loads"))
+        print("=" * 68)
+        rc |= _main_one(jobs, doors)
+    return rc
+
+
+def _main_one(jobs=None, doors=False):
     import multiprocessing as mp
     import pacemodel as pm
     jobs = jobs or os.cpu_count()
-    solid, pos = positions()
+    solid, pos = positions(doors)
     print(f"PACE_FRAMES {pm.PACE_FRAMES}  C_BG {pm.C_BG}  "
           f"C_QUAD {pm.C_QUAD}/{pm.C_QS}/{pm.C_QW}  RQ_SPLIT {pm.RQ_SPLIT}")
     # ...AND WHICH WALLS.  This line did not say, and for the whole of the
@@ -222,7 +258,7 @@ def main(jobs=None):
              for i in range(0, len(pos), step)]
     hist = collections.Counter()
     over, tops = [], []
-    with mp.Pool(jobs, initializer=_init) as p:
+    with mp.Pool(jobs, initializer=_init, initargs=(None, doors)) as p:
         for h, o, _w, t in p.imap_unordered(_chunk, tasks):
             hist.update(h)
             over += o
@@ -247,7 +283,8 @@ def main(jobs=None):
     import json
     json.dump([[c, px, py, a] for c, px, py, a in tops],
               open(os.path.join(os.path.dirname(_HERE), "build",
-                                "pacescan_top.json"), "w"))
+                                "pacescan_top%s.json"
+                                % ("_open" if doors else "")), "w"))
     over.sort(reverse=True)
     print(f"\n{len(over)} states of {tot} would take "
           f"{pm.PACE_FRAMES+1} periods")

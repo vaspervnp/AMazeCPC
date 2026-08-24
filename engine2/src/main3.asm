@@ -426,7 +426,7 @@ FACE_THI    equ #3C         ; 15360 us -- the CHARGE-THEN-TEST threshold
                             ; C_FACE_MAX = 19530 us -- still inside a
                             ; 19968 us period, with 438 us to spare, and
                             ; with the waste gone.
-C_TAIL      equ 1450        ; THE TAIL: everything between pace_drain and
+C_TAIL      equ 1950        ; THE TAIL: everything between pace_drain and
                             ; the next frame's first cost_unit -- flip,
                             ; game_step, and the head of main_loop.  It is
                             ; added to (cost_acc) at the TOP of the frame,
@@ -455,7 +455,17 @@ C_TAIL      equ 1450        ; THE TAIL: everything between pace_drain and
                             ; one-sided upper bound, so it is one now.
                             ; The SPACE branch is NOT in here: see
                             ; C_DOORACT.
-C_DOORACT   equ 900         ; door_act, charged by game.asm on the SPACE
+C_DANIM     equ 1300        ; door_shrink -- ONE pass over the finished
+                            ; quad list, scaling the half heights of the
+                            ; door faces so a door's six-frame run is
+                            ; VISIBLE instead of the face simply
+                            ; vanishing at the end of it.  Two
+                            ; quarter-square multiplies per door quad
+                            ; plus the walk over the rest.  It returns at
+                            ; once on the frames when no door is running,
+                            ; which is nearly all of them, but the charge
+                            ; is unconditional because the hook is.
+C_DOORACT   equ 2000         ; door_act, charged by game.asm on the SPACE
                             ; PRESS EDGE only, through cost_add -- charge,
                             ; no test, no wait.
                             ;
@@ -866,6 +876,9 @@ main_loop
     call cost_unit
     call march                      ; charges C_CELL per popped cell
     call project_all                ; charges per candidate face
+    ld   bc,C_DANIM                 ; the door animation walks the finished
+    call cost_unit                  ; quad list -- game.asm:door_shrink
+    call door_shrink
     call raster_paced               ; charges per quad
     ld   bc,C_HUD
     call cost_unit
@@ -1583,3 +1596,13 @@ body_len    equ game_end-start
 
     assert game_end <= BUCK0        ; the body must fit under the march's
                                     ; working RAM, which starts at #2700
+
+; THE MAP MUST FIT THE DOOR LIST.  game_init registers at most MAXDOORS
+; doors and SILENTLY drops the rest, and a dropped door is shut for ever
+; -- see the note on MAXDOORS in game.asm for the twelve-doors-against-
+; eight version of this that shipped, and read as "the doors do not open
+; at all".  NDOORS is emitted from the map by gen_march.py, so the map
+; and the engine cannot disagree about it without failing here.  It is
+; asserted at the FOOT of the file because gen_maze.inc, which defines
+; NDOORS, is included after game.asm.
+    assert MAXDOORS >= NDOORS

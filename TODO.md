@@ -2,10 +2,14 @@
 
 The textured **column renderer** is built, correct and on a disc. §1's
 hook-placement blocker is **closed**: the charge is now one-sided per
-interval, measured. The rooms are 4x4 and the doors open. The disc is
-**not fully locked yet** — `emu_verify3` still reads three different
-periods, and the cause is **outside** the column renderer. That is the
-one blocking task.
+interval, measured. The rooms are 4x4 and every door in the map opens.
+
+The disc is **not locked**, and the reason is now known and is not what
+this file said for a long time: **a frame with a door OPEN honestly needs
+more vsync periods than `PACE_FRAMES` gives it.** The flood pours through
+an open doorway into the next room, and the pacing was only ever swept
+with every door shut. That is §1, and it is a WORK problem, not a charge
+bug — see the two optimisations in §2, which is what closing it needs.
 
 Read `engine2/src/costcol.inc` and the header of `engine2/src/rastcol.asm`
 first; every number here is written down next to the code it constrains.
@@ -24,8 +28,9 @@ first; every number here is written down next to the code it constrains.
 | `emu_rcol.py atomic` | **PASS** — every interval inside its charge, 0 model/asm disagreements, 40 states / 2 seeds |
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
 | `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
-| `pacescan.py` | **PASS** — 0 of 8,128,512 reachable states over budget |
-| `emu_verify3.py` | doors **PASS** (all five); period **FAIL** — reads [9, 10, 11] |
+| `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 states over budget |
+| `pacescan.py` (doors OPEN) | **FAIL** — 827,181 of 8,792,064 (9.4%) over budget, up to 12 waits |
+| `emu_verify3.py` | doors **PASS** (all six, all 12 doors); period **FAIL** — [9, 10, 11], and [9, 10] with every door shut |
 
 The span renderer is still the fallback and still locks: set
 `VPCOL equ 0` **and** `PACE_FRAMES equ 6` (an `assert` in `main3.asm`
@@ -123,21 +128,40 @@ meaning something else. `C_CSKIP` fell 697 → 560 and `C_COLS` 1980 → 1800.
 
 ---
 
-## 1. THE BLOCKER — an under-charge OUTSIDE rastcol
+## 1. THE BLOCKER — the frame asks for more periods than it has
 
 `emu_verify3.py` reads `[9, 10, 11]` vsyncs where it must read one value.
 Which named views overrun moves with the map — on the 4x4 map it is
 `corridor` at 11, `junction` / `worst state` / `(1,5) h12` at 10 — so do
 not chase a particular view; chase the unit.
 
-**It is an interval overrun, not a budget shortfall, and that is
-measured, not deduced.** Built at `PACE_FRAMES 10` the overrunning views
-read one and two periods high *by the same amounts*. More budget does not
-help, so some
-unit's real time exceeds a vsync period while its charge is under
-`COST_THI`. (If every unit is one-sided no interval can overrun: an
-interval accumulates at most `COST_THI` = 19456 µs of charge, and
-charge ≥ work gives work < 19968.)
+**MOST OF IT IS NOT AN UNDER-CHARGE AT ALL — IT IS AN OPEN DOOR.** An
+earlier version of this note concluded "an interval overran, so a unit is
+under-charged". That was wrong, and what hid it is that `pacescan` only
+ever swept the map's own `SOLID`, in which every door is SHUT. Swept with
+the doors OPEN the accumulator asks for up to **12 waits against a budget
+of 9**, and **827,181 of 8,792,064 states — 9.4% — are over budget**,
+worst charged frame 219,851 µs. The frame is not overrunning an interval;
+it is honestly asking for more periods than `PACE_FRAMES` has, and
+`pace_wait` then waits without decrementing. That is also why raising
+`PACE_FRAMES` 9 → 10 did not help: the demand was 11 and 12.
+
+`emu_verify3` measures the period AFTER its door section, which leaves a
+door open — so the `[9, 10, 11]` it reports is largely this.
+
+**WHAT IS LEFT AFTER THAT IS ONE PERIOD, AND IT IS REAL.** With every
+door shut, the same build measures the six named views at `[9, 10]` while
+the shut-door sweep says every state fits in 9. Three of the six take
+exactly one period more than the model predicts. The model is *more*
+pessimistic than the disc on the tail — it charges `C_TAIL + C_DOORACT`
+on every frame, the disc charges `C_DOORACT` only on a SPACE press edge —
+so the disc asking for MORE waits means some unit it charges is missing
+from `pacemodel.units()`, or is bigger than its constant.
+
+Count the waits to tell an overrun from a demand — and count them at
+**`wait_vsync`**, NOT at `pace_wait`: `pace_drain` calls `wait_vsync`
+directly, so a counter on `pace_wait` sees about one wait a frame and
+tells you nothing. (Measured: it does exactly that.)
 
 **It is not the column renderer.** `atomic` passes on 40 random states
 over two seeds *and* on all six named views, with 0 model/asm
@@ -184,6 +208,11 @@ work is `tst_rcol.asm`'s: an abort hook plus an exact repetition count.
 ## 2. Making it faster, ranked by measured size
 
 Do **nothing** here until §1 is closed.
+
+These matter more than they used to. A doors-open frame charges up to
+219,851 µs against a 175,104 µs budget, so about **45 ms has to come out
+of the frame** before the period locks with doors open — and shrinking
+the budget by raising `PACE_FRAMES` to 13 would mean 259.6 ms, 3.85 fps.
 
 **a. The per-pair setup — ~1000 µs/pair, 37–41 % of the rasteriser.**
 Dominated by 16-bit memory temporaries at 4–5 µs each (`ld hl,(nn)`,
@@ -252,6 +281,22 @@ same total.** `atomic` cross-checks the charge the Z80 is *about to take*
 at hook `k` against the model's `k`-th unit and prints `MODEL/ASM
 DISAGREE`. Use it after any charge change. `colmodel.charge` is built
 from `charge_terms` for exactly this reason.
+
+**THE PACING SWEEP ONLY EVER REPLAYED HALF THE GAME.** `pacescan.py`
+built `SOLID` straight from the map, in which every door reads 2 — shut
+and opaque — so the flood stopped at every doorway in every one of the
+8,128,512 states it swept. A door the player has OPENED is transparent:
+the flood pours through it and the frame grows. MEASURED exhaustively,
+doors-shut → all-doors-open:
+
+    cells popped      16 → 36        quads          8 → 14
+    bucket 7 used   4.07% → 44.25%   flood depth    8 → 14
+
+Those are the heaviest frames in the game and none of them had ever been
+replayed. `pacescan` now sweeps BOTH configurations (`open_doors()`) and
+fails if either misses. Anything that reasons about the worst frame —
+`C_CELL`, `QUADS`, the bucket occupancy, `PACE_FRAMES` — was fitted
+against the light half until now.
 
 **`emu_march.py` had `BUCKHI` written down as `0x26`.** It stopped being
 true the day the working-RAM block moved up four pages for the

@@ -63,6 +63,26 @@ def a_door():
     raise SystemExit("no door in the maze")
 
 
+def all_doors():
+    """-> every DOOR cell in the map, in SOLID scan order (the order
+    game_init registers them in, so a MAXDOORS truncation drops the
+    TAIL of this list)."""
+    grid, _sx, _sy = world.load_maze()
+    return [(x, y) for y in range(world.MAZE_H)
+            for x in range(world.MAZE_W) if grid[y][x] == world.DOOR]
+
+
+def door_neighbour(x, y):
+    """-> (nx, ny, heading) standing on open floor, looking at the door."""
+    grid, _sx, _sy = world.load_maze()
+    for dx, dy, head in ((-1, 0, 0), (1, 0, 36), (0, -1, 18), (0, 1, 54)):
+        nx, ny = x + dx, y + dy
+        if (0 <= nx < world.MAZE_W and 0 <= ny < world.MAZE_H
+                and grid[ny][nx] == world.FLOOR):
+            return nx, ny, head
+    return None
+
+
 def a_run(dx, dy, need=2):
     """-> (cx, cy) FLOOR cell with `need` clear floor cells at (dx,dy).
 
@@ -311,7 +331,10 @@ def main():
     # game frame, then sample door_st per game frame.
     g.place(nx * 256 + 128, ny * 256 + 128, head)
     c.run_frames(30)
-    st_addr = g.s["DOOR_ST"]
+    # door_st is an `equ` now (it moved to the free RAM above QUADS),
+    # and rasm puts only LABELS in the .sym file -- so it comes from
+    # addrs.py, which parses it out of game.asm.
+    st_addr = addrs.DOOR_ST
     c.key_down(cpcmod.KEY_SPACE)
     seen, last, held = [], g.frames(), 0
     for _ in range(1500):
@@ -332,6 +355,55 @@ def main():
           f"the door takes at least {DOOR_MIN_FRAMES} frames to open",
           f"{run} game frames, door_st {steps[0]}..{steps[-1]} "
           f"one step a frame, passable on the last")
+
+    # ---- AND EVERY OTHER DOOR IN THE MAP, not just the one above.
+    #
+    # THIS IS THE CHECK THAT WAS MISSING.  game_init registers at most
+    # MAXDOORS doors and silently drops the rest (game.asm), and the map
+    # grew to twelve doors against a MAXDOORS of eight -- so four doors,
+    # including the one beside the player's start cell, could never be
+    # opened.  Every check above passed throughout, because a_door()
+    # returns the FIRST door in scan order and that one was inside the
+    # cap.  One working door proves nothing about the others.
+    dead = []
+    for (ddx, ddy) in all_doors():
+        di = ddy * 16 + ddx
+        st = door_neighbour(ddx, ddy)
+        if st is None:
+            continue
+        g.place(st[0] * 256 + 128, st[1] * 256 + 128, st[2])
+        c.run_frames(30)
+        # the checks above leave THEIR door open, so shut anything that is
+        # open before testing that it opens.  A door that will not shut is
+        # just as dead as one that will not open, so it still counts.
+        if c.peek(SOLID + di) != 2:
+            g.hold(cpcmod.KEY_SPACE, 12)
+            c.run_frames(20 * (DOOR_MIN_FRAMES + 4))
+            if c.peek(SOLID + di) != 2:
+                dead.append((ddx, ddy, "would not shut"))
+                continue
+        c.key_down(cpcmod.KEY_SPACE)
+        last, held, opened = g.frames(), 0, False
+        for _ in range(1500):
+            c.run_us(2000)
+            f = g.frames()
+            if f == last:
+                continue
+            last = f
+            held += 1
+            if held == 1:
+                c.key_up(cpcmod.KEY_SPACE)
+            if c.peek(SOLID + di) == 0:
+                opened = True
+                break
+            if held > DOOR_MIN_FRAMES + 6:
+                break
+        if not opened:
+            dead.append((ddx, ddy, f"still SOLID after {held} frames"))
+    ndoor = len(all_doors())
+    check(not dead, "EVERY door in the map opens",
+          f"{ndoor - len(dead)} of {ndoor} opened"
+          + (f"; DEAD: {dead}" if dead else ""))
 
     print("\n7  FRAME PERIOD (measured, one gap at a time, five samples a"
           " vsync)")

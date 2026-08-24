@@ -133,7 +133,54 @@ PRAD        equ 64          ; collision half-width, 8.8 (= 0.25 cell)
 ; ---------------------------------------------------------------------
 DOOR_SHUT   equ 2
 DOOR_OPEN   equ 8           ; 8 - 2 = SIX frames to run, one step each
-MAXDOORS    equ 8
+
+; HOW MANY DOORS THE ENGINE CAN HOLD, and it must be >= the map's.
+;
+; game_init scans SOLID and registers doors until it has MAXDOORS of
+; them, then SILENTLY SKIPS THE REST (gi_scan: `cp MAXDOORS / jr
+; nc,gi_next`).  A door that is never registered is never in door_idx,
+; so door_act can never find it and doors_step never runs it: it is shut
+; for ever, and it still reads 2 in SOLID so it still blocks the player.
+;
+; THIS WAS 8 WHILE THE MAP HAD 12 DOORS.  The four it dropped were the
+; last four in scan order -- (7,10), (12,10), (5,13), (10,13) -- and the
+; player starts at (3,12), whose room's east door is (5,13).  So the
+; first door a new player walks into was one of the dead ones, and the
+; bug read as "the doors do not open at all".  The single-door test
+; passed throughout, because it picked the first door in the map and
+; that one was inside the cap.
+;
+; It only sizes the three arrays below (3 bytes a door); the per-frame
+; cost follows door_n, the number actually found.  gen_march.py emits
+; NDOORS from the map and main3.asm asserts MAXDOORS >= NDOORS, so a map
+; that outgrows this fails the BUILD instead of losing doors in silence.
+MAXDOORS    equ 16
+
+; ---------------------------------------------------------------------
+;  THE DOOR TABLES LIVE IN THE FREE RAM ABOVE QUADS, not in the code
+;  segment.  Three arrays of MAXDOORS bytes is 48, the body had 162 to
+;  spare under BUCK0, and `assert game_end <= BUCK0` fired the moment
+;  MAXDOORS grew and door_shrink arrived.  march.asm places SOLID and
+;  MARK the same way, and for the same reason.
+;
+;  QUADS is #3A00-#3DBF (memmap.inc) and the CPU stack tops out at
+;  #3FF0, so #3DC0 upwards is free.  addrs.py parses these out of this
+;  file for the harnesses, because rasm does NOT put `equ` symbols in
+;  the .sym file -- only labels -- so nothing can read them from there.
+; ---------------------------------------------------------------------
+;  THEY ARE LITERALS WITH ASSERTS, not expressions, and that is for the
+;  Python side: addrs.py parses `name equ <number>` and cannot evaluate
+;  `DOORTAB+MAXDOORS`.  The asserts below are what keep the literals
+;  honest, so the two can never drift apart in silence.
+DOORTAB     equ #3DC0
+door_idx    equ #3DC0                   ; MAXDOORS: each door's cell index
+door_st     equ #3DD0                   ; ...its current state
+door_tg     equ #3DE0                   ; ...and the state it is running to
+    assert door_idx == DOORTAB
+    assert door_st  == DOORTAB+MAXDOORS
+    assert door_tg  == DOORTAB+MAXDOORS*2
+    assert DOORTAB+MAXDOORS*3 <= #3FF0  ; clear of the CPU stack
+    assert DOORTAB >= QUADS+120*8       ; ...and of the quad list
 DOOR_REACH  equ 320         ; 1.25 cells, 8.8, for the nearest-door search
 
 
@@ -440,9 +487,127 @@ coll_free
 
 
 ; ---------------------------------------------------------------------
+;  door_shrink -- MAKE THE DOOR'S RUN VISIBLE.
+;
+;  A door runs DOOR_SHUT..DOOR_OPEN one step a game frame, and that run
+;  used to be invisible: the quad record carries only (kind, k), so a
+;  door part way open was drawn as a whole door face and then simply
+;  VANISHED on the frame SOLID cleared.  It read as the door
+;  disappearing after six frames rather than opening over them.
+;
+;  This scales the HALF HEIGHTS of every door quad by
+;  (DOOR_OPEN - st) / (DOOR_OPEN - DOOR_SHUT), so the face shrinks
+;  towards the horizon across the run and is gone at the moment the door
+;  becomes passable.  It runs on the FINISHED quad list, between
+;  project_all and the rasteriser, so neither the march, nor the
+;  projector, nor either rasteriser has to know a door can be part open
+;  -- and the Python models, which are the spec for all three, do not
+;  move either.
+;
+;  IT IS A SHRINK AND NOT A SLIDE, and that is forced.  A door that slid
+;  sideways or rose into the lintel would uncover the room BEYOND it,
+;  and there is no room beyond: SOLID is read by the march for OPACITY
+;  and by coll_free for COLLISION, so the cell stays opaque for the whole
+;  run and nothing behind it is ever marched.  Uncovering it would show
+;  bg_fill's ceiling and floor, i.e. a hole.  Shrinking about the horizon
+;  is the one motion that keeps the face over ground the march has
+;  actually filed.
+;
+;  ONE OPENNESS FOR ALL DOOR QUADS, deliberately: the quad does not
+;  carry which door it came from, and door_act starts one door at a
+;  time, so in play there is exactly one door mid-run.  Two visible
+;  doors running at once would share a frame of the animation.
+;
+;  Clobbers AF BC DE HL IX.
+; ---------------------------------------------------------------------
+door_shrink
+    ld   a,(door_anim)
+    sub  DOOR_SHUT+1
+    ret  c                          ; at rest: full height faces
+    cp   DOOR_OPEN-DOOR_SHUT-1
+    ret  nc                         ; open: not drawn at all
+    ld   e,a
+    ld   d,0
+    ld   hl,DSCALE
+    add  hl,de
+    ld   a,(hl)
+    ld   (ds_frac),a
+    ld   a,(fg_nquad)
+    or   a
+    ret  z
+    ld   b,a
+    ld   ix,QUADS
+dsq_l
+    push bc
+    bit  0,(ix+6)                   ; +6 kind, bit 0 = door
+    jr   z,dsq_next
+    ld   l,(ix+2)                   ; +2 hlo
+    ld   h,(ix+3)
+    call ds_scale
+    ld   (ix+2),l
+    ld   (ix+3),h
+    ld   l,(ix+4)                   ; +4 hhi
+    ld   h,(ix+5)
+    call ds_scale
+    ld   (ix+4),l
+    ld   (ix+5),h
+dsq_next
+    pop  bc
+    ld   de,QRECSZ
+    add  ix,de
+    djnz dsq_l
+    ret
+
+; HL = a half height, Q12.4 -> HL = (HL * (ds_frac)) >> 8.
+; Two 8x8s rather than a 16x8 loop: (hi*256 + lo)*f >> 8 = hi*f + (lo*f >> 8),
+; and mul8x8u is a quarter-square table lookup.  hi <= 24 and f <= 213, so
+; neither product leaves 16 bits.
+ds_scale
+    ; ---- CLAMP TO THE VIEWPORT FIRST, so the run scales the height you
+    ;      can SEE and not the geometric one.  A door you are close
+    ;      enough to open is typically twice the viewport tall -- 1536 in
+    ;      Q12.4 against CYH*16 = 768 -- and rc_column clips it to CYH
+    ;      either way, so scaling the raw half height spent the first
+    ;      four frames of the six moving a number that was clipped off
+    ;      the screen and nothing appeared to happen until the last two.
+    ;      Clamping first makes the visible height fall linearly across
+    ;      the whole run, at every distance.
+    ld   de,CYH*16
+    or   a
+    sbc  hl,de
+    jr   c,dss_under
+    ld   h,d                        ; taller than the viewport: it is
+    ld   l,e                        ; drawn as exactly the viewport
+    jr   dss_have
+dss_under
+    add  hl,de                      ; ...otherwise put it back
+dss_have
+    ld   (ds_h),hl
+    ld   a,(ds_frac)
+    ld   c,a
+    ld   a,(ds_h+1)
+    call mul8x8u                    ; HL = hi * f
+    ld   (ds_acc),hl
+    ld   a,(ds_frac)
+    ld   c,a
+    ld   a,(ds_h)
+    call mul8x8u                    ; HL = lo * f
+    ld   a,h                        ; ...of which we want the high byte
+    ld   hl,(ds_acc)
+    add  a,l
+    ld   l,a
+    ld   a,0
+    adc  a,h
+    ld   h,a
+    ret
+
+
+; ---------------------------------------------------------------------
 ;  doors_step -- one animation step per door per frame, and SOLID.
 ; ---------------------------------------------------------------------
 doors_step
+    ld   a,DOOR_SHUT                ; ...and nothing is animating unless a
+    ld   (door_anim),a              ; door below turns out to be mid-run
     ld   a,(door_n)
     or   a
     ret  z
@@ -472,6 +637,16 @@ ds_set
 ds_same
     pop  hl
 ds_apply
+    ; ---- IS THIS DOOR PART WAY THROUGH ITS RUN?  A is its new state.
+    ;      door_shrink scales the door faces by it, which is what makes
+    ;      the run visible; DOOR_SHUT and DOOR_OPEN are the two resting
+    ;      states and neither of them animates anything.
+    cp   DOOR_SHUT
+    jr   z,ds_noanim
+    cp   DOOR_OPEN
+    jr   z,ds_noanim
+    ld   (door_anim),a
+ds_noanim
     ld   hl,door_idx                ; SOLID = 0 only when fully open
     add  hl,de
     ld   l,(hl)
@@ -743,9 +918,16 @@ cf_x0       db 0
 cf_x1       db 0
 
 door_n      db 0
-door_idx    ds MAXDOORS
-door_st     ds MAXDOORS
-door_tg     ds MAXDOORS
+door_anim   db DOOR_SHUT        ; the state of whichever door is mid-run
+ds_h        dw 0                ; door_shrink scratch
+ds_acc      dw 0
+ds_frac     db 0
+
+; (DOOR_OPEN - st) * 256 / (DOOR_OPEN - DOOR_SHUT), for st = DOOR_SHUT+1
+; up. DOOR_SHUT itself is full height and never reaches here, and
+; DOOR_OPEN is not drawn at all.
+DSCALE      db 213,170,128,85,42
+    assert DOOR_OPEN - DOOR_SHUT - 1 == 5   ; ...one entry per running step
 da_best     dw 0
 da_t        dw 0
 da_slot     db 0
