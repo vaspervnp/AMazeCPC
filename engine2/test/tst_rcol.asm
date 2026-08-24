@@ -54,6 +54,8 @@ QRECSZ  equ 8
     ifdef PACED
     di
     jp  e_hbench
+    di
+    jp  e_hfixed
     endif
 
 ; ---------------------------------------------------------------------
@@ -134,16 +136,12 @@ fg_nquad db 0                   ; kernel.asm owns this in the real build
 ;  expensive path and the hostile one, since wait_vsync destroys A and B.
 ;
 ;  UNLIKE raster_quad, SP IS NEVER THE SCREEN AT A HOOK here -- rastcol
-;  charges in rc_face and rc_column, both outside the fill -- so the abort
-;  only has to put SP back where the bench loop left it.
+;  charges in rc_face, rc_pairloop and rc_pnext, all outside the fill --
+;  so the abort only has to put SP back where the bench loop left it.
 ; =====================================================================
-C_CFRAME equ 2000
-C_CFACE  equ 1000
-C_CSKIP  equ 150
-C_COLS   equ 330
-C_CBAND  equ 460
-C_COLR   equ 22
-C_CEDGE  equ 60
+    include "costcol.inc"       ; the SAME constants the disc charges -- a
+                                ; private copy is how a harness ends up
+                                ; verifying a build nobody has
 COST_THI equ 0
 
 cost_unit
@@ -192,6 +190,8 @@ hookbc    dw 0
 e_hbench
     ld  sp,STACK
     call setup
+    ld  hl,hb_l                 ; the abort returns into THIS loop, even
+    ld  (hb_cont+1),hl          ; if e_hfixed pointed it elsewhere
     ld  hl,0
     ld  (counter),hl
 hb_l
@@ -207,7 +207,50 @@ hb_abort
     ld  bc,#7FC4                ; raster_colframe was mid-render, so bank
     out (c),c                   ; 5 is still paged: put bank 4 back
     ld  sp,STACK
-    jr  hb_l
+hb_cont                         ; ...and back to whichever loop is running:
+    jp  hb_l                    ; patched to hf_next by e_hfixed
+
+; =====================================================================
+;  e_hfixed -- the prefix render an EXACT number of times, then stop.
+;
+;  WHY, WHEN e_hbench ALREADY TIMES IT.  e_hbench counts how many whole
+;  iterations fit in a fixed window, so its answer is quantised by ONE
+;  ITERATION: at a prefix of 87000 us in a 2000000 us window that is 23
+;  iterations and a systematic overestimate of up to 4.3%.  The
+;  INTERVALS are differences of two such prefixes -- about 3000 us apart
+;  -- so the noise was larger than the quantity, and the differences came
+;  out anywhere from 0 (clamped) to double the truth.  A harness that
+;  cannot resolve what it measures reports confident nonsense, and the
+;  charge it produces is one-sided only by luck.
+;
+;  Here the Z80 runs the prefix (hreps) times and sets (done).  The
+;  driver counts TICKS to that flag, so the only error is how far past
+;  the flag its last poll ran, divided by hreps.
+; =====================================================================
+e_hfixed
+    ld  sp,STACK
+    call setup
+    ld  hl,hf_next              ; the abort returns into THIS loop
+    ld  (hb_cont+1),hl
+    xor a
+    ld  (done),a
+    ld  a,(hreps)
+    ld  (repsleft),a
+hf_l
+    ld  a,(hookk)
+    ld  (hookn),a
+    call raster_colframe        ; ...or hb_abort, which lands at hf_next
+hf_next
+    ld  hl,repsleft
+    dec (hl)
+    jr  nz,hf_l
+    ld  a,#FF
+    ld  (done),a
+hf_spin
+    jr  hf_spin
+
+hreps     db 1
+repsleft  db 1
     endif
 
     include "raster.asm"        ; raster_init, raster_setbuf, VPLINE

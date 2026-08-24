@@ -128,17 +128,21 @@ COURSES = _equ("COURSES", 0, "vpcfg.inc")
 
 # THE COLUMN RENDERER.  vpcfg.inc's VPCOL picks engine2/src/rastcol.asm
 # over raster.asm, and its charge is not per quad at all -- it is one
-# C_CFACE per face that survives the occlusion scan and one
-# C_COLS + C_COLR*rows per column PAIR.  colmodel.charge is the twin of
-# those two hooks, the way quad_units below is the twin of pace_quad.
+# upper-bound hook per column PAIR, drawn or skipped, plus a hook per
+# face and one for rc_pnext's clamped slow step.  colmodel.charge is the
+# twin of those hooks, the way quad_units below is the twin of
+# pace_quad, and the constants live in engine2/src/costcol.inc -- the
+# ONE file main3.asm and tst_rcol.asm both include -- so they are read
+# from there.
 VPCOL = _equ("VPCOL", 0, "vpcfg.inc")
-C_CFACE = _equ("C_CFACE", 900)
-C_CFRAME = _equ("C_CFRAME", 2000)
-C_CSKIP = _equ("C_CSKIP", 150)
-C_COLS = _equ("C_COLS", 330)
-C_CBAND = _equ("C_CBAND", 400)
-C_COLR = _equ("C_COLR", 22)
-C_CEDGE = _equ("C_CEDGE", 60)
+C_CFACE = _equ("C_CFACE", 1700, "costcol.inc")
+C_CFRAME = _equ("C_CFRAME", 2000, "costcol.inc")
+C_CSKIP = _equ("C_CSKIP", 370, "costcol.inc")
+C_COLS = _equ("C_COLS", 700, "costcol.inc")
+C_CBAND = _equ("C_CBAND", 460, "costcol.inc")
+C_COLR = _equ("C_COLR", 22, "costcol.inc")
+C_CEDGE = _equ("C_CEDGE", 60, "costcol.inc")
+C_CSTEP = _equ("C_CSTEP", 120, "costcol.inc")
 JOINT_KMAX = _equ("JOINT_KMAX", 3, "raster.asm")
 if COURSES and RQ_SPLIT:
     # ...and say so rather than modelling it silently: this pair draws
@@ -346,10 +350,18 @@ def units(ncell, faces, quads, cyh):
         # ONE WALK OVER THE WHOLE LIST, not one per quad: the column
         # renderer's charge depends on what the NEARER faces have already
         # covered, so a quad cannot be costed on its own.
+        # ...and IMPORT rastermodel HERE.  This read a module global `_rm`
+        # that only pacescan.py ever set (it does `pm._rm = rm` in its
+        # worker initialiser), so pacescan worked and every other caller
+        # of units() died with NameError the moment VPCOL was 1 --
+        # emu_pace3.py, the harness that measures the BOOTED DISC against
+        # this model, could not run at all.  The one tool that could see
+        # the disc disagree with the model was the one the bug silenced.
         import colmodel as _cm
+        import rastermodel as _rm
         u += [(0, cc, cc) for cc in
               _cm.charge(quads, _rm.cfg(), C_CFRAME, C_CFACE, C_CSKIP,
-                         C_COLS, C_CBAND, C_COLR, C_CEDGE)]
+                         C_COLS, C_CBAND, C_COLR, C_CEDGE, C_CSTEP)]
     else:
         for q in quads:
             u += [(0, cc, cc) for cc in quad_units(q, cyh)]

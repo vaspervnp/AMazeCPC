@@ -67,6 +67,7 @@ def write_bank(c, bank, data):
 BUILD = os.path.join(_E2, "build")
 
 E_MANY, E_BENCH, E_EMPTY, E_HBENCH = 0x8000, 0x8004, 0x8008, 0x800C
+E_HFIXED = 0x8010
 PRO_US = 8.0        # the hookn countdown, harness only
 
 QUADS = addrs.QUADS
@@ -141,6 +142,36 @@ class Rig:
     def expect(self, quads):
         scr, st = colmodel.render(quads, self.cfg, self.pw, self.pd)
         return scr, st
+
+    def bench_exact(self, quads, reps=24, hint=0.0, poll=200):
+        """-> us per prefix render, from an EXACT repetition count.
+
+        bench() counts whole iterations inside a fixed window, so it is
+        quantised by one whole iteration -- 4.3% at a prefix of 87000 us
+        -- and the INTERVALS taken as differences of two prefixes were
+        smaller than that noise.  Here the Z80 does the work `reps`
+        times and says so; the only error left is how far past the flag
+        the last poll ran, over reps.
+
+        `hint` is a previous prefix's microseconds: prefixes grow with
+        the hook index, so running most of the way in one call and then
+        polling finely costs a fraction of the calls that polling from
+        zero would.
+        """
+        self.poke_quads(quads)
+        self.c.poke(self.s("HREPS"), reps)
+        self.c.poke(self.s("DONE"), 0)
+        self.c.set_pc(E_HFIXED)
+        ticks = 0
+        if hint > 0:
+            ticks += self.c.run_us(int(hint * reps * 0.9))
+        n = 0
+        while self.c.peek(self.s("DONE")) != 0xFF:
+            ticks += self.c.run_us(poll)
+            n += 1
+            if n > 400000:
+                raise RuntimeError("e_hfixed never finished")
+        return (ticks / 4.0) / reps
 
     def bench(self, entry, quads, us=800000):
         self.poke_quads(quads)
@@ -289,7 +320,8 @@ def time_it(nstates=24):
 def charges_for(quads, c):
     import pacemodel as P
     return colmodel.charge(quads, c, P.C_CFRAME, P.C_CFACE, P.C_CSKIP,
-                           P.C_COLS, P.C_CBAND, P.C_COLR, P.C_CEDGE)
+                           P.C_COLS, P.C_CBAND, P.C_COLR, P.C_CEDGE,
+                           P.C_CSTEP)
 
 
 def atomic(nstates=3, seed=1337):
@@ -307,46 +339,27 @@ def atomic(nstates=3, seed=1337):
     charge the Z80 itself was about to take there, which also cross-checks
     colmodel.charge against the asm hook for hook.
     """
-    import marchmodel as mm
-    import projmodel as pmod
-    import random
-    import world
     rig = Rig(paced=True)
     c = rig.cfg
-    ovh = rig.bench(E_EMPTY, [emu_rast.q(0, 0, 16, 0, 0, 1, c)])
-    grid, _sx, _sy = world.load_maze()
-    solid = mm.solid_from_grid(grid)
-    floors = [(x, y) for y in range(16) for x in range(16)
-              if grid[y][x] == world.FLOOR]
-    rnd = random.Random(seed)
     worst = []
-    for _s in range(nstates):
-        x, y = rnd.choice(floors)
-        px, py = (x << 8) | rnd.randrange(256), (y << 8) | rnd.randrange(256)
-        a = rnd.randrange(72)
-        r = mm.march(solid, px, py, a)
-        ipx, ipy = px >> 8, py >> 8
-        qs = []
-        for (wx, wy, fd, door, k), v in zip(r["faces"], r["fviews"]):
-            (ax, ay), _b, _n = pmod.face_endpoints(wx, wy, fd)
-            qq = pmod.project_face(v[0], v[1], v[2], v[3],
-                                   ax - ipx, ay - ipy, fd)
-            if qq is not None:
-                qs.append(qq + (1 if door else 0, k))
-        if not qs:
-            continue
+    for px, py, a, qs in _states(nstates, seed):
         ch = charges_for(qs, c)
-        rig.poke_quads(qs)
-        t, z80 = [], []
+        # THE PRECISE PATH, not bench(): counting whole iterations of a
+        # fixed window quantises each PREFIX by up to one iteration --
+        # 4.3% of 87000 us -- and the intervals are differences of two
+        # prefixes about 3000 us apart, so the noise swamped the
+        # quantity and this printed under-charges that were not there.
+        # bench_exact runs the prefix an exact number of times; the
+        # residual error is a few microseconds.  See Rig.bench_exact.
+        _terms, iv = measure(rig, qs)
+        z80 = []
         for k in range(1, len(ch) + 2):
             rig.c.poke(rig.s("HOOKK"), min(k, 255))
-            t.append(rig.bench(E_HBENCH, qs, us=2000000) - ovh)
+            rig.bench_exact(qs, reps=1)
             z80.append(struct.unpack(
                 "<H", rig.c.read_ram(rig.s("HOOKBC"), 2))[0])
-        iv = [t[0]] + [t[i] - t[i - 1] for i in range(1, len(t))]
-        iv = [max(0.0, v - PRO_US) for v in iv]
         print(f"\nstate ({px:04X},{py:04X},{a})  {len(qs)} quads, "
-              f"{len(ch)} hooks, whole render {t[-1]:.0f} us")
+              f"{len(ch)} hooks, whole render {sum(iv):.0f} us")
         bad, dis = [], 0
         for i, cc in enumerate(ch):
             meas = iv[i + 1] if i + 1 < len(iv) else 0.0
@@ -371,8 +384,202 @@ def atomic(nstates=3, seed=1337):
     return worst
 
 
+# ------------------------------------------------------------------- fit --
+TERMS = ["frame", "face", "skip", "pair", "bands", "rows", "edges", "steps"]
+CNAME = {"frame": "C_CFRAME", "face": "C_CFACE", "skip": "C_CSKIP",
+         "pair": "C_COLS", "bands": "C_CBAND", "rows": "C_COLR",
+         "edges": "C_CEDGE", "steps": "C_CSTEP"}
+
+
+def _ridge(X, y, lam):
+    """-> the coefficients of a ridge-regularised least squares, by
+    Gauss-Jordan on (X'X + lam*I) b = X'y.  Small and self-contained
+    because the only alternative here is a singular solve."""
+    n = len(X[0])
+    A = [[sum(X[r][i] * X[r][j] for r in range(len(X)))
+          + (lam if i == j else 0.0) for j in range(n)] + [
+        sum(X[r][i] * y[r] for r in range(len(X)))] for i in range(n)]
+    for i in range(n):
+        p = max(range(i, n), key=lambda r: abs(A[r][i]))
+        A[i], A[p] = A[p], A[i]
+        if abs(A[i][i]) < 1e-12:
+            continue
+        d = A[i][i]
+        A[i] = [v / d for v in A[i]]
+        for r in range(n):
+            if r != i and A[r][i]:
+                f = A[r][i]
+                A[r] = [a - f * b for a, b in zip(A[r], A[i])]
+    return [A[i][n] for i in range(n)]
+
+
+def _states(nstates, seed):
+    """-> quad lists for nstates random reachable views."""
+    import marchmodel as mm
+    import projmodel as pmod
+    import world
+    grid, _sx, _sy = world.load_maze()
+    solid = mm.solid_from_grid(grid)
+    floors = [(x, y) for y in range(16) for x in range(16)
+              if grid[y][x] == world.FLOOR]
+    rnd = random.Random(seed)
+    out = []
+    for _ in range(nstates):
+        x, y = rnd.choice(floors)
+        px, py = (x << 8) | rnd.randrange(256), (y << 8) | rnd.randrange(256)
+        a = rnd.randrange(72)
+        r = mm.march(solid, px, py, a)
+        ipx, ipy = px >> 8, py >> 8
+        qs = []
+        for (wx, wy, fd, door, k), v in zip(r["faces"], r["fviews"]):
+            (ax, ay), _b, _n = pmod.face_endpoints(wx, wy, fd)
+            qq = pmod.project_face(v[0], v[1], v[2], v[3],
+                                   ax - ipx, ay - ipy, fd)
+            if qq is not None:
+                qs.append(qq + (1 if door else 0, k))
+        if qs:
+            out.append((px, py, a, qs))
+    return out
+
+
+def measure(rig, qs):
+    """-> (terms, intervals) for one state: the regressors colmodel emits
+    per hook, and the microseconds the Z80 really spends after it.
+
+    THE INTERVAL AFTER HOOK k IS WHAT k HAS TO PAY FOR, because
+    cost_unit rooms THEN charges: it decides whether to yield using the
+    charge it is handed, and then the work runs.  So terms[k] is
+    regressed on iv[k+1], the prefix difference that follows it.
+    """
+    c = rig.cfg
+    terms = colmodel.charge_terms(qs, c)
+    rig.poke_quads(qs)
+    t = []
+    for k in range(1, len(terms) + 2):
+        rig.c.poke(rig.s("HOOKK"), min(k, 255))
+        t.append(rig.bench_exact(qs, hint=t[-1] if t else 0.0))
+    iv = [t[0]] + [t[i] - t[i - 1] for i in range(1, len(t))]
+    iv = [max(0.0, v - PRO_US) for v in iv]
+    return terms, iv
+
+
+def fit(nstates=6, seed=99):
+    """MEASURE EVERY INTERVAL AND SOLVE FOR CONSTANTS THAT COVER IT.
+
+    The charge is one hook per pair now (see engine2/src/costcol.inc), so
+    each interval is exactly one pair's worth of work and the constants
+    are the coefficients of colmodel.charge_terms' own columns.  The
+    rule this project holds every C_* to is est >= actual for EVERY unit,
+    not on average -- so this is not a least-squares fit.  It is a
+    linear program solved the cheap way: start from a least-squares
+    seed, then raise the coefficients until no interval is under, and
+    print the result rounded up.
+
+    An over-charge costs vsync periods exactly as an under-charge does,
+    so the point is the SMALLEST vector that clears everything.
+    """
+    rig = Rig(paced=True)
+    rows = []
+    for px, py, a, qs in _states(nstates, seed):
+        # NOTE the bench loop's own overhead is NOT subtracted here: it is
+        # in every PREFIX equally, so it cancels in the differences that
+        # make the intervals.  Subtracting it again per interval makes
+        # every unit look ~200 us cheaper than it is, which is the wrong
+        # direction for a charge that has to be one-sided.
+        terms, iv = measure(rig, qs)
+        for k, tm in enumerate(terms):
+            meas = iv[k + 1] if k + 1 < len(iv) else 0.0
+            rows.append(([float(tm[t]) for t in TERMS], max(0.0, meas)))
+        print(f"  state ({px:04X},{py:04X},{a}): {len(terms)} hooks measured")
+
+    return solve(rows, nstates)
+
+
+def solve(rows, nstates=0):
+    """-> the constants, from measured (terms, us) rows.
+
+    NOT A LEAST-SQUARES FIT.  Every C_* in this project is an UPPER
+    BOUND -- est >= actual for EVERY unit, not on average -- so this is
+    a covering problem, and it is solved class by class because the
+    classes do not interact: a hook is a frame, a face, a skip, a slow
+    step, or a drawn pair, never two of them.
+
+    Within the drawn-pair class the design is nearly degenerate (bands
+    is 2 on almost every pair and edges is 0 or 2), so C_COLS, C_CBAND
+    and C_CEDGE cannot be separated by regression -- any split that
+    covers the data is as good as another at fitting, and they differ
+    only in what they OVER-charge.  So the marginal terms are searched
+    over a small grid and C_COLS is whatever the residual then demands,
+    scored by the TOTAL charge over the measured pairs.  That is the
+    quantity that decides the period: an over-charge costs vsync
+    periods exactly as an under-charge does.
+    """
+    import math
+
+    def cls(x):
+        i = dict(zip(TERMS, x))
+        if i["frame"]:
+            return "frame"
+        if i["face"]:
+            return "face"
+        if i["pair"]:
+            return "pair"
+        return "step" if i["steps"] else "skip"
+
+    by = {}
+    for x, y in rows:
+        by.setdefault(cls(x), []).append((dict(zip(TERMS, x)), y))
+    co = dict.fromkeys(TERMS, 0.0)
+
+    # ---- the classes with one term each: the largest is the answer
+    for k, t in (("frame", "frame"), ("face", "face"), ("skip", "skip")):
+        if by.get(k):
+            co[t] = max(y for _i, y in by[k])
+    if not by.get("skip") and by.get("step"):
+        # every skipped pair in this sample also took a clamped step, so
+        # C_CSKIP is not separately observable.  Bound it by the
+        # cheapest step row, which contains one skip and at least one
+        # single column, and let C_CSTEP carry the rest.
+        co["skip"] = min(y for _i, y in by["step"]) / 2.0
+    if by.get("step"):
+        co["steps"] = max((y - co["skip"]) / i["steps"] for i, y in by["step"])
+        co["steps"] = max(0.0, co["steps"])
+
+    # ---- the drawn pairs: grid the marginals, let C_COLS take the rest
+    best = None
+    if by.get("pair"):
+        for colr in [x / 2.0 for x in range(36, 61)]:          # 18.0 .. 30.0
+            for cband in range(0, 761, 20):
+                for cedge in range(0, 161, 10):
+                    need = max(y - cband * i["bands"] - colr * i["rows"]
+                               - cedge * i["edges"] for i, y in by["pair"])
+                    if need < 0:
+                        need = 0.0
+                    tot = sum(need + cband * i["bands"] + colr * i["rows"]
+                              + cedge * i["edges"] for i, _y in by["pair"])
+                    if best is None or tot < best[0]:
+                        best = (tot, need, colr, cband, cedge)
+        _t, co["pair"], co["rows"], co["bands"], co["edges"] = best
+
+    out = {t: int(math.ceil(co[t] - 1e-9)) for t in TERMS}
+    print(f"\n{len(rows)} intervals measured over {nstates} states")
+    for k in ("frame", "face", "skip", "step", "pair"):
+        print(f"    {k:6s} {len(by.get(k, [])):5d} hooks")
+    print("  the one-sided constants that cover every one:")
+    for t in TERMS:
+        print(f"    {CNAME[t]:10s} equ {out[t]:6d}      (fitted {co[t]:9.1f})")
+    slack = [sum(out[t] * dict(zip(TERMS, x))[t] for t in TERMS) - y
+             for x, y in rows]
+    print(f"  worst margin {min(slack):+.0f} us "
+          f"(negative = UNDER), largest over-charge {max(slack):.0f} us")
+    return out
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "verify"
+    if cmd == "fit":
+        fit(int(sys.argv[2]) if len(sys.argv) > 2 else 6)
+        raise SystemExit(0)
     if cmd == "verify":
         raise SystemExit(1 if verify() else 0)
     if cmd == "atomic":

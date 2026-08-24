@@ -228,6 +228,21 @@ rc_faceloop
 ;  rc_face -- HL = one quad record.  Paints whatever of it is visible.
 ; =====================================================================
 rc_face
+    if RC_PACED
+    ; ---- charged at the VERY TOP, before the record is read, because
+    ;      room-then-charge bills the work in front of a hook to the hook
+    ;      BEFORE it: taking this after the setup billed the setup to the
+    ;      previous pair's charge (see costcol.inc for the measured
+    ;      under-charges).  FLAT, because np is not known yet; it covers
+    ;      everything from here to the first pair hook -- the record
+    ;      copy, the ordering, the pair range, the open scan and, when
+    ;      the face is not fully occluded, the whole per-face setup and
+    ;      the first pair's own charge arithmetic.  A degenerate or
+    ;      fully occluded face pays it too, and that is the safe
+    ;      direction.
+    ld   bc,C_CFACE
+    call cost_unit
+    endif
     ld   de,rc_blo              ; the record into locals
     repeat QRECSZ
     ldi
@@ -283,35 +298,6 @@ rc_pbok
     ret  z                      ; no pair of its own
     ret  c
     ld   (rc_np),a
-
-    if RC_PACED
-    ; ---- WHAT THIS FACE COSTS BEFORE IT DRAWS ANYTHING.  C_CFACE is the
-    ;      setup below -- the normalise, the w2 multiply and the one
-    ;      16-bit division the half-height Bresenham needs -- and
-    ;      C_CSKIP is per pair in its RANGE, drawn or not.
-    ;
-    ;      THE SKIPPED PAIRS ARE THE POINT.  rc_pairloop walks every pair
-    ;      the face spans and rc_pnext steps t2, N, D and the Bresenham
-    ;      through all of them, whether or not a nearer face has already
-    ;      taken the pair -- so a face that draws NOTHING still costs
-    ;      about 125 us a pair.  Charging only the pairs that draw left
-    ;      that unbilled, and a corridor is exactly the view that has many
-    ;      faces each spanning many pairs it does not win: the booted disc
-    ;      read 12 vsyncs where the accumulator had budgeted 9.
-    ;
-    ;      It is charged HERE, before the open scan, so a fully occluded
-    ;      face pays too.  It over-charges those, and they are cheap and
-    ;      few; the alternative leaves the one view that breaks the lock
-    ;      paying nothing at all.
-    ld   a,(rc_np)
-    ld   de,C_CSKIP
-    call rc_mul8
-    ld   de,C_CFACE
-    add  hl,de
-    ld   b,h
-    ld   c,l
-    call cost_unit
-    endif
 
     ; ---- IS ANY OF THEM STILL OPEN?  A fully occluded face pays this
     ;      scan and nothing else -- no normalise, no divide, no setup --
@@ -584,8 +570,21 @@ rc_pairloop
     ld   hl,(rc_pdn)
     ld   a,(hl)
     cp   VP_H
-    jr   nc,rc_pnext            ; this pair is finished
+    jr   c,rc_pdo
+    ; ---- this pair is finished.  Its rc_pnext step still runs, and so
+    ;      does the NEXT pair's occlusion test and charge arithmetic, so
+    ;      the skip takes a hook of its own: ONE HOOK PER PAIR, drawn or
+    ;      not, is what makes every interval one pair and every charge
+    ;      cover its interval by construction.
+    if RC_PACED
+    ld   bc,C_CSKIP
+    call cost_unit
+    endif
+    jr   rc_pnext
 rc_pdo
+    if RC_PACED
+    call rc_charge              ; the pair's UPPER BOUND, before ANY of
+    endif                       ; rc_column's setup runs
     call rc_column
 rc_pnext
     ; ---- advance t2 by 4, and N, D and h with it.  The LAST pair clamps
@@ -628,6 +627,27 @@ rc_t2ok
     call rc_hacc
     jr   rc_stepped
 rc_slow                         ; a CLAMPED step: 1..3 single columns
+    if RC_PACED
+    ; ---- the one place a pair's step costs more than the flat C_CSKIP
+    ;      or C_COLS budgeted for it: up to three single-column steps at
+    ;      about 107 us each instead of one whole-pair add.  It happens
+    ;      at most twice a face -- the first step off an odd left edge
+    ;      and the clamp at the right one -- so it charges its own hook
+    ;      here rather than fattening every skipped pair's charge by two
+    ;      thirds.  A = delta survives cost_unit (it preserves AF);
+    ;      B does NOT survive a yield, hence the reload below.
+    push af
+    ld   b,a
+    ld   hl,C_CSKIP
+    ld   de,C_CSTEP
+rc_slchg
+    add  hl,de
+    djnz rc_slchg
+    ld   b,h
+    ld   c,l
+    call cost_unit
+    pop  af
+    endif
     ld   b,a
 rc_slowl
     push bc
@@ -684,6 +704,136 @@ rc_hacc                         ; A = the remainder to add
     ld   (rc_acc),a
     ld   de,1
     jr   rc_hadd
+
+
+    if RC_PACED
+; =====================================================================
+;  rc_charge -- ONE OPEN PAIR'S UPPER BOUND, charged before any of
+;  rc_column's setup runs.
+;
+;  Nothing rc_column will compute is known yet -- that is the point, the
+;  hook must run FIRST -- but everything needed to BOUND it is:
+;
+;    (rc_h)  +- (rc_hq)+1 brackets the two byte columns' half heights
+;            (they are one Bresenham step either side of the centre, and
+;            the accumulator carry is at most 1), so
+;              j_hi = min(RC_RC, max(0, h+hq+1) >> 4)   >= the taller j
+;              j_lo = min(RC_RC, max(0, h-hq-1) >> 4)   <= the shorter
+;    rc_up / rc_dn at this pair bound the rows a nearer face left free:
+;              free = up + (VP_H - dn)  >= every row this pair can draw,
+;            bands and edges together -- which is what stops the bound
+;            re-billing, face after face, rows that are already owned
+;
+;    rows  <= min(2*j_hi + 1, free)        the PUSH-filled band rows
+;    edges <= min(2*(j_hi - j_lo), free)   the taller column's own rows
+;    bands <= (up > 0) + (dn < VP_H)
+;
+;  and the charge is C_COLS + C_CBAND*bands + C_COLR*rows + C_CEDGE*edges.
+;  It over-charges an occluded or clipped pair, which is the safe
+;  direction; costcol.inc carries why the previous exact-but-late charge
+;  broke the lock.
+;
+;  Clobbers AF BC DE HL.  Falls into cost_unit, which yields if the
+;  bound does not fit the interval.
+; =====================================================================
+rc_charge
+    ld   hl,(rc_pup)
+    ld   a,(hl)                 ; up = COUNT of free rows above
+    ld   b,0
+    or   a
+    jr   z,rcc_nb1
+    inc  b                      ; a band above is possible
+rcc_nb1
+    ld   c,a
+    ld   hl,(rc_pdn)
+    ld   a,(hl)                 ; dn = first free row below, <= VP_H
+    cp   VP_H
+    jr   nc,rcc_nb2
+    inc  b                      ; ...and one below
+rcc_nb2
+    ld   e,a
+    ld   a,VP_H
+    sub  e
+    add  a,c                    ; free = up + (VP_H - dn), <= VP_H
+    ld   (rc_tf),a
+    ld   a,b
+    ld   (rc_nb),a              ; 1 or 2: an open pair has free rows
+
+    ld   hl,(rc_h)
+    ld   de,(rc_hq)
+    add  hl,de
+    inc  hl                     ; h + hq + 1 >= both columns' h
+    call rcc_j
+    ld   (rc_jhi),a
+    ld   hl,(rc_h)
+    ld   de,(rc_hq)
+    or   a
+    sbc  hl,de
+    dec  hl                     ; h - hq - 1 <= both columns' h
+    call rcc_j
+    ld   c,a                    ; C = j_lo
+    ld   a,(rc_jhi)
+    sub  c
+    add  a,a                    ; 2*(j_hi - j_lo) >= the edge rows
+    ld   hl,rc_tf
+    cp   (hl)
+    jr   c,rcc_eok
+    ld   a,(hl)                 ; ...clipped to the free rows
+rcc_eok
+    ld   (rc_eu),a
+    ld   a,(rc_jhi)
+    add  a,a
+    inc  a                      ; 2*j_hi + 1 >= the band rows
+    cp   (hl)                   ; HL is still rc_tf
+    jr   c,rcc_rok
+    ld   a,(hl)
+rcc_rok
+    ld   de,C_COLR              ; A = rows bound, <= 97
+    call rc_mul8
+    ld   de,C_COLS
+    add  hl,de
+    ld   de,C_CBAND
+    ld   a,(rc_nb)
+rcc_bl
+    add  hl,de
+    dec  a
+    jr   nz,rcc_bl
+    ld   (rc_chg),hl
+    ld   a,(rc_eu)
+    ld   de,C_CEDGE
+    call rc_mul8
+    ld   de,(rc_chg)
+    add  hl,de
+    ld   b,h
+    ld   c,l
+    jp   cost_unit
+
+; HL = a half height bound, Q12.4 signed -> A = min(RC_RC, max(0,HL)>>4)
+rcc_j
+    bit  7,h
+    jr   z,rccj1
+    xor  a                      ; negative: no rows at all
+    ret
+rccj1
+    ld   de,RC_RC*16
+    or   a
+    sbc  hl,de
+    jr   c,rccj2
+    ld   a,RC_RC                ; at or past a full half-viewport
+    ret
+rccj2
+    add  hl,de                  ; HL < RC_RC*16 = 768: the shift fits A
+    srl  h
+    rr   l
+    srl  h
+    rr   l
+    srl  h
+    rr   l
+    srl  h
+    rr   l
+    ld   a,l
+    ret
+    endif
 
 
 ; =====================================================================
@@ -821,78 +971,10 @@ rc_jsmall
 rc_r1ok
     ld   (rc_r1),a
 rc_rows
-
-    if RC_PACED
-    ; ---- WHAT THIS PAIR COSTS, roomed and charged before a pixel of it
-    ;      is drawn.  It is charged HERE, and not before the row range is
-    ;      known, because BOTH terms that matter are known here and were
-    ;      guesses before it: how many BANDS this face will draw at this
-    ;      pair, and how many SCANLINES they add up to.
-    ;
-    ;      MEASURED on the booted disc, engine2/tools/emu_rcol.py, by a
-    ;      sweep that varies the band count and the scanline count
-    ;      independently (full viewport / quarter height / one row tall):
-    ;
-    ;          a pair drawing TWO bands   1015 us + 19.48 per scanline
-    ;          a pair drawing ONE band     650 us + 19.48 per scanline
-    ;
-    ;      i.e. 285 fixed per pair and 365 per band, and C_COLS / C_CBAND
-    ;      / C_COLR are those rounded up.
-    ;
-    ;      A FLAT PER-PAIR CHARGE DOES NOT FIT, and that is not a matter
-    ;      of picking a bigger number.  One constant covering both a
-    ;      96-scanline two-band pair and a one-row one-band pair has to
-    ;      bound the first, so it over-charges the second by 450 us; and
-    ;      charging the FULL row range 2j+1 rather than the rows actually
-    ;      drawn over-charges every pair a nearer face has already cut.
-    ;      On a frame full of overlapping faces that compounds: the worst
-    ;      charged frame came to 185134 us, which is eleven vsync periods
-    ;      for about seven periods of work.  An over-charge costs periods
-    ;      exactly as an under-charge does -- see main3.asm -- and this is
-    ;      the shape, not the size, being wrong.
-    ld   hl,(rc_pup)
-    ld   c,(hl)                 ; up
-    ld   b,0                    ; bands
-    ld   e,0                    ; scanlines
-    ld   a,(rc_r0)
-    cp   c
-    jr   nc,rc_pc1
-    inc  b
-    ld   a,c
-    ld   hl,rc_r0
-    sub  (hl)                   ; the upper band's rows
-    ld   e,a
-rc_pc1
-    ld   hl,(rc_pdn)
-    ld   c,(hl)                 ; dn
-    ld   a,(rc_r1)
-    cp   c
-    jr   c,rc_pc2
-    sub  c
-    inc  a                      ; the lower band's rows
-    add  a,e
-    ld   e,a
-    inc  b
-rc_pc2
-    ld   a,b
-    or   a
-    jr   z,rc_pcdone            ; this face draws nothing here
-    ld   a,e
-    ld   de,C_COLR
-    call rc_mul8                ; HL = scanlines * C_COLR
-    ld   de,C_COLS
-    add  hl,de
-    ld   de,C_CBAND
-    add  hl,de
-    dec  b
-    jr   z,rc_pcgo
-    add  hl,de                  ; ...and the second band, if there is one
-rc_pcgo
-    ld   b,h
-    ld   c,l
-    call cost_unit
-rc_pcdone
-    endif
+    ; (the pair's charge was taken at the TOP of rc_column, by rc_charge,
+    ;  as an upper bound -- see costcol.inc.  Charging here, where the
+    ;  band count and row count are exact, billed everything above this
+    ;  line to the PREVIOUS hook and broke the frame lock.)
 
     ; ---- BAND ABOVE THE HORIZON: rows r0 .. up-1.  Its texture
     ;      coordinate is CTABT's idx0 with no arithmetic at all, because
@@ -1074,15 +1156,7 @@ rc_eugo
     ld   (rc_erow),a
     ld   hl,(rc_eidx0)
     ld   (rc_eidx),hl
-    if RC_PACED
-    ld   a,(rc_en)              ; the edge rows, charged before they draw
-    ld   de,C_CEDGE
-    call rc_mul8
-    ld   b,h
-    ld   c,l
-    call cost_unit
-    endif
-    call rc_edge
+    call rc_edge                ; charged by rc_charge's C_CEDGE bound
 rc_noup
 
     ; --- BELOW: rows max(r1+1, dn) .. r1t.  It starts wherever the pair
@@ -1111,15 +1185,7 @@ rc_ed1
     ld   de,(rc_eidx0)
     add  hl,de
     ld   (rc_eidx),hl
-    if RC_PACED
-    ld   a,(rc_en)              ; the edge rows, charged before they draw
-    ld   de,C_CEDGE
-    call rc_mul8
-    ld   b,h
-    ld   c,l
-    call cost_unit
-    endif
-    call rc_edge
+    call rc_edge                ; charged by rc_charge's C_CEDGE bound
 rc_nodn
     jr   rc_edone
 rc_noedge
@@ -1553,6 +1619,13 @@ rc_rec      dw 0
 rc_left     db 0
 rc_sp       dw 0
 rc_sp2      dw 0
+    if RC_PACED
+rc_tf       db 0                ; rc_charge: rows still free at the pair
+rc_nb       db 0                ; ...bands the face could draw there
+rc_jhi      db 0                ; ...upper bound on the taller column's j
+rc_eu       db 0                ; ...upper bound on the edge rows
+rc_chg      dw 0                ; ...the charge being accumulated
+    endif
 
 rc_up       defs CNPAIR         ; uncovered rows above the horizon
 rc_dn       defs CNPAIR         ; first uncovered row below it

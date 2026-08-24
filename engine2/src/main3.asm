@@ -332,20 +332,29 @@ SCR_BACK    equ #8000
 ;  no way round it:
 ;
 ;      VPCOL 0   flat spans     PACE_FRAMES 6   119.81 ms   8.35 fps
-;      VPCOL 1   textured cols  PACE_FRAMES 10  199.68 ms   5.01 fps
+;      VPCOL 1   textured cols  PACE_FRAMES 9   179.71 ms   5.56 fps
 ;
-;  EXHAUSTIVE over all 4055040 reachable states (pacescan.py) with the
-;  column renderer's own measured charges, the worst charged frame is
-;  160860 us against the span renderer's 104024, and the distribution of
-;  waits the greedy rule asks for is
+;  EXHAUSTIVE over all 6967296 reachable states (pacescan.py) with the
+;  column renderer's own measured charges -- the ONE-SIDED ones, taken
+;  one upper-bound hook per column pair, see engine2/src/costcol.inc --
+;  the worst charged frame is 156501 us against the span renderer's
+;  104024, and the distribution of waits the greedy rule asks for is
 ;
-;      3 waits 0.001%   4  10.27%   5  71.89%   6  14.65%
-;      7 waits 2.99%    8   0.20%
+;      5 waits 0.096%   6  47.12%   7  51.48%   8  1.310%
 ;
 ;  -- so eight waits is what the budget has to be, and nine periods is
 ;  what the frame takes.  Set VPCOL back to 0 and put this back to 6.
+;
+;  IT WAS 10, AND THE PERIOD IT BOUGHT WAS PAYING FOR A BROKEN CHARGE
+;  RATHER THAN FOR WORK.  rastcol.asm took its per-pair hook AFTER the
+;  pair's own setup, so room-then-charge billed that setup to the
+;  PREVIOUS hook -- often a 60 us edge run -- and the disc read
+;  [10, 11, 13] vsyncs against a budget of 10 while an offline replay of
+;  the same charge reported it fitting.  One hook per pair, taken first
+;  and charging an upper bound, is what closed it; nothing in the
+;  renderer got faster.
 ; ---------------------------------------------------------------------
-PACE_FRAMES equ 10
+PACE_FRAMES equ 9
 
 ;  IT IS ONE UNCONDITIONAL LINE AND THE ASSERT IS WHY.  Writing it as
 ;  `if VPCOL / 8 / else / 6 / endif` assembles perfectly and breaks the
@@ -356,7 +365,7 @@ PACE_FRAMES equ 10
 ;  hardcoded addresses engine2/tools/addrs.py exists to remove.  So there
 ;  is one line, and an assert that fires the moment it disagrees with the
 ;  renderer it is paired with.
-    assert (VPCOL == 0 && PACE_FRAMES == 6) || (VPCOL == 1 && PACE_FRAMES == 10)
+    assert (VPCOL == 0 && PACE_FRAMES == 6) || (VPCOL == 1 && PACE_FRAMES == 9)
 
 ; ---------------------------------------------------------------------
 ;  GUN -- draw the first-person weapon (engine2/src/gun.asm).  0 builds
@@ -651,72 +660,18 @@ C_CHUNK     equ 300         ; ONE chunk hook -- the SP swap, three pushes,
 C_JOINT     equ 7400
 
 ; ---------------------------------------------------------------------
-;  THE COLUMN RENDERER, CHARGED BY THE BAND.  vpcfg.inc's VPCOL picks it.
+;  THE COLUMN RENDERER, CHARGED ONE UPPER-BOUND HOOK PER PAIR.
 ;
-;  A BAND is the run of scanlines one face owns at one column PAIR -- at
-;  most two per pair, above and below whatever a nearer face already
-;  covered (engine2/src/rastcol.asm).  It is the smallest thing between
-;  two possible yields and, at VP_H scanlines, the LARGEST atomic unit
-;  the renderer can produce: about 2.3 ms against a 19968 us period,
-;  where raster_quad's was 12486.  That is why there is no mid-quad yield
-;  here and no chunk hook to pay for.
-;
-;  Charge = C_CFACE per face that survives the occlusion scan, then
-;  C_COLS + C_COLR per scanline for each band.
+;  vpcfg.inc's VPCOL picks engine2/src/rastcol.asm over raster.asm.  Its
+;  charge constants live in engine2/src/costcol.inc -- ONE file, because
+;  engine2/test/tst_rcol.asm's atomic harness takes the same hooks and
+;  pacemodel.py parses the same numbers, and a second copy is how C_BG
+;  spent a viewport change 616 us under the truth in two places at once.
+;  The shape of the charge, and the measured under-charges that forced
+;  it, are documented there.
 ; ---------------------------------------------------------------------
-C_CFRAME    equ 2000        ; raster_colframe's own setup, once a frame:
-                            ; the two LDIRs that clear the occlusion
-                            ; state, the bank switch and the walk's head.
-C_CSKIP     equ 150         ; ...and per PAIR IN THE FACE'S RANGE, drawn
-                            ; or not: rc_pairloop steps t2, N, D and the
-                            ; half-height Bresenham through every pair the
-                            ; face spans even when a nearer face already
-                            ; owns it.  See rastcol.asm -- leaving that
-                            ; unbilled is what made a CORRIDOR, of all
-                            ; views, take 12 vsyncs against a budget of 9.
-C_CFACE     equ 1000         ; rc_face's setup: the normalise, the w2
-                            ; multiply, and the ONE 16-bit division the
-                            ; half-height Bresenham needs.  A fully
-                            ; occluded face never reaches it.
-C_COLS      equ 330         ; ONE COLUMN PAIR, fixed part...
-C_CBAND     equ 460         ; ...plus this for each BAND it draws...
-C_CEDGE     equ 60          ; one EDGE row -- a single byte of the taller
-                            ; column of a pair, outside the PUSH.  It
-                            ; rebuilds its screen address out of VPLINE
-                            ; every row instead of stepping it, because
-                            ; these runs are one to three rows long
-                            ; (MEASURED: 82 edge bytes a frame against
-                            ; 3600 filled ones) and an unrolled block
-                            ; would be pure setup.  See rc_edge.
-C_COLR      equ 22          ; ...plus this per SCANLINE of those bands,
-                            ; a scanline being two screen bytes.
-                            ;
-                            ; MEASURED on the booted disc by a sweep that
-                            ; varies the band count and the scanline count
-                            ; independently -- full viewport, quarter
-                            ; height and one row tall (emu_rcol.py):
-                            ;
-                            ;   a pair drawing TWO bands  1015 us + 19.48/line
-                            ;   a pair drawing ONE band    650 us + 19.48/line
-                            ;
-                            ; = 285 fixed per pair, 365 per band, rounded
-                            ; up here as every C_* in this file is.  The
-                            ; ten instructions of the fill unit alone are
-                            ; 20.25 us (emu_byte.py, `colpair`); the slope
-                            ; comes out under that because COLBLK now
-                            ; amortises the character-row re-entry in its
-                            ; own IXL countdown.
-                            ;
-                            ; THE SHAPE IS WHAT MATTERS HERE, NOT THE SIZE.
-                            ; A FLAT per-pair charge of 1100 -- one number
-                            ; bounding both a 96-scanline two-band pair and
-                            ; a one-row one-band pair, and billing the full
-                            ; 2j+1 row range rather than the rows a nearer
-                            ; face left to draw -- put the worst charged
-                            ; frame at 185134 us, eleven vsync periods for
-                            ; about seven periods of work.  Splitting it
-                            ; three ways and charging the rows actually
-                            ; drawn is what made the disc lock.
+    include "costcol.inc"
+
 C_QUAD      equ 780         ; THE WHOLE-QUAD CHARGE, used when raster.asm's
 C_QS        equ 22          ; RQ_SPLIT is 0 -- see pace_quad at the foot of
 C_QW        equ 128         ; this file, and the note on RQ_SPLIT in

@@ -294,14 +294,30 @@ def new_cover(c):
     return [[c.CYH] * n, [c.CYH + 1] * n]
 
 
-def face_columns(q, c, cover=None):
-    """Walk one face's column PAIRS front to back.
+def pair_walk(q, c, cover=None):
+    """Walk one face's column PAIRS front to back, EVERY pair in the
+    face's range -- the ones a nearer face already owns too.
 
-    Yields (pair, u, j, r0, r1, step, idx) for each BAND of rows this face
-    is the nearest cover of -- up to two per pair, one above the horizon
-    and one below, because the rows between them are already owned by a
-    nearer face.  `idx` is the 8.8 texture coordinate at row r0 of that
-    band, so the caller just walks it.
+    This is rc_face's pair loop, hook for hook: rastcol.asm now takes one
+    cost hook per pair, drawn or skipped (see costcol.inc), so the charge
+    model has to see the skipped pairs and the per-pair state the asm's
+    hook reads -- the centre half height, the Bresenham step, the cover
+    BEFORE this face touches it, and the CLAMPED t2 step rc_pnext will
+    take afterwards.  render() only wants the drawn pairs, and gets them
+    through the face_columns filter below.
+
+    Yields one dict per pair:
+        p, closed, up0, dn0   the pair and the cover before it (model
+                              terms: up0 = last free row above, or -1;
+                              dn0 = first free row below, or VP_H)
+        h, hq                 the centre half height at this pair, Q12.4,
+                              exactly the asm's (rc_h), and the
+                              per-column Bresenham step (rc_hq)
+        delta                 the t2 step rc_pnext takes AFTER this pair:
+                              4 is the whole-pair fast path, 1..3 the
+                              clamped slow path, 0 nothing
+    and, on open pairs only:
+        u, j, r0, r1, step, bands, stept, edges   as face_columns had
 
     PAIRS, NOT COLUMNS, and the face's span is rounded OUTWARD onto them
     -- pa = xa>>1, pb = (xb+1)>>1.  One PUSH writes two horizontally
@@ -331,11 +347,28 @@ def face_columns(q, c, cover=None):
     dN = 2 * hbn
     dD = 2 * (hbn - han)
     dh = hb - ha
+    hq = (dh if dh >= 0 else -dh) // w2
     tab = CTAB()
 
     for p in range(pa, pb):
+        # h at the centre sample, TRUNCATED TOWARDS ha -- see the note
+        # below -- and the step rc_pnext takes after this pair: the raw
+        # sample moves 4 a pair but t2 is clamped into the face, so the
+        # step off an odd left edge and the one onto the right edge are
+        # 1..3 single columns (the asm's slow path, which charges its
+        # own hook) and everything after the clamp is 0.
+        def _h(tt):
+            return (ha + (tt * dh) // w2) if dh >= 0 else (ha - (tt * -dh) // w2)
+
+        t2c = min(max(2 * (2 * p - xa) + 2, 1), w2 - 1)
+        delta = min(2 * (2 * (p + 1) - xa) + 2, w2 - 1) - t2c
+        info = {"p": p, "up0": up[p], "dn0": dn[p],
+                "h": _h(t2c), "hq": hq, "delta": delta}
         if up[p] < 0 and dn[p] > c.VP_H - 1:
+            info["closed"] = True
+            yield info
             continue
+        info["closed"] = False
         # t2 samples the middle of the PAIR, clamped into the face: the
         # outermost pair can reach a column the face does not own, and the
         # sample has to come from a column it does.
@@ -348,7 +381,7 @@ def face_columns(q, c, cover=None):
         # sampling the centre makes each of them wrong by half a column
         # and in opposite directions, which is the best a pair can do.
         # It costs nothing -- one conditional add in the per-face setup.
-        t2 = min(max(2 * (2 * p - xa) + 2, 1), w2 - 1)
+        t2 = t2c
         N = t2 * hbn
         D = w2 * han + t2 * (hbn - han)
         if D <= 0:
@@ -362,15 +395,14 @@ def face_columns(q, c, cover=None):
         if flipped:
             u = TEX_BW - 1 - u
         # h at the same sample, in Q12.4, TRUNCATED TOWARDS ha -- not
-        # floored.  Python's // floors towards minus infinity, so on a
-        # face that gets SHORTER across the screen (dh < 0) it would round
-        # the half height down a step the Z80 does not: the Z80 divides
-        # |dh| and subtracts, because a Bresenham has no sign.  Getting
-        # this backwards paints one extra scanline at the foot of every
-        # descending face, which is what the first build did.
-        def _h(tt):
-            return (ha + (tt * dh) // w2) if dh >= 0 else (ha - (tt * -dh) // w2)
-
+        # floored: that is what the _h above computes.  Python's // floors
+        # towards minus infinity, so on a face that gets SHORTER across
+        # the screen (dh < 0) it would round the half height down a step
+        # the Z80 does not: the Z80 divides |dh| and subtracts, because a
+        # Bresenham has no sign.  Getting this backwards paints one extra
+        # scanline at the foot of every descending face, which is what
+        # the first build did.
+        #
         # EACH BYTE COLUMN OF THE PAIR HAS ITS OWN HALF HEIGHT, half a
         # pair-step either side of the centre sample -- and that
         # difference IS the silhouette staircase.  MEASURED over 9424
@@ -429,7 +461,9 @@ def face_columns(q, c, cover=None):
             if e0 <= r1t:
                 edges.append((e0, r1t,
                               (idx0t + (e0 - r0t) * stept) & 0xFFFF, ofs))
-        yield p, u, j, r0, r1, step, bands, stept if jt > js else step, edges
+        info.update(u=u, j=j, r0=r0, r1=r1, step=step, bands=bands,
+                    stept=stept if jt > js else step, edges=edges)
+        yield info
 
         # THE INTERVAL IS RECORDED OVER THE TALLER COLUMN.  It has to pick
         # one, because rc_up / rc_dn are per PAIR and the edge rows cover
@@ -447,54 +481,103 @@ def face_columns(q, c, cover=None):
     return
 
 
+def face_columns(q, c, cover=None):
+    """pair_walk, drawn pairs only -- what render() paints.
+
+    Yields (pair, u, j, r0, r1, step, bands, stept, edges): up to two
+    BANDS of rows this face is the nearest cover of, one above the
+    horizon and one below, because the rows between them are already
+    owned by a nearer face, plus the taller byte column's own EDGE rows.
+    The idx in each is the 8.8 texture coordinate at its first row, so
+    the caller just walks it.
+    """
+    for i in pair_walk(q, c, cover):
+        if i["closed"]:
+            continue
+        yield (i["p"], i["u"], i["j"], i["r0"], i["r1"], i["step"],
+               i["bands"], i["stept"], i["edges"])
+
+
 def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
-           c_colr, c_cedge):
+           c_colr, c_cedge, c_cstep):
     """-> the microsecond charges rastcol.asm takes, in order.
 
     THE TWIN OF THE COST HOOKS, the way pacemodel.quad_units is the twin
-    of main3.asm:pace_quad.  One C_CFACE per face that gets past the
-    open-pair scan (rc_face), then, per PAIR that draws anything,
-    C_COLS + C_CBAND per band + C_COLR per scanline of those bands
-    (rc_column).  The bands are the ones the occlusion interval leaves,
-    so the charge shrinks with the work rather than with the geometry --
-    see the note on the constants in main3.asm for why a flat per-pair
-    charge over the full row range does not fit.
+    of main3.asm:pace_quad -- see costcol.inc for the shape and for the
+    measured under-charges that forced it.  Every hook runs BEFORE the
+    work it pays for and charges an UPPER BOUND on the interval that
+    follows it:
+
+        C_CFRAME                 once, before the frame's own setup
+        C_CFACE                  the TOP of rc_face -- EVERY record pays
+                                 it, degenerate and occluded ones too
+        per pair in the range    C_CSKIP when a nearer face owns it, or
+                                 rc_charge's bound when it draws:
+                                 C_COLS + C_CBAND*bands + C_COLR*rows
+                                 + C_CEDGE*edges, all bounded from the
+                                 pair's cover and h +- (hq+1) alone
+        C_CSKIP + C_CSTEP*delta  rc_pnext's clamped slow step, its own
+                                 hook because it happens at most twice a
+                                 face
+
+    ONE UNIT PER HOOK, IN THE ASM'S OWN ORDER: the model and the machine
+    must take the same unit SEQUENCE, not just the same total, because
+    emu_rcol.py's `atomic` cross-checks the charge the Z80 is about to
+    take at hook k against the model's k'th unit -- and because the
+    greedy yield rule replays these units one at a time, so a sequence
+    the disc never executes locks a disc nobody has.
+    """
+    return [u["frame"] * c_cframe + u["face"] * c_cface
+            + u["skip"] * c_cskip + u["pair"] * c_cols
+            + u["bands"] * c_cband + u["rows"] * c_colr
+            + u["edges"] * c_cedge + u["steps"] * c_cstep
+            for u in charge_terms(quads, c)]
+
+
+def charge_terms(quads, c):
+    """-> one dict of REGRESSORS per hook, in the asm's own order.
+
+    charge() is this weighted by the constants, so the two cannot drift:
+    a term that appears here appears in the charge, and a hook that is
+    not emitted here is not charged.  It is also what emu_rcol.py's
+    `fit` regresses the measured intervals on -- the constants are the
+    coefficients of exactly these columns, so a fit is one-sided against
+    the same arithmetic rc_charge does.
+
+    The keys are the hooks' own terms:
+        frame  raster_colframe's once-a-frame setup
+        face   the top of rc_face
+        skip   a pair a nearer face owns, and the slow step's own base
+        pair / bands / rows / edges   rc_charge's bound at a drawn pair
+        steps  single columns in rc_pnext's clamped slow path
     """
     cover = new_cover(c)
-    npair = c.VP_BW // 2
-    out = [c_cframe]
+    out = []
+    if not quads:
+        return out                       # raster_colframe rets before
+    z = {"frame": 0, "face": 0, "skip": 0, "pair": 0,
+         "bands": 0, "rows": 0, "edges": 0, "steps": 0}
+    out.append(dict(z, frame=1))         # its hook on an empty list
     for q in reversed(quads):
-        xa, xb, ha, hb, _f = face_span(q)
-        w = xb - xa
-        if w <= 0:
-            continue
-        pa, pb = max(0, xa >> 1), min(npair, (xb + 1) >> 1)
-        if pb <= pa:
-            continue
-        # BEFORE the open scan, so a fully occluded face pays too -- and
-        # per pair in the RANGE, because rc_pairloop steps through every
-        # one of them whether it draws or not.
-        out.append(c_cface + c_cskip * (pb - pa))
-        if all(cover[0][p] == 0 and cover[1][p] > c.VP_H - 1
-               for p in range(pa, pb)):
-            continue
-        for (_p, _u, _j, _r0, _r1, _s, bands,
-             _st, edges) in face_columns(q, c, cover):
-            # ONE UNIT PER HOOK, IN THE ASM'S OWN ORDER.  rc_column
-            # charges the pair, and then charges each EDGE RUN separately
-            # just before it draws it -- so folding the edge rows into the
-            # pair's charge, as this did, gave the model FEWER units than
-            # the machine takes and misaligned every one after the first
-            # edge.  pacescan then replayed a unit sequence the disc never
-            # executes, which is why it reported nine waits while the disc
-            # took twelve.  MEASURED by emu_rcol.py's `atomic`, which
-            # cross-checks the charge the Z80 is about to take at hook k
-            # against the model's k'th unit: `model 2492 vs z80 60`.
-            if bands:
-                rows = sum(b1 - b0 + 1 for b0, b1, _ix in bands)
-                out.append(c_cols + c_cband * len(bands) + c_colr * rows)
-            for e0, e1, _ix, _o in edges:
-                out.append(c_cedge * (e1 - e0 + 1))
+        out.append(dict(z, face=1))      # the top of rc_face: every record
+        for i in pair_walk(q, c, cover):
+            if i["closed"]:
+                out.append(dict(z, skip=1))
+            else:
+                # rc_charge's bound, integer for integer.  up0/dn0 are
+                # the cover BEFORE this pair (model terms), the asm's
+                # rc_up count is up0 + 1.
+                upc = i["up0"] + 1                   # free rows above
+                free = upc + (c.VP_H - i["dn0"])     # ...and in total
+                nb = ((1 if upc > 0 else 0)
+                      + (1 if i["dn0"] < c.VP_H else 0))
+                jhi = min(c.CYH, max(0, i["h"] + i["hq"] + 1) >> 4)
+                jlo = min(c.CYH, max(0, i["h"] - i["hq"] - 1) >> 4)
+                out.append(dict(z, pair=1, bands=nb,
+                                rows=min(2 * jhi + 1, free),
+                                edges=min(2 * (jhi - jlo), free)))
+            if 1 <= i["delta"] <= 3:
+                out.append(dict(z, skip=1, steps=i["delta"]))
     return out
 
 
