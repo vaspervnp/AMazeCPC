@@ -246,14 +246,34 @@ These matter more than they used to. A doors-open frame charges up to
 of the frame** before the period locks with doors open — and shrinking
 the budget by raising `PACE_FRAMES` to 13 would mean 259.6 ms, 3.85 fps.
 
-**a. The per-pair setup — ~1000 µs/pair, 37–41 % of the rasteriser.**
-Dominated by 16-bit memory temporaries at 4–5 µs each (`ld hl,(nn)`,
-`ld (nn),hl`); the pair loop does about twenty per pair (`rc_num`,
-`rc_den`, `rc_h`, `rc_acc`, `rc_t2`, `rc_pup`, `rc_pdn`…). They are in
-memory because both register banks are full **inside** the fill — but
-they are free *between* pairs. Move the hot state into `IX`/`IY` and the
-alternate set. Estimate ~10 ms off the worst frame; two smaller moves of
-this kind already bought 11.1 %.
+**a. The per-pair setup — 44.9 % of the render, AND IT IS DIFFUSE.**
+`engine2/tools/pcprof.py` (new) samples the PC through a whole
+`raster_colframe` and buckets it by symbol, so this is measured and not
+read off the source:
+
+    per-pair / per-face setup   44.9%
+    fill (COLBLK/COLTAIL)       42.5%
+    band setup                   7.0%
+    edge runs                    5.7%
+
+**But there is no hotspot to attack.** The biggest single symbol in the
+setup is 3.2%, then 2.2, 2.0, 2.0, 1.9, 1.9 … and 23.5% of the render is
+spread over thirty more symbols each under 1%. Two measurements bound
+what register allocation can buy here:
+
+* The LOD experiment removed FOUR of the ~twenty setup sites — both
+  Bresenham probes, one `rc_jof`, the edge block and a `CTABT` lookup —
+  and bought **258 µs of an 1800 µs pair, 14%**.
+* The pair loop cannot hold state in registers across `rc_band`, because
+  the fill uses BOTH banks (`HL`/`BC`/`D` texture, `HL'`/`BC'` screen).
+  Only `IY` and `IXH` survive it — 24 bits. `IY` is enough for the
+  occlusion pointer (`rc_dn` is `CNPAIR` bytes past `rc_up`, so one
+  index register reaches both and `rc_pup`/`rc_pdn` disappear), and that
+  is worth ~33 µs of 1800: **under 1% of the render.**
+
+So the old "~10 ms off the worst frame" was optimism. The setup is real
+and it is large, but it is thirty small things, and the register pressure
+that put those temporaries in memory has not gone away.
 
 **b. The fill — 10.125 µs/byte against a 5.125 constant-colour floor.**
 `colrun` in `engine2/test/tst_byte.asm` samples once per two scanlines and
