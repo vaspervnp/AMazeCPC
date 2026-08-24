@@ -35,7 +35,17 @@ SCRATCH = "/tmp/claude-1000/-home-vasilhs-repos-AMazeCPC/fcbeb9fc-d334-405a-8425
 
 E_ONCE, E_BENCH, E_SETUP, E_EMPTY = 0x4000, 0x4003, 0x4006, 0x4009
 E_L1, E_FRAC = 0x400C, 0x400F
-BUCKHI, BUCKSZ = 0x26, 16      # bucket k is the page BUCKHI+k
+# BUCKET k IS THE PAGE BUCKHI+k, AND BOTH NUMBERS COME OUT OF march.asm.
+# They were written down here as 0x26 / 16, and 0x26 stopped being true
+# the day the whole working-RAM block moved up four pages to make room for
+# the course-joint rasteriser (see march.asm's memory map).  This harness
+# went on reading pages 0x27..0x2D while the march filed into 0x2B..0x31,
+# so every face record came back as the zeros that happened to be there --
+# `visited` and `seen` matched, the FACES did not, and it reported the
+# march broken on 516 states out of 516 with the march perfectly fine.
+# That is the exact failure engine2/tools/addrs.py exists to remove: it
+# parses these out of the source, so never copy one.
+BUCKHI, BUCKSZ = addrs.BUCKHI, addrs.BUCKSZ
 
 
 def build():

@@ -46,7 +46,10 @@
 ;               (rc_h) +- (rc_hq)+1 bounds the two byte columns' half
 ;               heights, and the pair's own rc_up/rc_dn bound everything
 ;               by the rows still free.  It over-charges occluded pairs,
-;               which is the safe direction.
+;               which is the safe direction.  C_CBAND is 0 and C_CEDGE is
+;               8*C_COLR, so rc_charge evaluates the whole bound as
+;               C_COLS + C_COLR*(rows + 8*edges) -- ONE multiply, and by
+;               shifts.  rastcol.asm asserts all three relations.
 ;    C_CSKIP + C_CSTEP*delta   rc_pnext's CLAMPED step (delta 1..3
 ;               single columns instead of one whole-pair add), charged
 ;               by its own hook in rc_slow because it happens at most
@@ -97,29 +100,33 @@ C_CFRAME    equ 420         ; raster_colframe's own setup, once a frame:
                             ; the two LDIRs that clear the occlusion
                             ; state, the bank switch and the walk's head.
                             ; MEASURED 389.
-C_CFACE     equ 1700        ; rc_face TOP to the first pair hook: the
+C_CFACE     equ 1520        ; rc_face TOP to the first pair hook: the
                             ; record copy, the span ordering, the pair
                             ; range, the open scan, the normalise, the
                             ; w2 multiply, the ONE 16-bit division the
                             ; half-height Bresenham needs, and the first
                             ; pair's occlusion test and charge
-                            ; arithmetic.  MEASURED 1633.
-C_CSKIP     equ 760         ; one pair a nearer face already owns:
+                            ; arithmetic.  MEASURED 1449.
+C_CSKIP     equ 560         ; one pair a nearer face already owns:
                             ; rc_pnext's whole-pair step, the loop, the
                             ; next pair's occlusion test -- and the next
                             ; pair's rc_charge arithmetic, which runs
                             ; BEFORE that pair's own hook and so bills
-                            ; backwards to this one.  MEASURED 697, and
-                            ; on only two hooks of 435: a skipped pair
-                            ; that is not also a clamped step is rare,
-                            ; so this one carries margin the others do
-                            ; not need.
-C_COLS      equ 1980        ; ONE DRAWN PAIR, fixed part: rc_column's
+                            ; backwards to this one.  MEASURED 170 by the
+                            ; fit, and 463 on a state the fit did NOT
+                            ; sample: a skipped pair that is not also a
+                            ; clamped step is RARE (3 hooks of 442), so
+                            ; the fit barely constrains it and this one
+                            ; carries margin the others do not need.
+                            ; Skipped pairs are few and cheap, so
+                            ; over-charging them is the affordable way
+                            ; to be wrong.
+C_COLS      equ 1800        ; ONE DRAWN PAIR, fixed part: rc_column's
                             ; whole setup (the u division, the two
                             ; Bresenham probes, CTABT, the row range),
                             ; the band setup, its rc_pnext step and the
                             ; same next-pair tail C_CSKIP carries.
-                            ; MEASURED 1915.
+                            ; MEASURED 1721.
                             ;
                             ; IT IS LARGE BECAUSE THE SETUP IS FINALLY
                             ; IN ITS OWN INTERVAL.  The old C_COLS was
@@ -128,6 +135,11 @@ C_COLS      equ 1980        ; ONE DRAWN PAIR, fixed part: rc_column's
                             ; billed to whatever hook came before --
                             ; usually a 60 us C_CEDGE.  Nothing got
                             ; cheaper here; the bill moved to the payer.
+                            ; It came DOWN from 1980 when rc_charge's
+                            ; own two rc_mul8 loops became six shifts --
+                            ; that arithmetic runs INSIDE the interval it
+                            ; is charging for, so it was paying for
+                            ; itself twice over.
 C_CBAND     equ 0           ; per BAND the pair could draw.  MEASURED 0:
                             ; the fit is free to split the fixed cost
                             ; between C_COLS and this, and the split
@@ -140,17 +152,26 @@ C_CBAND     equ 0           ; per BAND the pair could draw.  MEASURED 0:
                             ; and a future viewport may separate them.
 C_COLR      equ 21          ; per scanline of the bounded row range
                             ; min(2*j_hi+1, rows still free), a scanline
-                            ; being two screen bytes.  MEASURED 20.5 --
+                            ; being two screen bytes.  MEASURED 20.0 --
                             ; and independently, the ten instructions of
                             ; the fill unit are 20.25 us (emu_byte.py,
                             ; `colpair`).  The two agree, which is the
                             ; check that the row bound is really a bound.
-C_CEDGE     equ 170         ; per possible EDGE row, bounded by
+                            ;
+                            ; IT IS A LITERAL AND NOT `8*C_COLR`, THOUGH
+                            ; THAT IS WHAT IT MEANS.  pacemodel.py reads
+                            ; these with int() on the third token and
+                            ; falls back to its own default when that
+                            ; throws -- so an expression here assembles
+                            ; perfectly and silently models a different
+                            ; disc.  rastcol.asm asserts the relation.
+C_CEDGE     equ 168         ; per possible EDGE row, bounded by
                             ; min(2*(j_hi - j_lo), rows still free) -- a
                             ; single byte of the taller column of a pair,
                             ; outside the PUSH, drawn by rc_edge's
                             ; rebuild-the-address-every-row loop.
-                            ; MEASURED 160.
-C_CSTEP     equ 125         ; one single-column step of rc_pnext's slow
+                            ; MEASURED 160, and 8*C_COLR = 168 covers it
+                            ; while making the whole bound one multiply.
+C_CSTEP     equ 260         ; one single-column step of rc_pnext's slow
                             ; path, on top of the C_CSKIP its hook also
-                            ; charges.  MEASURED 114.
+                            ; charges.  MEASURED 213.

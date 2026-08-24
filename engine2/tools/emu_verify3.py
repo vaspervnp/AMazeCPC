@@ -26,9 +26,64 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _E2 = os.path.dirname(_HERE)
 _ROOT = os.path.dirname(_E2)
 sys.path.insert(0, os.path.expanduser("~/cpcemu"))
+sys.path.insert(0, os.path.join(_ROOT, "tools"))
 
 import cpc as cpcmod                                         # noqa: E402
 from cpc import CPC                                          # noqa: E402
+import world                                                 # noqa: E402
+
+
+def a_door():
+    """-> (cell index, an OPEN neighbour, the heading that faces it).
+
+    THE DOOR IS FOUND IN THE MAP, NOT WRITTEN DOWN HERE.  This test used
+    to hardcode cell (5,3) and stand the player on (4,3).  When the maze
+    became twelve rooms joined by doors the door moved to (4,3) and (5,3)
+    became plain floor -- so `starts shut` and `SPACE shuts it again`
+    both read SOLID = 0 and failed, the player was being placed INSIDE
+    the door, and the failure was reported for eight months as "the doors
+    are broken" when the doors were fine and the coordinate was stale.
+    That is the same class of mistake engine2/tools/addrs.py exists to
+    remove, one map further out: never copy a number that the source of
+    truth can be asked for.
+    """
+    grid, _sx, _sy = world.load_maze()
+    for y in range(world.MAZE_H):
+        for x in range(world.MAZE_W):
+            if grid[y][x] != world.DOOR:
+                continue
+            # stand one cell away, on open floor, looking at the door.
+            # heading 0 is +x and the 72 headings are 5 degrees apart.
+            for dx, dy, head in ((-1, 0, 0), (1, 0, 36),
+                                 (0, -1, 18), (0, 1, 54)):
+                nx, ny = x + dx, y + dy
+                if (0 <= nx < world.MAZE_W and 0 <= ny < world.MAZE_H
+                        and grid[ny][nx] == world.FLOOR):
+                    return (y * 16 + x, (x, y), (nx, ny), head)
+    raise SystemExit("no door in the maze")
+
+
+def a_run(dx, dy, need=2):
+    """-> (cx, cy) FLOOR cell with `need` clear floor cells at (dx,dy).
+
+    Same rule as a_door(): ask the map, do not write a cell down.  The
+    walking checks used to start at (10,13) "facing east down a
+    corridor"; on the 4x4-room map that cell is a shut DOOR, so the
+    player stood inside it and could not move, and a perfectly good
+    movement routine reported dx = +0.000.
+    """
+    grid, _sx, _sy = world.load_maze()
+    for y in range(world.MAZE_H):
+        for x in range(world.MAZE_W):
+            if grid[y][x] != world.FLOOR:
+                continue
+            if all(0 <= x + dx * i < world.MAZE_W
+                   and 0 <= y + dy * i < world.MAZE_H
+                   and grid[y + dy * i][x + dx * i] == world.FLOOR
+                   for i in range(1, need + 1)):
+                return x, y
+    raise SystemExit(f"no {need}-cell run in direction ({dx},{dy})")
+
 
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
@@ -122,7 +177,9 @@ def main():
           f"{len(seen)} transitions in 80 CPC frames")
 
     print("\n3  TURNING (cursor right, 5 deg per game frame)")
-    g.place(10 * 256 + 128, 13 * 256 + 128, 0)
+    # ANY open cell will do for turning, but it must BE open: ask the map.
+    tx, ty = a_run(1, 0)
+    g.place(tx * 256 + 128, ty * 256 + 128, 0)
     a0 = g.player()[2]
     n0 = g.frames()
     g.hold(cpcmod.KEY_RIGHT, 30)
@@ -131,15 +188,18 @@ def main():
     check(a1 != a0, "heading changed",
           f"plr_a {a0} -> {a1} over {n1 - n0} game frames "
           f"= {((a1 - a0) % 72) * 5} degrees right")
-    g.place(10 * 256 + 128, 13 * 256 + 128, 0)
+    g.place(tx * 256 + 128, ty * 256 + 128, 0)
     g.hold(cpcmod.KEY_LEFT, 30)
     a2 = g.player()[2]
     check(a2 != 0, "cursor left turns the other way",
           f"plr_a 0 -> {a2} ( = -{(72 - a2) * 5} degrees)")
 
     print("\n4  WALKING (cursor up, along the heading)")
-    #    (10,13) faces east down a corridor; heading 0 is +x
-    g.place(10 * 256 + 128, 13 * 256 + 128, 0)
+    #    a cell with clear floor to its EAST, found in the map; heading 0
+    #    is +x.  It used to be the written-down (10,13), which the 4x4-room
+    #    map turned into a shut door -- the player stood inside it, could
+    #    not move, and the movement code was blamed.
+    g.place(tx * 256 + 128, ty * 256 + 128, 0)
     x0, y0, _ = g.player()
     g.hold(cpcmod.KEY_UP, 40)
     x1, y1, _ = g.player()
@@ -190,25 +250,33 @@ def main():
           "0 penetrations, all cells ended open")
 
     print("\n6  DOORS (SPACE)")
-    door = 3 * 16 + 5                   # the door at cell (5,3)
-    g.place(4 * 256 + 128, 3 * 256 + 128, 0)
+    door, (dx, dy), (nx, ny), head = a_door()
+    g.place(nx * 256 + 128, ny * 256 + 128, head)
     before = c.peek(SOLID + door)
-    check(before == 2, "door (5,3) starts shut", f"SOLID = {before}")
-    #    it is solid: walking east must not get past x = 5
+    check(before == 2, f"door ({dx},{dy}) starts shut", f"SOLID = {before}")
+    #    it is solid: walking at it must not get into its cell
     g.hold(cpcmod.KEY_UP, 60)
-    xs, _, _ = g.player()
-    check((xs >> 8) < 5, "a shut door blocks the player",
-          f"stopped at cell x = {xs >> 8}")
-    g.place(4 * 256 + 128, 3 * 256 + 128, 0)
+    xs, ys, _ = g.player()
+    check((xs >> 8, ys >> 8) != (dx, dy), "a shut door blocks the player",
+          f"stopped at cell ({xs >> 8},{ys >> 8}), the door is ({dx},{dy})")
+    g.place(nx * 256 + 128, ny * 256 + 128, head)
     g.hold(cpcmod.KEY_SPACE, 20)
     c.run_frames(60)                    # the door takes 5 game frames to run
     after = c.peek(SOLID + door)
     check(after == 0, "SPACE opened it", f"SOLID = {before} -> {after}")
     g.hold(cpcmod.KEY_UP, 150)
     xt, yt, _ = g.player()
-    check((xt >> 8) >= 5, "and the player walked through",
-          f"now at cell ({xt >> 8},{yt >> 8})")
-    g.place(6 * 256 + 128, 3 * 256 + 128, 36)
+    #    walking through it means reaching the door cell or passing beyond
+    through = ((xt >> 8, yt >> 8) == (dx, dy)
+               or (xt >> 8, yt >> 8) == (dx + (dx - nx), dy + (dy - ny)))
+    check(through, "and the player walked through",
+          f"now at cell ({xt >> 8},{yt >> 8}), from ({nx},{ny}) "
+          f"through ({dx},{dy})")
+    # STEP OUT OF THE DOORWAY FIRST.  The walk above leaves the player
+    # standing IN the door's own cell, and a door does not shut on the
+    # player -- so SPACE there is a no-op and the check reads SOLID = 0
+    # for a door that works perfectly.
+    g.place(nx * 256 + 128, ny * 256 + 128, head)
     g.hold(cpcmod.KEY_SPACE, 20)
     c.run_frames(60)
     check(c.peek(SOLID + door) == 2, "SPACE shuts it again",

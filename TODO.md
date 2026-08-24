@@ -1,10 +1,11 @@
 # AMazeCPC — handoff
 
 The textured **column renderer** is built, correct and on a disc. §1's
-hook-placement blocker is **closed**: the charge is now one-sided
-per interval, measured. The disc is **not fully locked yet** — two of
-emu_verify3's six named views still overrun, and the cause is
-**outside** the column renderer. That is the one blocking task.
+hook-placement blocker is **closed**: the charge is now one-sided per
+interval, measured. The rooms are 4x4 and the doors open. The disc is
+**not fully locked yet** — `emu_verify3` still reads three different
+periods, and the cause is **outside** the column renderer. That is the
+one blocking task.
 
 Read `engine2/src/costcol.inc` and the header of `engine2/src/rastcol.asm`
 first; every number here is written down next to the code it constrains.
@@ -17,11 +18,14 @@ first; every number here is written down next to the code it constrains.
 |---|---|
 | `VPCOL` (`engine2/src/vpcfg.inc`) | **1** — the column renderer ships |
 | `PACE_FRAMES` (`engine2/src/main3.asm`) | **9** — 179.7 ms, 5.56 fps (was 10) |
+| the map (`tools/world.py`) | **nine 4x4 rooms** in a 3x3 grid, 144 floor cells |
 | `make amaze` | OK, disc fresh (`md5` of `engine2/build/TEX.BIN` == `build/e3/TEX.BIN`) |
-| `emu_rcol.py verify` | **147/147 screens byte-exact** against `colmodel.py` |
-| `emu_rcol.py atomic` | **PASS** — every interval inside its charge, 0 model/asm disagreements |
-| `pacescan.py` | **PASS** — 0 of 6,967,296 reachable states over budget |
-| `emu_verify3.py` | **FAIL** — 4 views lock at 9, `nose against a wall` reads 10, `(1,5) h12` reads 11 |
+| `emu_rcol.py verify` | **159/159 screens byte-exact** against `colmodel.py` |
+| `emu_rcol.py atomic` | **PASS** — every interval inside its charge, 0 model/asm disagreements, 40 states / 2 seeds |
+| `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
+| `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
+| `pacescan.py` | **PASS** — 0 of 8,128,512 reachable states over budget |
+| `emu_verify3.py` | doors **PASS** (all five); period **FAIL** — reads [9, 10, 11] |
 
 The span renderer is still the fallback and still locks: set
 `VPCOL equ 0` **and** `PACE_FRAMES equ 6` (an `assert` in `main3.asm`
@@ -48,8 +52,8 @@ Skipped pairs and `rc_pnext`'s clamped slow step take their own hooks, so
 unit sequence; `colmodel.charge_terms` is the shared source for both the
 charge and the fit's regressors, so they cannot drift.
 
-Nothing got faster. `C_COLS` went 330 → 1980 because the setup is finally
-billed inside its own interval instead of backwards.
+Nothing in the renderer got faster. `C_COLS` went 330 → 1800 because the
+setup is finally billed inside its own interval instead of backwards.
 
 **THE OLD MEASUREMENT COULD NOT SEE ANY OF THIS, AND THAT IS THE REAL
 LESSON.** `atomic` timed each prefix with `bench()`, which counts whole
@@ -68,27 +72,75 @@ and nothing could tell them apart.
 interval and solves for the smallest constants that cover all of them —
 a covering problem, not a regression, class by class. Re-run it after
 **any** change to `rastcol.asm` and paste the answer into `costcol.inc`.
-Its `C_COLR` came out 20.5 against the fill's independently measured
+Its `C_COLR` came out 20.0 against the fill's independently measured
 20.25 µs/scanline, which is the check that the row bound is really a
 bound.
 
 ---
 
+## What was done (the rooms and the doors)
+
+**The doors were never broken.** `emu_verify3` hardcoded the door at cell
+(5,3) and stood the player on (4,3). When the map became rooms-joined-by-
+doors the door moved to (4,3) and (5,3) became plain floor, so `starts
+shut` and `shuts it again` both read `SOLID = 0` for a door that opens
+and shuts perfectly, and the player was being placed *inside* the
+doorway. `a_door()` now finds a door in the map and picks an open
+neighbour to stand on, and the walk-through step steps back out of the
+doorway before shutting it — a door does not shut on the player. All five
+checks pass.
+
+**The rooms are 4x4 in a 3x3 grid**, 16 floor cells against 12, square
+rather than oblong. The obvious rule says a W x H room needs
+`W + H <= R_MAX + 1 = 7`, so 4x4 should not fit — **and that rule is too
+strict**. The only cell at L1 8 in a 4x4 room is the wall corner
+diagonally opposite, and both of its room-side neighbours are also wall,
+so it has no face pointing into the room. What must be inside the march
+is every *visible* face, and those top out at L1 7.
+
+`engine2/tools/roomcost.py` (new) is the measurement, exhaustive over all
+8,128,512 reachable states, and it was run at `R_MAX` 6 **and** 7 — the
+histograms are identical, so the extra radius files nothing and was not
+taken. `R_MAX` stays 6, the bucket pages and flood stack are untouched,
+the worst march is 16 cells (was ~15). Re-run it after any map change:
+the farthest-bucket line is the one that matters, because `march.asm`
+files a face by `|dx| + |dy|` with **no upper bound**, and a key of 8
+would write into the page above the last bucket.
+
+The bigger rooms cost 9 states of 8.1 million a tenth period. That was
+paid for by making `rc_charge` cheap (below) rather than by a slower
+frame: `PACE_FRAMES` stays 9.
+
+**`rc_charge` went from ~500 µs a pair to ~100.** It ran `rc_mul8` — an
+eight-iteration loop — twice and counted bands besides, ~11 ms of a frame
+of pure charging overhead, and that arithmetic runs *inside* the interval
+it charges for, so it was also inflating `C_COLS`. With `C_CBAND == 0`
+and `C_CEDGE == 8*C_COLR`, the whole bound is
+`C_COLS + C_COLR*(rows + 8*edges)` — one multiply, by shifts, since
+`C_COLR == 21 = 16+4+1`. All three relations are `assert`ed in
+`rastcol.asm`, so changing a constant fails the build instead of quietly
+meaning something else. `C_CSKIP` fell 697 → 560 and `C_COLS` 1980 → 1800.
+
+---
+
 ## 1. THE BLOCKER — an under-charge OUTSIDE rastcol
 
-`emu_verify3.py` reads `nose against a wall` (10,13 h54) at **10** vsyncs
-and `(1,5) h12` at **11**, against 9 for the other four.
+`emu_verify3.py` reads `[9, 10, 11]` vsyncs where it must read one value.
+Which named views overrun moves with the map — on the 4x4 map it is
+`corridor` at 11, `junction` / `worst state` / `(1,5) h12` at 10 — so do
+not chase a particular view; chase the unit.
 
 **It is an interval overrun, not a budget shortfall, and that is
-measured, not deduced.** Built at `PACE_FRAMES 10` the *same two* views
-read 11 and 12 — the same +1 and +2. More budget does not help, so some
+measured, not deduced.** Built at `PACE_FRAMES 10` the overrunning views
+read one and two periods high *by the same amounts*. More budget does not
+help, so some
 unit's real time exceeds a vsync period while its charge is under
 `COST_THI`. (If every unit is one-sided no interval can overrun: an
 interval accumulates at most `COST_THI` = 19456 µs of charge, and
 charge ≥ work gives work < 19968.)
 
-**It is not the column renderer.** `atomic` passes on 22 random states
-(~700 intervals) *and* on all six named views, with 0 model/asm
+**It is not the column renderer.** `atomic` passes on 40 random states
+over two seeds *and* on all six named views, with 0 model/asm
 disagreements. And **the span build locks on these very states** —
 `VPCOL 0` / `PACE_FRAMES 6` reads `[6]` for all six.
 
@@ -133,15 +185,7 @@ work is `tst_rcol.asm`'s: an abort hook plus an exact repetition count.
 
 Do **nothing** here until §1 is closed.
 
-**a. `rc_charge` itself is now ~500 µs a pair** — about 11 ms of a frame
-at 22 pairs, pure charging overhead. It calls `rc_mul8` (an 8-iteration
-loop) **twice**. Both multiplies are by *constants*: `rows*21` is six
-`add hl,*` and `edges*170` is eight, so ~30 µs instead of ~200. Guard the
-sequence with `assert C_COLR == 21` so a changed constant fails the build
-instead of silently mis-charging. `C_CBAND` is **0**, so the whole band
-count can go too. Worth ~4 ms/frame, and it shrinks `C_COLS` with it.
-
-**b. The per-pair setup — ~1000 µs/pair, 37–41 % of the rasteriser.**
+**a. The per-pair setup — ~1000 µs/pair, 37–41 % of the rasteriser.**
 Dominated by 16-bit memory temporaries at 4–5 µs each (`ld hl,(nn)`,
 `ld (nn),hl`); the pair loop does about twenty per pair (`rc_num`,
 `rc_den`, `rc_h`, `rc_acc`, `rc_t2`, `rc_pup`, `rc_pdn`…). They are in
@@ -150,30 +194,23 @@ they are free *between* pairs. Move the hot state into `IX`/`IY` and the
 alternate set. Estimate ~10 ms off the worst frame; two smaller moves of
 this kind already bought 11.1 %.
 
-**c. The fill — 10.125 µs/byte against a 5.125 constant-colour floor.**
+**b. The fill — 10.125 µs/byte against a 5.125 constant-colour floor.**
 `colrun` in `engine2/test/tst_byte.asm` samples once per two scanlines and
 reads **7.625 µs/byte**, −25 %. A run-structured loop approaches that on
 **near** walls, which are exactly the byte-heavy ones. Cost: the charge
 must stay one-sided on both paths.
 
-**d. Viewport width.** Everything scales linearly with `VP_BW`. 44 → 40 is
+**c. Viewport width.** Everything scales linearly with `VP_BW`. 44 → 40 is
 9 % off the fill and off `bg_fill`, and `vpcfg.inc` says it needs only five
 constants. Cheapest win available; costs 5 % of the picture.
 
-**e. Do NOT chase `bg_fill`.** It is 9.32 ms and walls overwrite a mean 3609
+**d. Do NOT chase `bg_fill`.** It is 9.32 ms and walls overwrite a mean 3609
 of 4224 bytes — but background in column order costs 5.125 µs/byte against
 `bg_fill`'s 2.2, so it only wins when walls cover nearly everything.
 
 ---
 
 ## Also open
-
-**The door tests fail, and they failed before any of this.** `emu_verify3`
-reports `door (5,3) starts shut: SOLID = 0` and `SPACE shuts it again:
-SOLID = 0`. **Confirmed pre-existing**: the `VPCOL 0` / `PACE_FRAMES 6`
-build fails the same two assertions while passing the period check. It is
-a door/`SOLID` bug, not a pacing one, and it is why `emu_verify3` prints
-`SOMETHING FAILED` even when the period is locked. Fix it separately.
 
 **Big rooms.** `R_MAX = 6` (L1 cells, `marchmodel.py`) bounds the sight
 line; a wall further away is never marched and never drawn, so a big hall
@@ -216,6 +253,21 @@ at hook `k` against the model's `k`-th unit and prints `MODEL/ASM
 DISAGREE`. Use it after any charge change. `colmodel.charge` is built
 from `charge_terms` for exactly this reason.
 
+**`emu_march.py` had `BUCKHI` written down as `0x26`.** It stopped being
+true the day the working-RAM block moved up four pages for the
+course-joint rasteriser (`march.asm`'s memory map: it is `#2A`). The
+harness read pages `0x27..0x2D` while the march filed into `0x2B..0x31`,
+so every face record came back as whatever zeros were there — `visited`
+and `seen` matched, the FACES did not, and it reported **516 of 516
+states broken** with the march perfectly correct. It now reads
+`addrs.BUCKHI`. Never copy an address; that is what `addrs.py` is for.
+
+**`pacemodel._equ` does `int()` on the third token and falls back to its
+own default when that throws.** So writing `C_CEDGE equ 8*C_COLR` in
+`costcol.inc` assembles perfectly and silently models a *different disc*
+— the model would have used 60 while the machine charged 168. The
+constants are literals; `rastcol.asm` asserts the relations between them.
+
 **`pacemodel.units()` read a global `_rm` that only `pacescan` ever set**
 (`pm._rm = rm` in its worker initialiser). So `pacescan` worked and every
 other caller died with `NameError` the moment `VPCOL` was 1 — including
@@ -255,9 +307,11 @@ one picture. Run it first.
 
 ```
 make amaze                                    # CHECK THE EXIT STATUS
-python3 engine2/tools/emu_rcol.py verify      # 147 screens, byte for byte
+python3 engine2/tools/emu_rcol.py verify      # 159 screens, byte for byte
 python3 engine2/tools/emu_rcol.py atomic 8    # every INTERVAL vs its charge
 python3 engine2/tools/emu_rcol.py fit 14      # re-fit costcol.inc, MEASURED
+python3 engine2/tools/emu_march.py            # the march vs marchmodel.py
+python3 engine2/tools/roomcost.py             # what the MAP costs the march
 python3 engine2/tools/pacescan.py             # all reachable states, offline
 python3 engine2/tools/emu_verify3.py          # the disc: mode, doors, PERIOD
 python3 engine2/tools/emu_pace3.py 120 40 30

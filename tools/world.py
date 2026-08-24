@@ -46,35 +46,56 @@ def wall_pen(f, side, door=False):
 # ---------------------------------------------------------------- maze ----
 # '#' wall, '.' floor, '+' door, '@' player start (facing north)
 
-# ROOMS, NOT CORRIDORS -- AND THEY ARE THIS SIZE FOR A MEASURED REASON.
-# The march floods outward to R_MAX = 6 in L1 cells (marchmodel.py) and
-# files faces at L1 1..7, so a wall further than that is never marched and
+# ROOMS, NOT CORRIDORS -- AND THE SIZE IS SET BY THE MARCH, NOT BY TASTE.
+# The march floods outward to R_MAX in L1 cells (marchmodel.py) and files
+# faces at L1 1..R_MAX+1, so a wall further than that is never marched and
 # never drawn: the room reads as an open field with a sliver of wall on the
 # horizon.  A first attempt at four 6x7 halls put EVERY one of its 173
-# standable cells past that limit, and the screenshots showed exactly that.
+# standable cells past the limit, and the screenshots showed exactly that.
 #
-# A room 3 wide and 4 tall puts its far corner at L1 7 from the near one,
-# which is the last distance the march files.  Raising R_MAX instead is the
-# obvious alternative and it is not affordable: the flood's area grows as
-# the square of the radius, and even the oversized rooms took the worst
-# march from ~15 cells to 36 -- 26.6 ms at C_CELL, against a frame that
-# does not fit its budget as it is.
+# These rooms are 4x4 in a clean 3x3 grid -- 16 floor cells against the 12
+# of the 3x4 rooms they replace, and square rather than oblong, which is
+# what makes them read as rooms instead of wide corridors.
+#
+# AND THEY COST THE ENGINE NOTHING.  The obvious rule is that a room W wide
+# and H tall puts its far WALL corner at L1 W+H, so W+H <= R_MAX+1 = 7 and
+# 4x4 is one too far.  THAT RULE IS TOO STRICT, and the thing it gets wrong
+# is worth keeping: the only cell at L1 8 in a 4x4 room is the wall CORNER
+# diagonally opposite, and both of its room-side neighbours are also wall,
+# so it has no face pointing into the room at all.  What has to be inside
+# the march is every VISIBLE face, and those top out at L1 7.
+#
+# MEASURED, exhaustively, by engine2/tools/roomcost.py over all 8128512
+# reachable states of this map -- and measured at R_MAX 6 AND 7, which give
+# byte-identical histograms, so the extra radius files nothing and is not
+# taken:
+#
+#     cells popped        max 16   (was ~15 on the 3x4 map)
+#     faces filed         max 16
+#     farthest bucket k   max  7   <- so seven buckets still, no memory move
+#     flood stack depth   max  8   <- against 128 entries; 16x over-provisioned
+#
+# So R_MAX stays 6, march.asm's bucket pages and flood stack are untouched,
+# and the worst march is 16 cells = 11840 us at C_CELL.  Re-run roomcost.py
+# after ANY change to this map: the farthest-bucket line is the one that
+# matters, because march.asm files a face by |dx|+|dy| with no upper bound
+# and a key of 8 would write into the page above the last bucket.
 MAZE_SRC = [
     "################",
-    "#...#...#...#..#",
-    "#...#...#...#..#",
-    "#...+...+...+..#",
-    "#...#...#...#..#",
-    "##+####+###+####",
-    "#...#...#...#..#",
-    "#...#...#...#..#",
-    "#...+...+...+..#",
-    "#...#...#...#..#",
-    "##+####+###+####",
-    "#...#...#...#..#",
-    "#..@#...#...#..#",
-    "#...+...+...+..#",
-    "#...#...#...#..#",
+    "#....#....#....#",
+    "#....#....#....#",
+    "#....+....+....#",
+    "#....#....#....#",
+    "##+####+####+###",
+    "#....#....#....#",
+    "#....#....#....#",
+    "#....+....+....#",
+    "#....#....#....#",
+    "##+####+####+###",
+    "#....#....#....#",
+    "#..@.#....#....#",
+    "#....+....+....#",
+    "#....#....#....#",
     "################",
 ]
 

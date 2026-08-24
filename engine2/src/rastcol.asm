@@ -736,28 +736,36 @@ rc_hacc                         ; A = the remainder to add
 ;  Clobbers AF BC DE HL.  Falls into cost_unit, which yields if the
 ;  bound does not fit the interval.
 ; =====================================================================
+;  ONE MULTIPLY, AND IT IS SHIFTS.  This ran rc_mul8 -- an eight-iteration
+;  loop -- TWICE, once for the rows and once for the edges, and counted the
+;  bands besides: about 500 us a pair, 11 ms of a frame at 22 pairs, of
+;  pure charging overhead.  Worse, it is work that happens INSIDE the
+;  interval it is charging for, so every microsecond of it also had to be
+;  carried by C_COLS.  Three constraints, asserted below, remove all of it:
+;
+;    C_CBAND == 0        the fit puts the whole fixed cost in C_COLS (almost
+;                        every drawn pair has two bands), so the band count
+;                        need not be computed at all
+;    C_CEDGE == 8*C_COLR an edge row is charged as eight band rows, so
+;                        rows + 8*edges is ONE quantity and one multiply
+;    C_COLR  == 21       21 = 16 + 4 + 1, so that multiply is six ADD HL
+;
+;  The asserts are the point: change a constant and the build fails rather
+;  than the charge quietly meaning something else.
+    assert C_CBAND == 0
+    assert C_CEDGE == 8*C_COLR
+    assert C_COLR == 21
 rc_charge
     ld   hl,(rc_pup)
     ld   a,(hl)                 ; up = COUNT of free rows above
-    ld   b,0
-    or   a
-    jr   z,rcc_nb1
-    inc  b                      ; a band above is possible
-rcc_nb1
     ld   c,a
     ld   hl,(rc_pdn)
     ld   a,(hl)                 ; dn = first free row below, <= VP_H
-    cp   VP_H
-    jr   nc,rcc_nb2
-    inc  b                      ; ...and one below
-rcc_nb2
     ld   e,a
     ld   a,VP_H
     sub  e
     add  a,c                    ; free = up + (VP_H - dn), <= VP_H
     ld   (rc_tf),a
-    ld   a,b
-    ld   (rc_nb),a              ; 1 or 2: an open pair has free rows
 
     ld   hl,(rc_h)
     ld   de,(rc_hq)
@@ -780,29 +788,32 @@ rcc_nb2
     jr   c,rcc_eok
     ld   a,(hl)                 ; ...clipped to the free rows
 rcc_eok
-    ld   (rc_eu),a
+    ld   l,a                    ; DE = 8 * edges, <= 768
+    ld   h,0
+    add  hl,hl
+    add  hl,hl
+    add  hl,hl
+    ex   de,hl
     ld   a,(rc_jhi)
     add  a,a
-    inc  a                      ; 2*j_hi + 1 >= the band rows
-    cp   (hl)                   ; HL is still rc_tf
+    inc  a                      ; 2*j_hi + 1 >= the band rows, <= 97
+    ld   hl,rc_tf
+    cp   (hl)
     jr   c,rcc_rok
     ld   a,(hl)
 rcc_rok
-    ld   de,C_COLR              ; A = rows bound, <= 97
-    call rc_mul8
+    ld   l,a
+    ld   h,0
+    add  hl,de                  ; HL = rows + 8*edges, <= 865
+    ld   d,h                    ; ...times 21, by shifts
+    ld   e,l
+    add  hl,hl                  ; 2
+    add  hl,hl                  ; 4
+    add  hl,de                  ; 5
+    add  hl,hl                  ; 10
+    add  hl,hl                  ; 20
+    add  hl,de                  ; 21
     ld   de,C_COLS
-    add  hl,de
-    ld   de,C_CBAND
-    ld   a,(rc_nb)
-rcc_bl
-    add  hl,de
-    dec  a
-    jr   nz,rcc_bl
-    ld   (rc_chg),hl
-    ld   a,(rc_eu)
-    ld   de,C_CEDGE
-    call rc_mul8
-    ld   de,(rc_chg)
     add  hl,de
     ld   b,h
     ld   c,l
@@ -1621,10 +1632,7 @@ rc_sp       dw 0
 rc_sp2      dw 0
     if RC_PACED
 rc_tf       db 0                ; rc_charge: rows still free at the pair
-rc_nb       db 0                ; ...bands the face could draw there
 rc_jhi      db 0                ; ...upper bound on the taller column's j
-rc_eu       db 0                ; ...upper bound on the edge rows
-rc_chg      dw 0                ; ...the charge being accumulated
     endif
 
 rc_up       defs CNPAIR         ; uncovered rows above the horizon

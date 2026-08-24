@@ -87,7 +87,11 @@ import gentab                                                  # noqa: E402
 N_ANGLES = 72
 KHALF = math.tan(math.radians(30.0))        # CX / FOCAL_H, 60 degree FOV
 ZNEAR = 0.08                                # free.py's march near plane
-R_MAX = 6
+R_MAX = 6                                   # faces are filed at L1 1..R_MAX+1;
+                                            # what a room costs, and why 4x4
+                                            # fits inside this, is measured by
+                                            # engine2/tools/roomcost.py and
+                                            # written up in tools/world.py
 VBITS = 10                                  # view fixed point, Q6.10
 VONE = 1 << VBITS
 ZNEAR_M = int(round(ZNEAR * VONE))          # 82
@@ -197,10 +201,23 @@ def march(solid, px_fx, py_fx, a_idx, push_opaque=False):
     mark[pcy * 16 + pcx] = 1
     visited = 0
     seen = []
-    buckets = [[] for _ in range(8)]
-    views = [[] for _ in range(8)]
+    # ONE BUCKET PER L1 DISTANCE 0..R_MAX+1, sized from R_MAX rather than
+    # written down: march.asm's bucket PAGES are sized from the same
+    # number through gen_march.py, and a model carrying its own copy of a
+    # bound is how the map and the machine come to disagree about how far
+    # the world reaches.
+    nb = R_MAX + 2
+    buckets = [[] for _ in range(nb)]
+    views = [[] for _ in range(nb)]
+    # ...and the DEEPEST the flood stack ever gets.  march.asm's stack is
+    # a fixed MSTKTOP-MSTKBOT and overrunning it writes straight into the
+    # face buckets, which is the worst class of bug this engine has had.
+    # Reporting the bound lets the asm be sized from a measurement rather
+    # than from the area of the L1 ball, which is wildly pessimistic.
+    maxdepth = 1
 
     while stack:
+        maxdepth = max(maxdepth, len(stack))
         cx, cy, xv, zv, L, R = stack.pop()
         visited += 1
         if abs(cx - pcx) + abs(cy - pcy) > R_MAX:
@@ -266,12 +283,15 @@ def march(solid, px_fx, py_fx, a_idx, push_opaque=False):
 
     faces = []
     fviews = []
-    for k in range(7, 0, -1):
+    # BACK TO FRONT, and the far end is R_MAX+1 rather than a written-down
+    # 7.  Leaving it at 7 while R_MAX grew would silently drop the whole
+    # farthest bucket -- the walls that the bigger rooms exist to show.
+    for k in range(R_MAX + 1, 0, -1):
         for f, v in zip(buckets[k], views[k]):
             faces.append(f + (k,))
             fviews.append(v)
     return {"visited": visited, "seen": seen, "faces": faces,
-            "fviews": fviews, "buckets": buckets}
+            "fviews": fviews, "buckets": buckets, "maxdepth": maxdepth}
 
 
 def solid_from_grid(grid, doors=None):
