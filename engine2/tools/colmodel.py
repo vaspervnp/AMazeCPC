@@ -481,8 +481,16 @@ def pair_walk(q, c, cover=None, over=False, dlift=0):
         # face stopped, which costs one 8x16 multiply -- and only on the
         # faces that are partly occluded, which is the rare path.
         bands = []
-        if r0 <= up[p]:
-            bands.append((r0, up[p], idx0))
+        # THE UPPER BAND ENDS AT THE FACE'S OWN BOTTOM ROW, not merely at
+        # the horizon.  For a wall r1 is at or below the horizon by
+        # construction and this min() never bites; for a DOOR IN MOTION
+        # it is the whole animation.  The lift shortens the band BELOW
+        # the horizon and nothing else, so a door risen to the horizon
+        # kept its upper band at full height for ever -- it stopped
+        # shrinking half way and stood there as a copy of itself over the
+        # room that was already drawn underneath it.
+        if r0 <= min(up[p], r1):
+            bands.append((r0, min(up[p], r1), idx0))
         if dn[p] <= r1:
             bands.append((dn[p], r1,
                           (idx0 + (dn[p] - r0) * step) & 0xFFFF))

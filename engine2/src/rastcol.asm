@@ -1063,7 +1063,21 @@ rc_nolift
     xor  a
     ld   (rc_cont),a            ; ...unless the top band says otherwise
     ld   hl,(rc_pup)
-    ld   c,(hl)                 ; up = uncovered rows above
+    ld   c,(hl)                 ; up = uncovered rows above, a COUNT
+    ; ---- ...BUT NEVER PAST THIS FACE'S OWN BOTTOM ROW.  For a wall r1
+    ;      is at or below the horizon by construction, so this clamp
+    ;      never fires; for a DOOR IN MOTION it is the whole animation.
+    ;      Raising r1 shortens the band BELOW the horizon and nothing
+    ;      else, so once the door had risen to the horizon the band
+    ;      above it stayed at full height for ever -- the door stopped
+    ;      shrinking half way up and stood there as a copy of itself
+    ;      while the room behind it was already drawn underneath.
+    ld   a,(rc_r1)
+    inc  a                      ; the band is [r0, count-1], so the count
+    cp   c                      ; that ends it at r1 is r1+1
+    jr   nc,rc_upcap
+    ld   c,a
+rc_upcap
     ld   a,(rc_r0)
     cp   c
     jr   nc,rc_nobandup
