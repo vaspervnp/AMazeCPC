@@ -2,7 +2,7 @@
 VBITS  equ 10
 ZNEARM equ 82
 MSLACK equ 8
-RMAX   equ 6
+RMAX   equ 4
 
 ; per heading, 16 bytes, all Q6.10:
 ;   rgtx rgty fwdx fwdy   step of (xv, zv) for i -> i+1 / j -> j+1

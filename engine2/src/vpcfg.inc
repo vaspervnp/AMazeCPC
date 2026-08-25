@@ -394,9 +394,15 @@ VPCOL        equ 1
 ;  IT IS A FAKE AND THE FAKE IS THE POINT: it costs one face and the
 ;  pairs that were empty anyway, and it does not touch the flood.
 ;
-;  96 is a wall 8 cells off (CYH*16/8), a 13-scanline band on the
-;  horizon -- one cell beyond the farthest face the march can file, so it
-;  never contradicts a real wall it could have drawn.
+;  144 is j = 9, a 19-scanline band -- a wall about 5.3 cells off, which
+;  is where R_MAX = 4 stops filing real faces, so the fake picks up
+;  roughly where the real geometry leaves off and the seam does not jump.
+;
+;  IT MUST BE A MULTIPLE OF 16.  The band is CYH -+ RC_FARH/16 and rasm
+;  and Python have to agree on that division to the row.  At 153 they did
+;  not -- 153/16 is 9.5625 -- and emu_rcol went from 183 screens exact to
+;  148 of 166 WRONG, every one of them off by a single row at the top and
+;  bottom of the band.  A value that divides exactly cannot do that.
 ;
 ;  IT SHIPS AT 0, AND THE MEASUREMENT IS WHY.  "Cheap to draw" was wrong:
 ;
@@ -415,4 +421,4 @@ VPCOL        equ 1
 ;  no per-pair face machinery.  That is about 8000 us by the same
 ;  arithmetic, and it is the version worth building.
 ; --------------------------------------------------------------------
-RC_FARH      equ 96
+RC_FARH      equ 144

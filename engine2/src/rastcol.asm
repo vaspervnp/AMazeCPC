@@ -1614,6 +1614,8 @@ RC_FAR0     equ CYH-(RC_FARH/16)        ; the band, in viewport rows
 RC_FAR1     equ CYH+(RC_FARH/16)
     assert RC_FAR0 >= 0
     assert RC_FAR1 <= VP_H-1
+    assert (RC_FARH & 15) == 0      ; or rasm and colmodel.far_rows() can
+                                    ; disagree by a row -- see vpcfg.inc
 
 rc_far
     ld   hl,0

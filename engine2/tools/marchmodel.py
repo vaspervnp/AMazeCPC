@@ -87,11 +87,18 @@ import gentab                                                  # noqa: E402
 N_ANGLES = 72
 KHALF = math.tan(math.radians(30.0))        # CX / FOCAL_H, 60 degree FOV
 ZNEAR = 0.08                                # free.py's march near plane
-R_MAX = 6                                   # faces are filed at L1 1..R_MAX+1;
-                                            # what a room costs, and why 4x4
-                                            # fits inside this, is measured by
-                                            # engine2/tools/roomcost.py and
-                                            # written up in tools/world.py
+R_MAX = 4                                   # faces are filed at L1 1..R_MAX+1,
+                                            # and EVERYTHING BEYOND THAT IS
+                                            # THE FAR PLANE -- a flat band at
+                                            # a fixed height, drawn by
+                                            # rastcol.asm:rc_far where no real
+                                            # face reached.  It was 6; cutting
+                                            # it to 4 buys a whole vsync
+                                            # period, MEASURED, because the
+                                            # flood's area falls as the square
+                                            # of the radius.  See RC_FARH in
+                                            # vpcfg.inc and the ROOMS note in
+                                            # tools/world.py.
 VBITS = 10                                  # view fixed point, Q6.10
 VONE = 1 << VBITS
 ZNEAR_M = int(round(ZNEAR * VONE))          # 82
