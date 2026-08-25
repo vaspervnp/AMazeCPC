@@ -462,6 +462,15 @@ def pair_walk(q, c, cover=None, over=False, dlift=0):
         if r1 < r0:
             continue
         step, idx0 = tab[tix(hs)]
+        if moving:
+            # THE SLAB HAS SLID UP AND THE ART WENT WITH IT.  Raising the
+            # bottom row alone clips the door and leaves the texture
+            # nailed in place -- the lock band stays at eye level the
+            # whole way up.  A slab risen by dlift/256 of its height
+            # shows, at its first visible row, the point dlift/256 of the
+            # way down the art.  The coordinate is 8.8 over a 256-byte
+            # page, so that is dlift in its high byte.
+            idx0 = (idx0 + (dlift << 8)) & 0xFFFF
         # The band ABOVE the horizon starts at the face's own first
         # visible row, so its texture coordinate is CTAB's idx0 and needs
         # no arithmetic at all.  The band BELOW starts wherever the nearer
@@ -481,6 +490,8 @@ def pair_walk(q, c, cover=None, over=False, dlift=0):
         r0t, r1t = r0, r1
         if jt > js:
             stept, idx0t = tab[tix(ht)]
+            if moving:
+                idx0t = (idx0t + (dlift << 8)) & 0xFFFF
             r0t = max(0, c.CYH - jt)
             r1t = min(c.VP_H - 1, c.CYH + jt)
             if moving:

@@ -1004,6 +1004,25 @@ rc_jset
     inc  hl
     ld   d,(hl)
     ld   (rc_idx0),de
+    ; ---- A DOOR IN MOTION HAS SLID UP, AND THE TEXTURE WENT WITH IT.
+    ;      Raising the bottom row alone CLIPS the slab and leaves the art
+    ;      nailed where it was -- the lock band sat in the middle of the
+    ;      screen the whole way up.  A slab that has risen by dlift/256
+    ;      of its height shows, at its first visible row, the point
+    ;      dlift/256 of the way DOWN the art; the top of the slab has
+    ;      gone above the lintel.  The coordinate is 8.8 over a 256-byte
+    ;      page, so "dlift/256 of the whole texture" is dlift added to
+    ;      its HIGH byte, and nothing else has to change: the per-row
+    ;      step is unaltered, and the band below and the edge runs both
+    ;      derive their start from this one.
+    ld   a,(rc_kind)
+    and  2
+    jr   z,rc_noslide
+    ld   a,(rc_dlift)
+    ld   hl,rc_idx0+1
+    add  a,(hl)
+    ld   (hl),a
+rc_noslide
 
     ; ---- the row range: RC_RC -+ j, clipped to the viewport
     ld   hl,(rc_j)
@@ -1161,6 +1180,14 @@ rc_nobanddn
     inc  hl
     ld   d,(hl)
     ld   (rc_eidx0),de
+    ld   a,(rc_kind)                ; ...and the taller column slides too
+    and  2
+    jr   z,rc_enoslide
+    ld   a,(rc_dlift)
+    ld   hl,rc_eidx0+1
+    add  a,(hl)
+    ld   (hl),a
+rc_enoslide
 
     ; the taller column's own row range, clipped to the viewport
     ld   hl,(rc_jt)
@@ -1687,80 +1714,100 @@ rm8_n
 ; ----------------------------------------------------------- variables ---
 ; The record, copied in one LDI run -- these SIX must stay in this order
 ; and adjacent, because that is the layout kernel.asm writes.
-rc_blo      db 0
-rc_bhi      db 0
-rc_hlo      dw 0
-rc_hhi      dw 0
-rc_kind     db 0
-rc_k        db 0
+; ----------------------------------------------------------- variables ---
+; THEY LIVE IN THE FREE RAM ABOVE QUADS, not in the code segment.  This
+; is 104 bytes of per-pair scratch and `assert game_end <= BUCK0` has now
+; fired seven times; march.asm places SOLID and MARK the same way, game
+; .asm the door tables, and rc_up / rc_dn went first.
+;
+; EVERY ONE OF THEM IS WRITTEN BEFORE IT IS READ inside a frame, so none
+; needs the `db 0` it used to get -- raster_colframe clears the two
+; occlusion arrays itself and everything else is set by the face or the
+; pair that uses it.
+;
+; The RECORD -- rc_blo..rc_k -- must stay in this order and adjacent,
+; because that is the layout kernel.asm writes and rc_face copies with
+; one LDI run.  Laying them out by hand keeps that true and visible.
+RC_COVER    equ #3E00
+RC_VARS     equ RC_COVER+CNPAIR*2
+rc_blo      equ RC_VARS+0    
+rc_bhi      equ RC_VARS+1    
+rc_hlo      equ RC_VARS+2    
+rc_hhi      equ RC_VARS+4    
+rc_kind     equ RC_VARS+6    
+rc_k        equ RC_VARS+7    
+rc_xa       equ RC_VARS+8    
+rc_w        equ RC_VARS+9    
+rc_w2       equ RC_VARS+10   
+rc_sh       equ RC_VARS+11   
+rc_flip     equ RC_VARS+12   
+rc_pa       equ RC_VARS+13   
+rc_np       equ RC_VARS+14   
+rc_p        equ RC_VARS+15   
+rc_ha0      equ RC_VARS+16   ; the UNSHIFTED half heights, for j
+rc_hb0      equ RC_VARS+18   
+rc_han      equ RC_VARS+20   ; ...and the normalised ones, for u
+rc_hbn      equ RC_VARS+22   
+rc_dhn      equ RC_VARS+24   
+rc_num      equ RC_VARS+26   
+rc_den      equ RC_VARS+28   
+rc_dnum     equ RC_VARS+30   
+rc_dden     equ RC_VARS+32   
+rc_t2       equ RC_VARS+34   ; the sample, clamped into the face...
+rc_raw      equ RC_VARS+35   ; ...and unclamped, which is what steps
+rc_h        equ RC_VARS+36   ; half height at this pair, Q12.4
+rc_j        equ RC_VARS+38   ; the SHORTER byte column's j...
+rc_ja       equ RC_VARS+40   
+rc_hha      equ RC_VARS+42   ; the two byte columns' half heights...
+rc_hhb      equ RC_VARS+44   
+rc_hs       equ RC_VARS+46   ; ...and which of them is short and tall
+rc_ht       equ RC_VARS+48   
+rc_jt       equ RC_VARS+50   ; ...and the taller one's
+rc_eofs     equ RC_VARS+52   ; which byte of the pair is the tall one
+rc_ecol     equ RC_VARS+53   
+rc_erow     equ RC_VARS+54   
+rc_en       equ RC_VARS+55   
+rc_eidx     equ RC_VARS+56   
+rc_eidx0    equ RC_VARS+58   
+rc_estep    equ RC_VARS+60   
+rc_r0t      equ RC_VARS+62   
+rc_r1t      equ RC_VARS+63   
+rc_hq       equ RC_VARS+64   ; the h Bresenham: per-column step...
+rc_hr       equ RC_VARS+66   
+rc_hq4      equ RC_VARS+67   ; ...and per-PAIR step
+rc_hr4      equ RC_VARS+69   
+rc_hneg     equ RC_VARS+70   
+rc_acc      equ RC_VARS+71   
+rc_over     equ RC_VARS+73   ; 1 while drawing the overlay pass
+rc_ltop     equ RC_VARS+74   ; the top row rc_lift measures from
+rc_texpg    equ RC_VARS+75   
+rc_page     equ RC_VARS+76   
+rc_step     equ RC_VARS+77   
+rc_idx0     equ RC_VARS+79   
+rc_idx      equ RC_VARS+81   
+rc_idxend   equ RC_VARS+83   ; where a band's texture walk finished
+rc_cont     equ RC_VARS+85   ; ...and whether the next band starts there
+rc_pdn2     equ RC_VARS+86   
+rc_r0       equ RC_VARS+87   
+rc_r1       equ RC_VARS+88   
+rc_row      equ RC_VARS+89   
+rc_n        equ RC_VARS+90   
+rc_pup      equ RC_VARS+91   
+rc_pdn      equ RC_VARS+93   
+rc_rec      equ RC_VARS+95   
+rc_left     equ RC_VARS+97   
+rc_sp       equ RC_VARS+98   
+rc_sp2      equ RC_VARS+100  
+rc_tf       equ RC_VARS+102  ; rc_charge: rows still free at the pair
+rc_jhi      equ RC_VARS+103  ; ...upper bound on the taller column's j
+    assert RC_VARS+104 <= #3FF0
 
-rc_xa       db 0
-rc_w        db 0
-rc_w2       db 0
-rc_sh       db 0
-rc_flip     db 0
-rc_pa       db 0
-rc_np       db 0
-rc_p        db 0
-rc_ha0      dw 0                ; the UNSHIFTED half heights, for j
-rc_hb0      dw 0
-rc_han      dw 0                ; ...and the normalised ones, for u
-rc_hbn      dw 0
-rc_dhn      dw 0
-rc_num        dw 0
-rc_den        dw 0
-rc_dnum       dw 0
-rc_dden       dw 0
-rc_t2       db 0                ; the sample, clamped into the face...
-rc_raw      db 0                ; ...and unclamped, which is what steps
-rc_h        dw 0                ; half height at this pair, Q12.4
-rc_j        dw 0                ; the SHORTER byte column's j...
-rc_ja       dw 0
-rc_hha      dw 0                ; the two byte columns' half heights...
-rc_hhb      dw 0
-rc_hs       dw 0                ; ...and which of them is short and tall
-rc_ht       dw 0
-rc_jt       dw 0                ; ...and the taller one's
-rc_eofs     db 0                ; which byte of the pair is the tall one
-rc_ecol     db 0
-rc_erow     db 0
-rc_en       db 0
-rc_eidx     dw 0
-rc_eidx0    dw 0
-rc_estep    dw 0
-rc_r0t      db 0
-rc_r1t      db 0
-rc_hq       dw 0                ; the h Bresenham: per-column step...
-rc_hr       db 0
-rc_hq4      dw 0                ; ...and per-PAIR step
-rc_hr4      db 0
-rc_hneg     db 0
-rc_acc      db 0
-rc_dlift    db 0                ; how far a running door has risen, /256
-rc_over     db 0                ; 1 while drawing the overlay pass
-rc_ltop     db 0                ; the top row rc_lift measures from
-rc_texpg    db 0
-rc_page     db 0
-rc_step     dw 0
-rc_idx0     dw 0
-rc_idx      dw 0
-rc_idxend   dw 0                ; where a band's texture walk finished
-rc_cont     db 0                ; ...and whether the next band starts there
-rc_pdn2     db 0
-rc_r0       db 0
-rc_r1       db 0
-rc_row      db 0
-rc_n        db 0
-rc_pup      dw 0
-rc_pdn      dw 0
-rc_rec      dw 0
-rc_left     db 0
-rc_sp       dw 0
-rc_sp2      dw 0
-    if RC_PACED
-rc_tf       db 0                ; rc_charge: rows still free at the pair
-rc_jhi      db 0                ; ...upper bound on the taller column's j
-    endif
+; ...EXCEPT this one, which stays a LABEL in the code segment because it
+; is the one byte a harness has to write from outside: rasm puts only
+; labels in the .sym file, never equs, so an equ here is invisible to
+; engine2/tools/emu_rcol.py -- which pokes it to verify the door's slide.
+; door_lift writes it on the disc; the test harness pokes it directly.
+rc_dlift    db 0
 
 ; THE OCCLUSION ARRAYS LIVE IN THE FREE RAM ABOVE QUADS, not in the code
 ; segment.  They are CNPAIR bytes each and `assert game_end <= BUCK0`
@@ -1768,10 +1815,8 @@ rc_jhi      db 0                ; ...upper bound on the taller column's j
 ; SOLID and MARK the same way and game.asm the door tables.  QUADS ends
 ; at #3DBF and the door tables take #3DC0-#3DEF, so #3E00 up is free, and
 ; the CPU stack tops out at #3FF0.
-RC_COVER    equ #3E00
 rc_up       equ RC_COVER            ; uncovered rows above the horizon
 rc_dn       equ RC_COVER+CNPAIR     ; first uncovered row below it
-    assert RC_COVER+CNPAIR*2 <= #3FF0
 
 
 ; =====================================================================

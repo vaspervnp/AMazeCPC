@@ -24,7 +24,7 @@ first; every number here is written down next to the code it constrains.
 | `PACE_FRAMES` (`engine2/src/main3.asm`) | **9** — 179.7 ms, 5.56 fps (was 10) |
 | the map (`tools/world.py`) | **nine 4x4 rooms** in a 3x3 grid, 144 floor cells |
 | `make amaze` | OK, disc fresh (`md5` of `engine2/build/TEX.BIN` == `build/e3/TEX.BIN`) |
-| `emu_rcol.py verify` | **159/159 screens byte-exact** against `colmodel.py` |
+| `emu_rcol.py verify` | **183/183 screens byte-exact** against `colmodel.py`, 24 of them a door IN MOTION |
 | `emu_rcol.py atomic` | **PASS** — every interval inside its charge, 0 model/asm disagreements, 40 states / 2 seeds |
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
 | `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
