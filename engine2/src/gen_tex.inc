@@ -18,13 +18,17 @@ CJMAX       equ 384               ; the largest half height, in SCANLINES
 CHMAX       equ 6144              ; ...and in Q12.4, which is how CTABT
 CIDXN       equ 1537              ; is indexed: 4*(h>>2) == h & ~3
 CNPAIR      equ 22              ; column PAIRS across the viewport
-CFARB       equ #CC              ; THE FAR PLANE's one byte -- the
+CFARB       equ #0C              ; THE FAR PLANE's one byte -- the
                                     ; wall's SHADE pen doubled, which is
                                     ; what a stone wall reads as when it
                                     ; is too far for its texture to carry
-CFARIDX     equ 248              ; ...and an index into any wall page
-                                    ; whose byte IS that.  rc_far walks
-                                    ; with step 0, so the same byte comes
-                                    ; out on every row and the ordinary
-                                    ; fill draws a flat band for free.
+CFARPG      equ 1               ; ...the wall PAGE that byte lives in
+CFARIDX     equ 156              ; ...and the offset in it.  rc_far
+                                    ; walks with step 0, so the same byte
+                                    ; comes out on every row and the
+                                    ; ordinary fill draws a flat band for
+                                    ; free.  BOTH halves are needed: the
+                                    ; dominant colour is not in every
+                                    ; column, and column 0 is the wall's
+                                    ; left edge, which does not have it.
 TEXEND      equ #786A

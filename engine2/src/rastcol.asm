@@ -1620,7 +1620,7 @@ RC_FAR1     equ CYH+(RC_FARH/16)
 rc_far
     ld   hl,0
     ld   (rc_step),hl           ; step 0 -> one byte, every row
-    ld   a,TEXWALL/256
+    ld   a,(TEXWALL/256)+CFARPG ; the page the far byte really lives in
     ld   (rc_page),a
     ld   a,CNPAIR
     ld   (rc_farn),a

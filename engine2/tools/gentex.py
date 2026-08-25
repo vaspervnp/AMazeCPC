@@ -137,11 +137,15 @@ CFARB       equ #{farb:02X}              ; THE FAR PLANE's one byte -- the
                                     ; wall's SHADE pen doubled, which is
                                     ; what a stone wall reads as when it
                                     ; is too far for its texture to carry
-CFARIDX     equ {faridx}              ; ...and an index into any wall page
-                                    ; whose byte IS that.  rc_far walks
-                                    ; with step 0, so the same byte comes
-                                    ; out on every row and the ordinary
-                                    ; fill draws a flat band for free.
+CFARPG      equ {farpg}               ; ...the wall PAGE that byte lives in
+CFARIDX     equ {faridx}              ; ...and the offset in it.  rc_far
+                                    ; walks with step 0, so the same byte
+                                    ; comes out on every row and the
+                                    ; ordinary fill draws a flat band for
+                                    ; free.  BOTH halves are needed: the
+                                    ; dominant colour is not in every
+                                    ; column, and column 0 is the wall's
+                                    ; left edge, which does not have it.
 TEXEND      equ #{end:04X}
 """
 
@@ -154,7 +158,9 @@ def write_inc(path, blob):
         texbw=colmodel.TEX_BW, texh=colmodel.TEX_H, idxn=colmodel.IDX_N,
         jmax=colmodel.JMAX, chmax=colmodel.HMAX_Q4,
         cidxn=colmodel.CIDX_N, npair=c.VP_BW // 2,
-        farb=colmodel.far_byte(), faridx=colmodel.far_index(),
+        farb=colmodel.far_byte(),
+        farpg=colmodel.far_page_index()[0],
+        faridx=colmodel.far_page_index()[1],
         end=BANK_BASE + len(blob)))
 
 

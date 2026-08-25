@@ -537,28 +537,48 @@ def pair_walk(q, c, cover=None, over=False, dlift=0):
 def far_byte():
     """-> the ONE Mode 0 byte the far plane is drawn in.
 
-    The wall's SHADE pen doubled: what a stone wall reads as once it is
-    too far away for its texture to carry.  It is one byte because the
-    far plane is a flat band and not a face -- see far_rows().
+    THE WALL'S DOMINANT COLOUR, counted off the art rather than picked.
+    A flat band standing in for a wall should be the colour that wall
+    mostly IS, so that the fake and the real geometry read as the same
+    material -- and which pen that is belongs to walltex.py, not here.
+    MEASURED on the shipped art:
+
+        ink  1  (mortar)   29.1%
+        ink  2  (shade)     5.1%
+        ink 11  (stone)    53.6%   <- this one
+        ink 14  (lit)      12.2%
+
+    It was the SHADE pen, which is 5% of the wall: the band came out a
+    colour the wall barely contains.  Counting means a retune of the art
+    carries the far plane with it instead of leaving it behind.
     """
-    return cpchw.mode0_byte(pal.WALL_TEX_PENS[1], pal.WALL_TEX_PENS[1])
+    import collections
+    rows = walltex.wall()
+    common = collections.Counter(p for r in rows for p in r).most_common(1)
+    pen = pal.WALL_TEX_PENS[common[0][0]]
+    return cpchw.mode0_byte(pen, pen)
 
 
-def far_index():
-    """-> an index into any wall page whose byte IS far_byte().
+def far_page_index():
+    """-> (page, index) of a wall texture byte that IS far_byte().
 
     rc_far walks with STEP 0, so whatever this points at comes out on
     every row and the ordinary fill draws a flat band with no texture
-    arithmetic at all.  Any wall column will do; column 0 row 0 is the
-    mortar joint at the top of a course, which is the shade pen.
+    arithmetic at all.
     """
-    pages = wall_pages()
+    # BOTH HALVES, because the byte has to exist in the page rc_far
+    # actually reads.  Returning only the index and letting the Z80 use
+    # page 0 found a match in some other column and then read page 0 at
+    # that offset -- a different byte, and emu_rcol went from 166 screens
+    # exact to 148 of 166 wrong.  And column 0 is the wall's left edge,
+    # which does not contain the dominant colour at all, so "just use
+    # page 0" is not available either.
     b = far_byte()
-    for u, page in enumerate(pages):
+    for u, page in enumerate(wall_pages()):
         for i, v in enumerate(page):
             if v == b:
-                return i
-    raise SystemExit("no wall texture byte matches the far-plane shade")
+                return u, i
+    raise SystemExit("no wall texture byte matches the far-plane colour")
 
 
 def far_rows(c):
@@ -768,7 +788,7 @@ def render(quads, c=None, pages_wall=None, pages_door=None,
         if fr is None:
             continue
         f0, f1 = fr
-        b = far_byte()
+        b = wall_pages()[far_page_index()[0]][far_page_index()[1]]
         up, dn = cover
         for p in range(c.VP_BW // 2):
             for r0b, r1b in ((f0, min(up[p], f1)), (max(dn[p], f0), f1)):
