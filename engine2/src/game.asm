@@ -247,12 +247,39 @@ gi_next
 game_step
     call scan_keys
 game_run
-    ld   hl,KEYS                    ; --- turn: 1 step = 5 degrees
-    bit  1,(hl)
-    call z,turn_right               ; leaves HL alone, so KEYS+1 is INC HL
+    ; ---- SHIFT RUNS, AND IT DOES EACH THING TWICE RATHER THAN TWICE AS
+    ;      FAR.  Two 24/256 steps cover the same ground as one 48/256
+    ;      step but test the collision box at the half way point as well,
+    ;      so a running player cannot cross a wall a walking one would
+    ;      have been stopped by -- and PRAD is 64/256, so a single 48/256
+    ;      step was already most of the box.
+    ;
+    ;      It also leaves (mv_dx)/(mv_dy) ALONE.  door_act probes 0.75
+    ;      cells ahead by taking 8 * the step vector, so doubling the
+    ;      vector would have quietly doubled the reach of SPACE too.
+    ;
+    ;      Row 2 bit 5 is SHIFT, and the matrix is ACTIVE LOW.
+    ld   a,(KEYS+2)
+    cpl
+    and  #20
+    ld   (mv_fast),a
+
+    ld   hl,KEYS                    ; --- turn: 1 step = 5 degrees, or 10
+    bit  1,(hl)                     ;     with SHIFT
+    jr   nz,gs_nright
+    call turn_right                 ; leaves HL alone, so KEYS+1 is INC HL
+    ld   a,(mv_fast)
+    or   a
+    call nz,turn_right
+gs_nright
     inc  hl
     bit  0,(hl)
-    call z,turn_left
+    jr   nz,gs_nleft
+    call turn_left
+    ld   a,(mv_fast)
+    or   a
+    call nz,turn_left
+gs_nleft
 
     call step_vector                ; STEPTAB[plr_a] -> (mv_dx)(mv_dy)
 
@@ -260,12 +287,18 @@ game_run
     bit  0,(hl)
     jr   nz,gs_noup
     call move_apply
+    ld   a,(mv_fast)
+    or   a
+    call nz,move_apply
     jr   gs_moving
 gs_noup                             ; HL is still KEYS
     bit  2,(hl)
     jr   nz,gs_still
     call neg_step                   ; back = the same vector, negated
     call move_apply
+    ld   a,(mv_fast)
+    or   a
+    call nz,move_apply
     call neg_step
 gs_moving                           ; (plr_moving) is what drives the
     ld   a,1                        ; weapon's bob -- see gun.asm.  It is
@@ -862,6 +895,7 @@ cf_x0       db 0
 cf_x1       db 0
 
 door_n      db 0
+mv_fast     db 0                ; non-zero while SHIFT is held
 door_anim   db DOOR_SHUT        ; the state of whichever door is mid-run
 
 ; HOW FAR UP, as a fraction of 256 of the door's own height below the
