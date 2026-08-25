@@ -118,8 +118,17 @@ O_LX1       equ #C0         ; 16 bytes, |cx - pcx|
 O_LY1       equ #D0         ; 16 bytes, |cy - pcy|
 O_BPTR      equ #E0         ; 8 BYTES, bucket write offset within its page
 
+DOORMOV     equ 3           ; a door part way through its run:
+                            ; SEE-THROUGH, so the flood goes past it and
+                            ; the room beyond is marched, but still filed
+                            ; as a face so the door itself is drawn, and
+                            ; still non-zero so coll_free keeps the
+                            ; player out of it.  Opacity and solidity are
+                            ; different questions; this is the code that
+                            ; separates them.
 SOLID       equ #3800       ; 256 bytes, idx = cy*16 + cx
-                            ;   0 = open, 1 = wall, 2 = shut door
+                            ;   0 = open, 1 = wall, 2 = shut door,
+                            ;   3 = door in motion (see DOORMOV)
 MARK        equ #3900       ; 256 bytes, flood "already pushed" flags
 
 ; BUCKET 0 IS A REAL PAGE AND IT MUST NOT BE CODE.  A bucket's page is
@@ -431,8 +440,14 @@ mg1 cp 1
 mg2 ld (hl),1
     ld h,SOLID/256
     ld a,(hl)
-    or a
-    jr nz,mr_pw                     ; opaque: mark it, but never flood in
+    dec a                           ; SEE-THROUGH iff 0 or DOORMOV: (a-1)
+    cp 2                            ; is 255, 0, 1, 2 for 0, 1, 2, 3, so
+    jr c,mr_pw                      ; opaque is exactly (a-1) < 2 -- the
+                                    ; same two instructions `or a / jr nz`
+                                    ; cost.  A door part way open is
+                                    ; flooded THROUGH, so the room behind
+                                    ; it is marched, and is still filed as
+                                    ; a face below, so the door is drawn.
     ld hl,(cur_x)
     ld de,(mv_sxi)
     or a
@@ -468,8 +483,9 @@ mg3 cp 1
 mg4 ld (hl),1
     ld h,SOLID/256
     ld a,(hl)
-    or a
-    jr nz,mr_pe
+    dec a
+    cp 2
+    jr c,mr_pe
     ld hl,(cur_x)
     ld de,(mv_sxi)
     add hl,de
@@ -501,8 +517,9 @@ mg5 cp 1
 mg6 ld (hl),1
     ld h,SOLID/256
     ld a,(hl)
-    or a
-    jr nz,mr_pn
+    dec a
+    cp 2
+    jr c,mr_pn
     ld hl,(cur_x)
     ld de,(mv_sxj)
     or a
@@ -538,8 +555,9 @@ mg7 cp 1
 mg8 ld (hl),1
     ld h,SOLID/256
     ld a,(hl)
-    or a
-    jr nz,mr_ps
+    dec a
+    cp 2
+    jr c,mr_ps
     ld hl,(cur_x)
     ld de,(mv_sxj)
     add hl,de
@@ -593,7 +611,11 @@ mr_face
     ld a,(hl)
     or a
     ret z                           ; open: no wall face here
-    dec a
+    cp 2                            ; 1 = wall; 2 SHUT and 3 MOVING are
+    ld a,0                          ; both doors and both get a face -- a
+    jr c,mf_kset                    ; moving door is see-through to the
+    ld a,1                          ; flood AND drawn, which is what lets
+mf_kset                             ; the room appear behind it
     ld (mf_kind),a                  ; 0 = wall, 1 = door
 
     ld h,FTAB/256                   ; painter key = L1 of the WALL cell

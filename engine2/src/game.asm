@@ -567,22 +567,37 @@ ds_same
     pop  hl
 ds_apply
     ; ---- IS THIS DOOR PART WAY THROUGH ITS RUN?  A is its new state.
-    ;      door_shrink scales the door faces by it, which is what makes
-    ;      the run visible; DOOR_SHUT and DOOR_OPEN are the two resting
-    ;      states and neither of them animates anything.
+    ;      door_lift turns it into how far the door has RISEN, and
+    ;      ds_apply below turns it into DOORMOV so the march sees
+    ;      through the doorway; DOOR_SHUT and DOOR_OPEN are the two
+    ;      resting states and neither of them animates anything.
     cp   DOOR_SHUT
     jr   z,ds_noanim
     cp   DOOR_OPEN
     jr   z,ds_noanim
     ld   (door_anim),a
 ds_noanim
-    ld   hl,door_idx                ; SOLID = 0 only when fully open
+    ld   hl,door_idx
     add  hl,de
     ld   l,(hl)
     ld   h,SOLID/256
+    ; ---- WHAT THE KERNEL IS TOLD ABOUT THIS CELL.  Three states, and
+    ;      the middle one is what lets the run be SEEN:
+    ;        DOOR_OPEN        -> 0        gone: walk through it
+    ;        DOOR_SHUT        -> 2        shut: opaque and solid
+    ;        anything between -> DOORMOV, which march.asm floods THROUGH
+    ;      -- so the room beyond is marched and DRAWN behind the rising
+    ;      door -- while coll_free still sees a non-zero cell and keeps
+    ;      the player out of it.  Opacity and solidity are different
+    ;      questions, and this is where they stop being the same byte.
     cp   DOOR_OPEN
+    jr   z,ds_wopen
+    cp   DOOR_SHUT
     ld   a,DOOR_SHUT
-    jr   nz,ds_w
+    jr   z,ds_w
+    ld   a,DOORMOV
+    jr   ds_w
+ds_wopen
     xor  a
 ds_w
     ld   (hl),a

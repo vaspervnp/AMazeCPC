@@ -102,6 +102,20 @@ MAZE_W = MAZE_H = 16
 
 # cell codes in the SOLID array
 OPEN, WALL, DOORC = 0, 1, 2                 # DOORC = closed door (solid)
+DOORMOV = 3                                 # ...and one part way through its
+                                            # run: SEE-THROUGH, so the flood
+                                            # goes past it and the room beyond
+                                            # is marched, but still FILED as a
+                                            # face so the door is drawn, and
+                                            # still non-zero so coll_free keeps
+                                            # the player out.  march.asm reads
+                                            # it as (cell-1) < 2 == opaque.
+
+
+def opaque(cell):
+    """march.asm's own test, `dec a / cp 2 / jr c`: a cell stops the
+    flood iff it is WALL or a SHUT door.  DOORMOV does not."""
+    return cell in (WALL, DOORC)
 
 # face directions: outward normal of the face
 NORTH, EAST, SOUTH, WEST = 0, 1, 2, 3
@@ -223,7 +237,7 @@ def march(solid, px_fx, py_fx, a_idx, push_opaque=False):
         if abs(cx - pcx) + abs(cy - pcy) > R_MAX:
             continue
         if (cx, cy) != (pcx, pcy):
-            if solid[cy * 16 + cx] != OPEN:
+            if opaque(solid[cy * 16 + cx]):
                 continue
             if L < 0:                       # left plane
                 continue
@@ -262,7 +276,9 @@ def march(solid, px_fx, py_fx, a_idx, push_opaque=False):
                 if px_fx >= ((cx + 1) << 8):
                     continue
             key = abs(wx - pcx) + abs(wy - pcy)
-            buckets[key].append((wx, wy, fdir, cell == DOORC))
+            # 2 SHUT and 3 MOVING are both doors -- march.asm's
+            # `cp 2 / jr c` says wall below 2, door at or above it.
+            buckets[key].append((wx, wy, fdir, cell >= DOORC))
             views[key].append(c[ea] + c[eb])
 
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
@@ -270,7 +286,7 @@ def march(solid, px_fx, py_fx, a_idx, push_opaque=False):
             if mark[i]:
                 continue
             mark[i] = 1
-            if not push_opaque and solid[i] != OPEN:
+            if not push_opaque and opaque(solid[i]):
                 continue
             if dx:
                 st = (s.rgtx, s.fwdx, s.dLi, s.dRi) if dx > 0 else \
