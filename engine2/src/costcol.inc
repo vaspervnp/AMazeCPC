@@ -96,7 +96,7 @@
 ;  rather than the mean.  Re-run it after ANY change to rastcol.asm and
 ;  paste the answer here; `atomic` on a different seed is the check that
 ;  the sample was big enough.
-C_CFRAME    equ 420         ; raster_colframe's own setup, once a frame:
+C_CFRAME    equ 450         ; raster_colframe's own setup, once a frame:
                             ; the two LDIRs that clear the occlusion
                             ; state, the bank switch and the walk's head.
                             ; MEASURED 389.
@@ -172,6 +172,14 @@ C_CEDGE     equ 168         ; per possible EDGE row, bounded by
                             ; rebuild-the-address-every-row loop.
                             ; MEASURED 160, and 8*C_COLR = 168 covers it
                             ; while making the whole bound one multiply.
+C_CFAR      equ 13000       ; THE WHOLE FAR PLANE, one hook for the pass.
+                            ; rc_far fills a 13-scanline band on every
+                            ; pair no real face covered: about 430 us a
+                            ; pair, of which 263 is the fill itself, so
+                            ; ~9500 for all 22 and this bounds it.  ONE
+                            ; hook and not one per pair because the whole
+                            ; pass is well under COST_THI, and the fewer
+                            ; hooks the less the accumulator wastes.
 C_CSTEP     equ 260         ; one single-column step of rc_pnext's slow
                             ; path, on top of the C_CSKIP its hook also
                             ; charges.  MEASURED 213.

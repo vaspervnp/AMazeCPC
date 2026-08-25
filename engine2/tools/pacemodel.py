@@ -149,6 +149,7 @@ C_CBAND = _equ("C_CBAND", 460, "costcol.inc")
 C_COLR = _equ("C_COLR", 22, "costcol.inc")
 C_CEDGE = _equ("C_CEDGE", 60, "costcol.inc")
 C_CSTEP = _equ("C_CSTEP", 120, "costcol.inc")
+C_CFAR = _equ("C_CFAR", 13000, "costcol.inc")
 JOINT_KMAX = _equ("JOINT_KMAX", 3, "raster.asm")
 if COURSES and RQ_SPLIT:
     # ...and say so rather than modelling it silently: this pair draws
@@ -371,7 +372,7 @@ def units(ncell, faces, quads, cyh):
         import rastermodel as _rm
         u += [(0, cc, cc) for cc in
               _cm.charge(quads, _rm.cfg(), C_CFRAME, C_CFACE, C_CSKIP,
-                         C_COLS, C_CBAND, C_COLR, C_CEDGE, C_CSTEP)]
+                         C_COLS, C_CBAND, C_COLR, C_CEDGE, C_CSTEP, c_cfar=C_CFAR)]
     else:
         for q in quads:
             u += [(0, cc, cc) for cc in quad_units(q, cyh)]

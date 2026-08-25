@@ -248,15 +248,12 @@ rc_noface
     ;      It is farther than every real face, so front to back it comes
     ;      after them; and it must come BEFORE the overlay pass, which
     ;      scribbles on the occlusion state of the pairs it draws.
-    ;
-    ;      It is an ordinary FACE and goes through the ordinary rc_face,
-    ;      so the ordinary occlusion decides where it lands: only on the
-    ;      pairs no real face covered.  See vpcfg.inc for why the honest
-    ;      alternative -- marching further -- costs two vsync periods a
-    ;      cell and this costs one face.
     push hl
-    ld   hl,rc_farrec
-    call rc_face
+    if RC_PACED
+    ld   bc,C_CFAR
+    call cost_unit
+    endif
+    call rc_far
     pop  hl
     endif
 rc_nofar
@@ -1585,6 +1582,93 @@ rc_hb2
     ret
 
 
+    if RC_FARH
+; =====================================================================
+;  rc_far -- THE FAR PLANE, and it is a FILL rather than a FACE.
+;
+;  A flat band of constant height on the horizon, drawn ONLY where the
+;  occlusion interval says no real face reached.  Where the room ends
+;  inside the march radius it draws nothing at all.
+;
+;  WHY NOT A FACE.  It was one, and it cost as much as marching a whole
+;  cell further -- 224567 us against 178193, both 13 periods against 11.
+;  A pair costs C_COLS = 1800 us of SETUP whatever it draws (pcprof.py
+;  says where that goes), so a 13-scanline band across 22 pairs was
+;  39600 us before a pixel was written.  Here there is no u division, no
+;  Bresenham probe, no CTABT lookup and no per-pair face machinery: two
+;  band ranges and the ordinary fill.
+;
+;  AND THE FILL IS THE ORDINARY ONE, WITH STEP ZERO.  rc_band walks the
+;  texture by (rc_step) a row; at zero it samples the same byte every
+;  row, so a flat band costs exactly what a textured one does and needs
+;  no second inner loop.  CFARIDX points at a wall byte that IS the
+;  shade pen -- gentex.py picks it, colmodel.far_index() agrees.
+;
+;  It does NOT update rc_up / rc_dn.  Nothing reads them afterwards: the
+;  only pass left is the moving-door overlay, which resets the pairs it
+;  touches.
+;
+;  Clobbers everything.
+; =====================================================================
+RC_FAR0     equ CYH-(RC_FARH/16)        ; the band, in viewport rows
+RC_FAR1     equ CYH+(RC_FARH/16)
+    assert RC_FAR0 >= 0
+    assert RC_FAR1 <= VP_H-1
+
+rc_far
+    ld   hl,0
+    ld   (rc_step),hl           ; step 0 -> one byte, every row
+    ld   a,TEXWALL/256
+    ld   (rc_page),a
+    ld   a,CNPAIR
+    ld   (rc_farn),a
+    xor  a
+    ld   (rc_p),a
+rf_pair
+    ld   a,(rc_p)
+    ld   e,a
+    ld   d,0
+    ld   hl,rc_up
+    add  hl,de
+    ld   c,(hl)                 ; up: a COUNT of free rows above
+    ld   hl,rc_dn
+    add  hl,de
+    ld   b,(hl)                 ; dn: the first free row below
+
+    ld   a,c                    ; ---- the band ABOVE: RC_FAR0 .. up-1
+    cp   RC_FAR0+1
+    jr   c,rf_below
+    sub  RC_FAR0
+    ld   (rc_n),a
+    ld   a,RC_FAR0
+    ld   (rc_row),a
+    ld   hl,CFARIDX*256
+    ld   (rc_idx),hl
+    push bc
+    call rc_band
+    pop  bc
+rf_below
+    ld   a,RC_FAR1              ; ---- and BELOW: dn .. RC_FAR1
+    cp   b
+    jr   c,rf_next
+    sub  b
+    inc  a
+    ld   (rc_n),a
+    ld   a,b
+    ld   (rc_row),a
+    ld   hl,CFARIDX*256
+    ld   (rc_idx),hl
+    call rc_band
+rf_next
+    ld   hl,rc_p
+    inc  (hl)
+    ld   hl,rc_farn
+    dec  (hl)
+    jp   nz,rf_pair
+    ret
+    endif
+
+
 ; =====================================================================
 ;  rc_band -- (rc_n) scanlines from viewport row (rc_row), of the column
 ;  pair (rc_p), out of texture page (rc_page) at coordinate (rc_idx),
@@ -1855,27 +1939,17 @@ rc_tf       equ RC_VARS+102  ; rc_charge: rows still free at the pair
 rc_jhi      equ RC_VARS+103  ; ...upper bound on the taller column's j
 ; rc_slide's scratch.  The row count is a byte, but the coordinate and
 ; the step are 16-bit and rc_mul8 wants DE, so they go through memory.
+rc_farn     equ RC_VARS+109     ; rc_far's pair countdown
 rc_lidx     equ RC_VARS+104     ; rc_slide: -> the coordinate it moves
 rc_lstep    equ RC_VARS+106     ; ...its per-row step
 rc_ld       equ RC_VARS+108     ; ...and the rows it decided on
-    assert RC_VARS+109 <= #3FF0
+    assert RC_VARS+110 <= #3FF0
 
 ; ...EXCEPT this one, which stays a LABEL in the code segment because it
 ; is the one byte a harness has to write from outside: rasm puts only
 ; labels in the .sym file, never equs, so an equ here is invisible to
 ; engine2/tools/emu_rcol.py -- which pokes it to verify the door's slide.
 ; door_lift writes it on the disc; the test harness pokes it directly.
-; THE FAR PLANE'S RECORD, in exactly the layout kernel.asm writes: a
-; flat face spanning the whole viewport at RC_FARH, kind 0 (wall), and a
-; painter key one past the farthest the march can file.
-rc_farrec   db 0, VP_BW
-            dw RC_FARH, RC_FARH
-            db 0, 8                 ; kind 0 = wall; the painter key is
-                                    ; a literal because this renderer
-                                    ; never reads it -- only `kind` picks
-                                    ; anything -- and gen_slopes.inc's
-                                    ; RMAX is not in the test harness
-
 rc_dlift    db 0
 
 ; THE OCCLUSION ARRAYS LIVE IN THE FREE RAM ABOVE QUADS, not in the code

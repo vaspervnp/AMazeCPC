@@ -109,10 +109,16 @@
 ; of which the CPU stack uses the top 16 -- was the only slack in the map.
 ; So QUADS moved up a page too, which is why it is no longer at #3600.
 ; The CPU stack (#3FF0) and bank 4 are untouched.
-MSTKBOT     equ #3200       ; flood stack, grows DOWN from MSTKTOP
-MSTKTOP     equ #3700       ; 1280 bytes = 128 entries of 10; the flood can
-                            ; never hold more than the 113 cells inside
-                            ; L1 <= 7, and measures 4 deep on this maze.
+; THE WHOLE BLOCK MOVED UP THREE MORE PAGES when the column renderer
+; grew its second drawing pass, its door slide and its far plane, and
+; `assert game_end <= BUCK0` fired for the EIGHTH time.  The three pages
+; came out of the flood stack, which had 1280 bytes for a stack that
+; MEASURES 14 entries at its worst -- 8 with every door shut, 14 with
+; every door open (engine2/tools/roomcost.py, exhaustive).  512 bytes is
+; 51 entries, still three and a half times the worst ever seen.
+MSTKBOT     equ #3500       ; flood stack, grows DOWN from MSTKTOP
+MSTKTOP     equ #3700       ; 512 bytes = 51 entries of 10, against a
+                            ; MEASURED worst of 14.
 FTAB        equ #3700       ; L1 tables + bucket write pointers
 O_LX1       equ #C0         ; 16 bytes, |cx - pcx|
 O_LY1       equ #D0         ; 16 bytes, |cy - pcy|
@@ -149,11 +155,11 @@ MARK        equ #3900       ; 256 bytes, flood "already pushed" flags
 ;
 ; So BUCKETS keeps a spare page under it, deliberately, and the assert at
 ; the foot of main3.asm guards THAT page rather than the first bucket.
-BUCK0       equ #2A00       ; bucket 0: never filed into, never read, and
+BUCK0       equ #2D00       ; bucket 0: never filed into, never read, and
                             ; deliberately not code.  `assert game_end <=
                             ; BUCK0` in main3.asm is what keeps it so.
-BUCKHI      equ #2A         ; bucket k (k = 1..7) is the page BUCKHI+k,
-BUCKETS     equ #2B00       ; i.e. #2B00 (k=1) .. #3100 (k=7).
+BUCKHI      equ #2D         ; bucket k (k = 1..7) is the page BUCKHI+k,
+BUCKETS     equ #2E00       ; i.e. #2E00 (k=1) .. #3400 (k=7).
 BUCKSZ      equ 16          ; face record; 16 per page, 15 usable
                             ; (measured worst bucket occupancy: 8)
 

@@ -415,4 +415,4 @@ VPCOL        equ 1
 ;  no per-pair face machinery.  That is about 8000 us by the same
 ;  arithmetic, and it is the version worth building.
 ; --------------------------------------------------------------------
-RC_FARH      equ 0
+RC_FARH      equ 96

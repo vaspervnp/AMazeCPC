@@ -357,7 +357,7 @@ def charges_for(quads, c):
     import pacemodel as P
     return colmodel.charge(quads, c, P.C_CFRAME, P.C_CFACE, P.C_CSKIP,
                            P.C_COLS, P.C_CBAND, P.C_COLR, P.C_CEDGE,
-                           P.C_CSTEP)
+                           P.C_CSTEP, c_cfar=P.C_CFAR)
 
 
 def atomic(nstates=3, seed=1337):

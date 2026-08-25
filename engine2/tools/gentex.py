@@ -133,6 +133,15 @@ CJMAX       equ {jmax}               ; the largest half height, in SCANLINES
 CHMAX       equ {chmax}              ; ...and in Q12.4, which is how CTABT
 CIDXN       equ {cidxn}              ; is indexed: 4*(h>>2) == h & ~3
 CNPAIR      equ {npair}              ; column PAIRS across the viewport
+CFARB       equ #{farb:02X}              ; THE FAR PLANE's one byte -- the
+                                    ; wall's SHADE pen doubled, which is
+                                    ; what a stone wall reads as when it
+                                    ; is too far for its texture to carry
+CFARIDX     equ {faridx}              ; ...and an index into any wall page
+                                    ; whose byte IS that.  rc_far walks
+                                    ; with step 0, so the same byte comes
+                                    ; out on every row and the ordinary
+                                    ; fill draws a flat band for free.
 TEXEND      equ #{end:04X}
 """
 
@@ -145,6 +154,7 @@ def write_inc(path, blob):
         texbw=colmodel.TEX_BW, texh=colmodel.TEX_H, idxn=colmodel.IDX_N,
         jmax=colmodel.JMAX, chmax=colmodel.HMAX_Q4,
         cidxn=colmodel.CIDX_N, npair=c.VP_BW // 2,
+        farb=colmodel.far_byte(), faridx=colmodel.far_index(),
         end=BANK_BASE + len(blob)))
 
 

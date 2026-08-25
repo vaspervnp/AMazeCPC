@@ -534,6 +534,49 @@ def pair_walk(q, c, cover=None, over=False, dlift=0):
     return
 
 
+def far_byte():
+    """-> the ONE Mode 0 byte the far plane is drawn in.
+
+    The wall's SHADE pen doubled: what a stone wall reads as once it is
+    too far away for its texture to carry.  It is one byte because the
+    far plane is a flat band and not a face -- see far_rows().
+    """
+    return cpchw.mode0_byte(pal.WALL_TEX_PENS[1], pal.WALL_TEX_PENS[1])
+
+
+def far_index():
+    """-> an index into any wall page whose byte IS far_byte().
+
+    rc_far walks with STEP 0, so whatever this points at comes out on
+    every row and the ordinary fill draws a flat band with no texture
+    arithmetic at all.  Any wall column will do; column 0 row 0 is the
+    mortar joint at the top of a course, which is the shade pen.
+    """
+    pages = wall_pages()
+    b = far_byte()
+    for u, page in enumerate(pages):
+        for i, v in enumerate(page):
+            if v == b:
+                return i
+    raise SystemExit("no wall texture byte matches the far-plane shade")
+
+
+def far_rows(c):
+    """-> (r0, r1) the far plane's band, or None when it is off.
+
+    A flat band of constant height on the horizon, filled ONLY where the
+    occlusion interval says no real face reached.  It is not a FACE: a
+    face costs C_COLS = 1800 us of per-pair setup whatever it draws, so
+    the same band handed to rc_face cost as much as marching a whole cell
+    further (vpcfg.inc).  As its own fill it is the band and nothing
+    else.
+    """
+    if not c.RC_FARH:
+        return None
+    j = c.RC_FARH >> 4
+    return max(0, c.CYH - j), min(c.VP_H - 1, c.CYH + j)
+
+
 def far_quad(c):
     """-> the FAR PLANE as a quad record, or None when it is off.
 
@@ -584,7 +627,7 @@ def face_columns(q, c, cover=None, over=False, dlift=0):
 
 
 def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
-           c_colr, c_cedge, c_cstep, dlift=0):
+           c_colr, c_cedge, c_cstep, dlift=0, c_cfar=0):
     """-> the microsecond charges rastcol.asm takes, in order.
 
     THE TWIN OF THE COST HOOKS, the way pacemodel.quad_units is the twin
@@ -616,6 +659,7 @@ def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
             + u["skip"] * c_cskip + u["pair"] * c_cols
             + u["bands"] * c_cband + u["rows"] * c_colr
             + u["edges"] * c_cedge + u["steps"] * c_cstep
+            + u["far"] * c_cfar
             for u in charge_terms(quads, c, dlift)]
 
 
@@ -638,19 +682,21 @@ def charge_terms(quads, c, dlift=0):
     """
     cover = new_cover(c)
     out = []
-    if not quads and not far_quad(c):
+    if not quads and far_rows(c) is None:
         return out                       # raster_colframe rets before
     z = {"frame": 0, "face": 0, "skip": 0, "pair": 0,
-         "bands": 0, "rows": 0, "edges": 0, "steps": 0}
+         "bands": 0, "rows": 0, "edges": 0, "steps": 0, "far": 0}
     out.append(dict(z, frame=1))         # its hook on an empty list
     # TWO PASSES, in raster_colframe's own order.  rc_face is entered for
     # every record in BOTH passes but returns before the charge on the
     # ones that are not for that pass, so each quad pays C_CFACE exactly
     # once -- in its own pass.
     p0, p1 = passes(quads)
-    far = far_quad(c)
-    for over, group in ((False, p0), (False, [far] if far else []),
-                        (True, p1)):
+    for over, group in ((False, p0), ("far", None), (True, p1)):
+      if group is None:
+        if far_rows(c) is not None:
+            out.append(dict(z, far=1))   # ONE hook for the whole pass
+        continue
       for q in reversed(group):
         out.append(dict(z, face=1))      # the top of rc_face: every record
         for i in pair_walk(q, c, cover, over, dlift):
@@ -711,9 +757,28 @@ def render(quads, c=None, pages_wall=None, pages_door=None,
     # door in MOTION, front to back, and then the moving doors ON TOP and
     # outside the occlusion interval.  See passes().
     p0, p1 = passes(quads)
-    far = far_quad(c)
-    for over, group in ((False, p0), (False, [far] if far else []),
-                        (True, p1)):
+    for over, group in ((False, p0), ("far", None), (True, p1)):
+      if group is None:
+        # ---- THE FAR PLANE, between the real faces and the moving
+        #      doors.  A flat band of one byte, only where the occlusion
+        #      interval says no real face reached.  It is a FILL and not
+        #      a face: as a face it cost as much as marching a whole cell
+        #      further, because a pair pays C_COLS whatever it draws.
+        fr = far_rows(c)
+        if fr is None:
+            continue
+        f0, f1 = fr
+        b = far_byte()
+        up, dn = cover
+        for p in range(c.VP_BW // 2):
+            for r0b, r1b in ((f0, min(up[p], f1)), (max(dn[p], f0), f1)):
+                for r in range(r0b, r1b + 1):
+                    y = c.VP_Y + r
+                    a = ((y & 7) * 0x800 + (y >> 3) * 80 + c.VP_BX + 2 * p)
+                    scr[a] = b
+                    scr[a + 1] = b
+                    painted += 2
+        continue
       for q in reversed(group):
         pages = pd if (q[4] & 1) else pw
         for (p, u, _j, _r0, _r1, step, bands,

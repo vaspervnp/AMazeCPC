@@ -207,7 +207,7 @@ def _col_charge(quads):
     import colmodel as _cm
     import rastermodel as _rm
     return _cm.charge(quads, _rm.cfg(), P.C_CFRAME, P.C_CFACE, P.C_CSKIP,
-                      P.C_COLS, P.C_CBAND, P.C_COLR, P.C_CEDGE, P.C_CSTEP)
+                      P.C_COLS, P.C_CBAND, P.C_COLR, P.C_CEDGE, P.C_CSTEP, c_cfar=P.C_CFAR)
 
 
 def qparts(quads, cyh):
