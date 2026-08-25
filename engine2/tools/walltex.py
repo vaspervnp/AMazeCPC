@@ -28,6 +28,30 @@ a colour: a mortar, a shadowed face, the face itself, and a lit edge.
 
 TEX_W, TEX_H = 32, 64
 
+# ---------------------------------------------------------------------
+#  DETAIL -- 1 draws the fine art, 0 the COARSE one.
+#
+#  IT IS NOT A LOOK, IT IS A SPEED SETTING, and this is the measurement
+#  that makes it one.  The fill costs 10.125 us a screen byte; the same
+#  loop sampling the texture once per TWO scanlines costs 7.6247
+#  (engine2/tools/emu_byte.py, `colpair` against `colrun`), and the fill
+#  is 42.5% of the render (engine2/tools/pcprof.py).  So halving the
+#  sample rate is -24.7% of 42.5%, about 8% of the whole frame.
+#
+#  WHAT IT GIVES UP IS VERTICAL TEXTURE RESOLUTION -- and that is only
+#  free if the ART HAS NONE TO GIVE.  Every feature here is therefore at
+#  least TWO texels tall at DETAIL 0, and the per-pixel speckle is off:
+#  drop every other row of this art and almost nothing changes, because
+#  there is no row that is the only one of its kind.
+#
+#  The horizontal axis needs no such care.  rastcol.asm already samples
+#  one BYTE per column pair and writes it to both, so the art is drawn
+#  against a doubled horizontal pixel whatever this is set to -- see the
+#  note on _courses().  The door's striations are VERTICAL and so survive
+#  intact; only its lock band had rows one pixel tall.
+# ---------------------------------------------------------------------
+DETAIL = 0
+
 # ---- the wall: blue stone in running bond -------------------------------
 #   W_MORTAR  the gap between stones -- the darkest thing on the wall
 #   W_SHADE   the stone's own shadowed lower edge
@@ -36,11 +60,19 @@ TEX_W, TEX_H = 32, 64
 W_MORTAR, W_SHADE, W_STONE, W_LIT = 0, 1, 2, 3
 
 COURSE_N = 2            # courses up the texture, of UNEVEN height
-STONES = ([3, 2], [2, 3])           # ...so five big stones a face
-MORTAR_PX = 2           # the joint, in pixels -- see _courses on why 2
-HJITTER = 6             # how far a course height may stray from even
-XJITTER = 4             # ...and a vertical joint from evenly spaced
-YJITTER = 3             # ...and how far a single STONE rides up or down
+STONES = ([3, 2], [2, 3]) if DETAIL else ([2, 1], [1, 2])
+MORTAR_PX = 2 if DETAIL else 4      # the joint, in pixels; EVEN, so the
+                                    # joint is a whole number of BYTES --
+                                    # see _courses on why that matters
+LIT_PX = 1 if DETAIL else 2         # the stone's lit top edge, in ROWS.
+                                    # One row is exactly the detail the
+                                    # 2x fill throws away, so at DETAIL 0
+                                    # it is two.
+SHADE_PX = 2            # ...and its shadowed bottom, already two
+SPECKLE = bool(DETAIL)  # the 2x2 pitting; noise is detail by definition
+HJITTER = 6 if DETAIL else 4        # how far a course height may stray
+XJITTER = 4 if DETAIL else 2        # ...and a vertical joint
+YJITTER = 3 if DETAIL else 2        # ...and how far a STONE rides
 
 
 def _lfsr(seed=0xACE1):
@@ -178,16 +210,17 @@ def wall():
                 row.append(W_MORTAR)
             elif dx < MORTAR_PX:                # the joint beside the stone
                 row.append(W_MORTAR)
-            elif yy == MORTAR_PX:               # the stone's lit top edge
+            elif yy < MORTAR_PX + LIT_PX:       # the stone's lit top edge
                 row.append(W_LIT)
-            elif yy >= ch - 2:                  # and its shadowed bottom
+            elif yy >= ch - SHADE_PX:           # and its shadowed bottom
                 row.append(W_SHADE)
             elif dx < MORTAR_PX + 2:            # lit left edge -- TWO
                 row.append(W_LIT)               # pixels, so it too fills
                                                 # a byte rather than half
                                                 # of one
             else:
-                row.append(W_SHADE if blobs[y // 2][x // 2] else W_STONE)
+                row.append(W_SHADE if (SPECKLE and blobs[y // 2][x // 2])
+                           else W_STONE)
         rows.append(row)
     return rows
 
@@ -243,9 +276,9 @@ def door():
             elif band:
                 # the lock band: a dark rail with a lit top and the one
                 # warm feature on the door
-                if y == BAND_Y - BAND_H // 2:
+                if y < BAND_Y - BAND_H // 2 + LIT_PX:
                     row.append(D_LIT)
-                elif y == BAND_Y + BAND_H // 2 - 1:
+                elif y >= BAND_Y + BAND_H // 2 - LIT_PX:
                     row.append(D_FRAME)
                 elif 4 <= dx <= 9:
                     row.append(D_PANEL)                 # the plate
@@ -279,6 +312,31 @@ DOOR_INKS = [0,    # 0 frame    (  0,  0,  0)  black
              13,   # 1 metal    (128,128,128)  grey
              26,   # 2 lit      (255,255,255)  white
              15]   # 3 panel    (255,128,  0)  orange
+
+
+def single_rows(rows):
+    """-> how many vertical runs in this art are exactly ONE row tall.
+
+    THIS IS THE INVARIANT DETAIL 0 EXISTS TO HOLD.  The 2x fill samples
+    the texture once per two scanlines, so a feature one texel tall is
+    the thing it can drop entirely -- and whether it drops THIS one
+    depends on where the band happens to start, which is per pair and
+    unknowable from here.  So the art simply must not contain any.
+
+    MEASURED: the fine art has 58 of 334 runs one row tall on the wall
+    and 48 of 178 on the door, 17% and 27%.  The coarse art has none.
+    """
+    h, w = len(rows), len(rows[0])
+    n = 0
+    for x in range(w):
+        y = 0
+        while y < h:
+            r = 1
+            while y + r < h and rows[y + r][x] == rows[y][x]:
+                r += 1
+            n += (r == 1)
+            y += r
+    return n
 
 
 def stats(rows):

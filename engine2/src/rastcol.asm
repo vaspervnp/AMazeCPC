@@ -982,6 +982,15 @@ rc_jsmall
 rc_r1ok
     ld   (rc_r1),a
 rc_rows
+    ; ---- A DOOR PART WAY THROUGH ITS RUN HAS RISEN.  Walls never do,
+    ;      so this is one test on the kind byte for everything else.
+    ld   a,(rc_kind)
+    and  1
+    jr   z,rc_nolift
+    ld   a,(rc_r1)
+    call rc_lift
+    ld   (rc_r1),a
+rc_nolift
     ; (the pair's charge was taken at the TOP of rc_column, by rc_charge,
     ;  as an upper bound -- see costcol.inc.  Charging here, where the
     ;  band count and row count are exact, billed everything above this
@@ -1127,6 +1136,13 @@ rc_etsml
     ld   a,VP_H-1
 rc_et1ok
     ld   (rc_r1t),a
+    ld   a,(rc_kind)                ; ...and the taller column with it, or
+    and  1                          ; the edge run would hang below the
+    jr   z,rc_etnolift              ; door it belongs to
+    ld   a,(rc_r1t)
+    call rc_lift
+    ld   (rc_r1t),a
+rc_etnolift
 rc_etrows
 
     ; the byte column: 2*p + which side
@@ -1295,6 +1311,47 @@ rc_tx2
     ld   l,a
     ld   de,CTABT
     add  hl,de
+    ret
+
+; A = a face's BOTTOM row -> A = it, RAISED towards the horizon by
+; (rc_dlift)/256 of its distance from the horizon.
+;
+;  THIS IS HOW A DOOR OPENS: it goes UP.  Scaling the face's half height
+;  instead moved both edges and read as the door being crushed towards
+;  eye level rather than lifted out of the way.
+;
+;  ONLY THE BOTTOM MOVES, AND IT STOPS AT THE HORIZON.  That is not a
+;  cosmetic choice.  rc_up / rc_dn describe a pair's covered rows as ONE
+;  interval CENTRED ON THE HORIZON -- the whole occlusion scheme rests on
+;  it (see the header).  A bottom edge that stayed below the horizon
+;  keeps the covered rows contiguous through it, so the two bytes still
+;  describe them exactly; a bottom edge allowed to rise PAST the horizon
+;  would leave a hole between itself and the horizon that the interval
+;  cannot express, and a farther face would be skipped over rows it
+;  should have drawn.  So the lift is clamped, and the door vanishes
+;  (SOLID clears) on the frame it would have passed.
+;
+;  Clobbers AF B DE HL; C is preserved by rc_mul8 and carries the input.
+rc_lift
+    ld   c,a
+    ld   a,(rc_dlift)
+    or   a
+    jr   z,rcl_no
+    ld   e,a
+    ld   d,0
+    ld   a,c
+    sub  RC_RC
+    jr   c,rcl_no                   ; already at or above the horizon
+    jr   z,rcl_no
+    call rc_mul8                    ; HL = (row - RC_RC) * dlift
+    ld   a,c
+    sub  h                          ; ...of which H is the lift
+    cp   RC_RC
+    ret  nc
+    ld   a,RC_RC                    ; clamped: never past the horizon
+    ret
+rcl_no
+    ld   a,c
     ret
 
 ; HL = a half height, Q12.4 -> HL = j, clamped to [0, CJMAX].
@@ -1612,6 +1669,7 @@ rc_hq4      dw 0                ; ...and per-PAIR step
 rc_hr4      db 0
 rc_hneg     db 0
 rc_acc      db 0
+rc_dlift    db 0                ; how far a running door has risen, /256
 rc_texpg    db 0
 rc_page     db 0
 rc_step     dw 0

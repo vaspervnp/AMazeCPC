@@ -83,16 +83,20 @@
 ;  project.asm.
 ;
 ;  ------------------------------------------------------------------
-;  DOORS keep the shipped cell encoding, 2 = shut .. 6 = open, in the
-;  door list below; SOLID gets 2 while the door is anything but fully
-;  open and 0 when it is open, because SOLID is the kernel's input and
-;  the kernel's alphabet is exactly 0 open / 1 wall / 2 door.  A door is
-;  therefore SOLID to the player until it is fully open, and it is drawn
-;  as a door face until it is fully open -- engine2's quad carries only
-;  (kind, k), so a half-open door cannot be drawn half retracted the way
-;  the precalculated engine drew it.  The five states are real, they run
-;  one step per game frame, they just read as a 5-frame delay rather
-;  than as a sliding door.
+;  DOORS run 2 = shut .. 8 = open in the door list below, one step per
+;  game frame, so a door takes SIX frames.  SOLID gets 2 while the door
+;  is anything but fully open and 0 when it is open, because SOLID is the
+;  kernel's input and the kernel's alphabet is exactly 0 open / 1 wall /
+;  2 door.  A door is therefore SOLID to the player for the whole run and
+;  becomes passable on the frame it finishes.
+;
+;  AND THE RUN IS DRAWN.  The quad carries only (kind, k), so the shape
+;  of a half-open door cannot be expressed in the quad -- but it does not
+;  have to be: door_lift hands the renderer ONE byte, how far up the door
+;  has gone, and rc_column raises the bottom edge of every door face by
+;  that fraction of its distance from the horizon.  The door lifts out of
+;  the way.  It is clamped at the horizon, and rc_lift in rastcol.asm
+;  says why that clamp is a correctness requirement and not a taste.
 ;
 ;  SPACE acts on the door 0.75 cells IN FRONT of the player if there is
 ;  one, and otherwise on the nearest door whose centre is within 1.25
@@ -122,14 +126,13 @@ PRAD        equ 64          ; collision half-width, 8.8 (= 0.25 cell)
 ;  OPACITY and by coll_free for COLLISION, and a door that cleared early
 ;  would be walk-through-able while it still looks shut.
 ;
-;  AND THAT SHARED ARRAY IS WHY THE RUN IS NOT YET VISIBLE.  door_st is a
-;  real intermediate state -- shot_amaze3.py photographs it -- but the
-;  quad record carries only (kind, k), so a door part way open is still
-;  drawn as a whole door face.  Drawing the run needs the doorway to be
-;  SEE-THROUGH before it is WALKABLE, i.e. opacity and solidity split
-;  into two tests, and the room beyond marched through the opening.
-;  Until then this constant sets how long the door is shut for, not how
-;  it looks.
+;  THE RUN IS VISIBLE: door_lift below turns door_st into the fraction
+;  rc_column raises each door face's bottom edge by, so the door rises
+;  over these six frames instead of vanishing at the end of them.  What
+;  is behind it is still not drawn -- SOLID is read by the march for
+;  OPACITY as well as by coll_free for COLLISION, so the cell stays
+;  opaque for the whole run -- which is why the door lifts to reveal the
+;  FLOOR rather than the room beyond.
 ; ---------------------------------------------------------------------
 DOOR_SHUT   equ 2
 DOOR_OPEN   equ 8           ; 8 - 2 = SIX frames to run, one step each
@@ -487,118 +490,44 @@ coll_free
 
 
 ; ---------------------------------------------------------------------
-;  door_shrink -- MAKE THE DOOR'S RUN VISIBLE.
+;  door_lift -- MAKE THE DOOR'S RUN VISIBLE, and make it go UP.
 ;
 ;  A door runs DOOR_SHUT..DOOR_OPEN one step a game frame, and that run
 ;  used to be invisible: the quad record carries only (kind, k), so a
-;  door part way open was drawn as a whole door face and then simply
-;  VANISHED on the frame SOLID cleared.  It read as the door
-;  disappearing after six frames rather than opening over them.
+;  door part way open was drawn as a whole door face and then VANISHED
+;  on the frame SOLID cleared.
 ;
-;  This scales the HALF HEIGHTS of every door quad by
-;  (DOOR_OPEN - st) / (DOOR_OPEN - DOOR_SHUT), so the face shrinks
-;  towards the horizon across the run and is gone at the moment the door
-;  becomes passable.  It runs on the FINISHED quad list, between
-;  project_all and the rasteriser, so neither the march, nor the
-;  projector, nor either rasteriser has to know a door can be part open
-;  -- and the Python models, which are the spec for all three, do not
-;  move either.
+;  This hands rastcol.asm one number -- how far up the door has gone, as
+;  a fraction of 256 -- and rc_column raises the BOTTOM edge of every
+;  door face by that much of its distance from the horizon.  So the door
+;  lifts out of the way instead of shrinking towards eye level, which is
+;  what scaling the face's half height did and what it looked like.
 ;
-;  IT IS A SHRINK AND NOT A SLIDE, and that is forced.  A door that slid
-;  sideways or rose into the lintel would uncover the room BEYOND it,
-;  and there is no room beyond: SOLID is read by the march for OPACITY
-;  and by coll_free for COLLISION, so the cell stays opaque for the whole
-;  run and nothing behind it is ever marched.  Uncovering it would show
-;  bg_fill's ceiling and floor, i.e. a hole.  Shrinking about the horizon
-;  is the one motion that keeps the face over ground the march has
-;  actually filed.
+;  IT IS ONE BYTE AND NOT A PASS OVER THE QUAD LIST.  The first version
+;  walked QUADS after project_all and scaled the half heights of the door
+;  faces, two multiplies a quad; this writes a byte and the renderer does
+;  the rest where it already has the row range in hand.
 ;
-;  ONE OPENNESS FOR ALL DOOR QUADS, deliberately: the quad does not
-;  carry which door it came from, and door_act starts one door at a
-;  time, so in play there is exactly one door mid-run.  Two visible
-;  doors running at once would share a frame of the animation.
-;
-;  Clobbers AF BC DE HL IX.
+;  ONE FRACTION FOR ALL DOOR FACES, deliberately: the quad does not carry
+;  which door it came from, and door_act starts one door at a time, so in
+;  play there is exactly one door mid-run.
 ; ---------------------------------------------------------------------
-door_shrink
+door_lift
     ld   a,(door_anim)
     sub  DOOR_SHUT+1
-    ret  c                          ; at rest: full height faces
+    jr   c,dl_none                  ; at rest: the door is whole
     cp   DOOR_OPEN-DOOR_SHUT-1
-    ret  nc                         ; open: not drawn at all
+    jr   nc,dl_none                 ; open: not drawn at all
     ld   e,a
     ld   d,0
-    ld   hl,DSCALE
+    ld   hl,DLIFT
     add  hl,de
     ld   a,(hl)
-    ld   (ds_frac),a
-    ld   a,(fg_nquad)
-    or   a
-    ret  z
-    ld   b,a
-    ld   ix,QUADS
-dsq_l
-    push bc
-    bit  0,(ix+6)                   ; +6 kind, bit 0 = door
-    jr   z,dsq_next
-    ld   l,(ix+2)                   ; +2 hlo
-    ld   h,(ix+3)
-    call ds_scale
-    ld   (ix+2),l
-    ld   (ix+3),h
-    ld   l,(ix+4)                   ; +4 hhi
-    ld   h,(ix+5)
-    call ds_scale
-    ld   (ix+4),l
-    ld   (ix+5),h
-dsq_next
-    pop  bc
-    ld   de,QRECSZ
-    add  ix,de
-    djnz dsq_l
+    ld   (rc_dlift),a
     ret
-
-; HL = a half height, Q12.4 -> HL = (HL * (ds_frac)) >> 8.
-; Two 8x8s rather than a 16x8 loop: (hi*256 + lo)*f >> 8 = hi*f + (lo*f >> 8),
-; and mul8x8u is a quarter-square table lookup.  hi <= 24 and f <= 213, so
-; neither product leaves 16 bits.
-ds_scale
-    ; ---- CLAMP TO THE VIEWPORT FIRST, so the run scales the height you
-    ;      can SEE and not the geometric one.  A door you are close
-    ;      enough to open is typically twice the viewport tall -- 1536 in
-    ;      Q12.4 against CYH*16 = 768 -- and rc_column clips it to CYH
-    ;      either way, so scaling the raw half height spent the first
-    ;      four frames of the six moving a number that was clipped off
-    ;      the screen and nothing appeared to happen until the last two.
-    ;      Clamping first makes the visible height fall linearly across
-    ;      the whole run, at every distance.
-    ld   de,CYH*16
-    or   a
-    sbc  hl,de
-    jr   c,dss_under
-    ld   h,d                        ; taller than the viewport: it is
-    ld   l,e                        ; drawn as exactly the viewport
-    jr   dss_have
-dss_under
-    add  hl,de                      ; ...otherwise put it back
-dss_have
-    ld   (ds_h),hl
-    ld   a,(ds_frac)
-    ld   c,a
-    ld   a,(ds_h+1)
-    call mul8x8u                    ; HL = hi * f
-    ld   (ds_acc),hl
-    ld   a,(ds_frac)
-    ld   c,a
-    ld   a,(ds_h)
-    call mul8x8u                    ; HL = lo * f
-    ld   a,h                        ; ...of which we want the high byte
-    ld   hl,(ds_acc)
-    add  a,l
-    ld   l,a
-    ld   a,0
-    adc  a,h
-    ld   h,a
+dl_none
+    xor  a
+    ld   (rc_dlift),a
     ret
 
 
@@ -919,14 +848,12 @@ cf_x1       db 0
 
 door_n      db 0
 door_anim   db DOOR_SHUT        ; the state of whichever door is mid-run
-ds_h        dw 0                ; door_shrink scratch
-ds_acc      dw 0
-ds_frac     db 0
 
-; (DOOR_OPEN - st) * 256 / (DOOR_OPEN - DOOR_SHUT), for st = DOOR_SHUT+1
-; up. DOOR_SHUT itself is full height and never reaches here, and
-; DOOR_OPEN is not drawn at all.
-DSCALE      db 213,170,128,85,42
+; HOW FAR UP, as a fraction of 256 of the door's own height below the
+; horizon: (st - DOOR_SHUT) * 256 / (DOOR_OPEN - DOOR_SHUT), for
+; st = DOOR_SHUT+1 up.  DOOR_SHUT itself is whole and never reaches
+; here; DOOR_OPEN is not drawn at all.
+DLIFT       db 42,85,128,170,213
     assert DOOR_OPEN - DOOR_SHUT - 1 == 5   ; ...one entry per running step
 da_best     dw 0
 da_t        dw 0

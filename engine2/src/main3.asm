@@ -876,9 +876,9 @@ main_loop
     call cost_unit
     call march                      ; charges C_CELL per popped cell
     call project_all                ; charges per candidate face
-    ld   bc,C_DANIM                 ; the door animation walks the finished
-    call cost_unit                  ; quad list -- game.asm:door_shrink
-    call door_shrink
+    ld   bc,C_DANIM                 ; the door animation -- game.asm's
+    call cost_unit                  ; door_lift, one byte to the renderer
+    call door_lift
     call raster_paced               ; charges per quad
     ld   bc,C_HUD
     call cost_unit

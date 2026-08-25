@@ -40,7 +40,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _E2 = os.path.dirname(_HERE)
 sys.path.insert(0, _HERE)
 
-import colmodel                                            # noqa: E402
+import colmodel
+import walltex                                            # noqa: E402
 import rastermodel as rm                                   # noqa: E402
 
 BANK_BASE = 0x4000
@@ -67,6 +68,23 @@ def rthresh(c):
 
 def build():
     c = rm.cfg()
+
+    # ---- THE ART MUST HOLD THE INVARIANT ITS DETAIL SETTING PROMISES.
+    #      walltex.DETAIL 0 exists so the fill can sample once per TWO
+    #      scanlines without losing anything, and that is only true while
+    #      no feature is one texel tall.  Retuning a stone height or a
+    #      jitter can reintroduce one silently, so the BUILD checks it --
+    #      the same way main3.asm asserts MAXDOORS >= NDOORS rather than
+    #      trusting the map to stay small.
+    if not walltex.DETAIL:
+        for _name, _rows in (("wall", walltex.wall()),
+                             ("door", walltex.door())):
+            _n = walltex.single_rows(_rows)
+            assert _n == 0, (
+                "walltex.DETAIL is 0, which promises no feature is one "
+                "texel tall, but the %s art has %d single-row runs -- the "
+                "2x fill would drop them" % (_name, _n))
+
     blob = bytearray(A_RTHR - BANK_BASE)
 
     for base, pages in ((A_WALL, colmodel.wall_pages()),
