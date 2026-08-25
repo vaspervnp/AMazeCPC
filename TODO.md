@@ -350,6 +350,16 @@ fails if either misses. Anything that reasons about the worst frame —
 `C_CELL`, `QUADS`, the bucket occupancy, `PACE_FRAMES` — was fitted
 against the light half until now.
 
+**THE OVERLAY PASS IS NOT IN `colmodel.charge` YET.** A door in motion is
+drawn in a SECOND pass, on top and outside the occlusion scheme
+(`rastcol.asm:rc_pass`), so its pairs draw their FULL row range rather
+than the rows the cover left. The disc charges that correctly -- its own
+`rc_charge` reads the reset interval -- but `colmodel.charge` still walks
+the list once and costs those pairs against the cover, so it
+UNDER-estimates a moving-door frame. `pacescan`'s `moving` configuration
+is therefore optimistic until `colmodel` grows the same two passes. The
+disc paces itself right; the offline sweep does not yet agree with it.
+
 **`emu_march.py` had `BUCKHI` written down as `0x26`.** It stopped being
 true the day the working-RAM block moved up four pages for the
 course-joint rasteriser (`march.asm`'s memory map: it is `#2A`). The

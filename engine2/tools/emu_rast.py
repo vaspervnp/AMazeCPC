@@ -268,7 +268,7 @@ def from_kernel(nstates=24, seed=90210):
             qq = pmod.project_face(v[0], v[1], v[2], v[3],
                                    ax - ipx, ay - ipy, fd)
             if qq is not None:
-                out.append(qq + (1 if door else 0, k))
+                out.append(qq + (door, k))
     return out
 
 
@@ -540,7 +540,7 @@ def frames(nstates=60, seed=1337):
             qq = pmod.project_face(v[0], v[1], v[2], v[3],
                                    ax - ipx, ay - ipy, fd)
             if qq is not None:
-                qs.append(qq + (1 if door else 0, k))
+                qs.append(qq + (door, k))
         if not qs:
             continue
         geom = KERNEL_US[0] + KERNEL_US[1] * ref + KERNEL_US[2] * len(r["faces"])

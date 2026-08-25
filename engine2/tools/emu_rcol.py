@@ -292,7 +292,7 @@ def time_it(nstates=24):
             qq = pmod.project_face(v[0], v[1], v[2], v[3],
                                    ax - ipx, ay - ipy, fd)
             if qq is not None:
-                qs.append(qq + (1 if door else 0, k))
+                qs.append(qq + (door, k))
         if not qs:
             continue
         _scr, st = rig.expect(qs)
@@ -436,7 +436,7 @@ def _states(nstates, seed):
             qq = pmod.project_face(v[0], v[1], v[2], v[3],
                                    ax - ipx, ay - ipy, fd)
             if qq is not None:
-                qs.append(qq + (1 if door else 0, k))
+                qs.append(qq + (door, k))
         if qs:
             out.append((px, py, a, qs))
     return out

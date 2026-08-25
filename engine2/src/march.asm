@@ -615,8 +615,10 @@ mr_face
     ld a,0                          ; both doors and both get a face -- a
     jr c,mf_kset                    ; moving door is see-through to the
     ld a,1                          ; flood AND drawn, which is what lets
-mf_kset                             ; the room appear behind it
-    ld (mf_kind),a                  ; 0 = wall, 1 = door
+    jr z,mf_kset                    ; the room appear behind it
+    ld a,3                          ; ...and bit 1 says MOVING, which is
+mf_kset                             ; what makes rastcol.asm draw it LAST
+    ld (mf_kind),a                  ; and on top: 0 wall, 1 door, 3 moving
 
     ld h,FTAB/256                   ; painter key = L1 of the WALL cell
     ld a,O_LX1

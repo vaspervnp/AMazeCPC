@@ -93,7 +93,7 @@ def _quads(px, py, a):
         (ax, ay), _b, _n = pm.face_endpoints(wx, wy, fd)
         q = pm.project_face(v[0], v[1], v[2], v[3], ax - ipx, ay - ipy, fd)
         if q is not None:
-            out.append(q + (1 if door else 0, k))
+            out.append(q + (door, k))
     return out
 
 

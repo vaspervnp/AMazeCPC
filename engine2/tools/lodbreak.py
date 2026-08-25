@@ -99,7 +99,7 @@ def main(nstates=200, doors=False):
             q = pmod.project_face(v[0], v[1], v[2], v[3],
                                   ax - ipx, ay - ipy, fd)
             if q is not None:
-                quads.append(q + (1 if door else 0, k))
+                quads.append(q + (door, k))
         for f in face_charges(quads, c, P, cm):
             d = per[f["k"]]
             for key in ("us", "rows", "edges", "pairs", "skips"):

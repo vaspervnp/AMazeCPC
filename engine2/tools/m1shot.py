@@ -65,7 +65,7 @@ def faces(px, py, a):
         if s is None:
             continue
         q = pm.pack_quad(s)
-        out.append((q + (1 if door else 0, k), s))
+        out.append((q + (door, k), s))
     return out
 
 

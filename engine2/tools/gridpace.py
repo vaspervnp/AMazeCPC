@@ -91,7 +91,7 @@ def state_units(px, py, a, cfg):
             q = pm.project_face(v[0], v[1], v[2], v[3], ax - ipx, ay - ipy, fd)
             faces.append((q is not None, nclip[0]))
             if q is not None:
-                quads.append(q + (1 if door else 0, k))
+                quads.append(q + (door, k))
     finally:
         pm.lerp = real
 

@@ -277,8 +277,12 @@ def march(solid, px_fx, py_fx, a_idx, push_opaque=False):
                     continue
             key = abs(wx - pcx) + abs(wy - pcy)
             # 2 SHUT and 3 MOVING are both doors -- march.asm's
-            # `cp 2 / jr c` says wall below 2, door at or above it.
-            buckets[key].append((wx, wy, fdir, cell >= DOORC))
+            # `cp 2 / jr c` says wall below 2, door at or above it --
+            # and MOVING carries bit 1 as well, which is what makes
+            # rastcol.asm draw it last and on top of the room behind it.
+            buckets[key].append((wx, wy, fdir,
+                                 3 if cell == DOORMOV
+                                 else (1 if cell == DOORC else 0)))
             views[key].append(c[ea] + c[eb])
 
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):

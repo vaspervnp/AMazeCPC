@@ -193,8 +193,25 @@ raster_colframe
     ld   bc,#7F00+TEXCFG
     out  (c),c
 
-    ; ---- walk the list BACKWARDS.  Painter order reversed is front to
-    ;      back, so no sort and no scratch space.
+    ; ---- TWO PASSES, and the second one is what lets a door open all
+    ;      the way.  Pass 0 draws everything EXCEPT a door in motion,
+    ;      front to back with the occlusion interval as usual.  Pass 1
+    ;      then draws the moving doors ON TOP, out of the occlusion
+    ;      scheme entirely.
+    ;
+    ;      WHY IT HAS TO BE A SECOND PASS.  rc_up / rc_dn describe a
+    ;      pair's covered rows as ONE interval CENTRED ON THE HORIZON.
+    ;      A door rising past the horizon covers [r0, r1] with r1 above
+    ;      it -- an interval that does NOT touch the horizon, which those
+    ;      two bytes cannot express.  Drawn in the normal pass it had to
+    ;      be clamped at the horizon, and the door stopped half way and
+    ;      then vanished.  Drawn LAST and on top it needs no interval at
+    ;      all: it is the nearest thing at those pairs, so painting over
+    ;      what is already there IS the right answer, and the room behind
+    ;      it has already been drawn by pass 0.
+    xor  a
+    ld   (rc_over),a
+rc_pass
     ld   a,(fg_nquad)
     ld   (rc_left),a
     dec  a
@@ -216,6 +233,12 @@ rc_faceloop
     ld   (rc_left),a
     jr   nz,rc_faceloop
 
+    ld   hl,rc_over             ; ...and again for the moving doors
+    inc  (hl)
+    ld   a,(hl)
+    cp   2
+    jp   c,rc_pass
+
     ld   bc,#7FC4               ; bank 4 back before anything else runs
     out  (c),c
     ld   sp,(rc_sp)
@@ -228,6 +251,21 @@ rc_faceloop
 ;  rc_face -- HL = one quad record.  Paints whatever of it is visible.
 ; =====================================================================
 rc_face
+    ; ---- IS THIS FACE FOR THIS PASS?  Bit 1 of the kind byte is set by
+    ;      march.asm for a door part way through its run; those are drawn
+    ;      in pass 1 and nothing else is.  It is tested BEFORE the charge
+    ;      below, or every face would pay C_CFACE twice -- once per pass.
+    push hl
+    ld   de,6
+    add  hl,de
+    ld   a,(hl)                 ; +6 kind
+    pop  hl
+    and  2
+    rrca                        ; bit 1 -> 0 or 1
+    ld   c,a
+    ld   a,(rc_over)
+    cp   c
+    ret  nz                     ; not this pass
     if RC_PACED
     ; ---- charged at the VERY TOP, before the record is read, because
     ;      room-then-charge bills the work in front of a hook to the hook
@@ -298,6 +336,10 @@ rc_pbok
     ret  z                      ; no pair of its own
     ret  c
     ld   (rc_np),a
+
+    ld   a,(rc_over)            ; an overlay face ignores the cover, so
+    or   a                      ; "every pair finished" cannot skip it
+    jr   nz,rc_open
 
     ; ---- IS ANY OF THEM STILL OPEN?  A fully occluded face pays this
     ;      scan and nothing else -- no normalise, no divide, no setup --
@@ -563,6 +605,14 @@ rc_pairloop
     add  hl,de
     ld   (rc_pdn),hl
 
+    ld   a,(rc_over)            ; OVERLAY: forget what covered this pair.
+    or   a                      ; The door is in front of all of it, and
+    jr   z,rc_pnorm             ; pass 1 is the last thing to run, so
+    ld   hl,(rc_pup)            ; scribbling on the interval is free.
+    ld   (hl),RC_RC+1
+    ld   hl,(rc_pdn)
+    ld   (hl),RC_RC+1
+rc_pnorm
     ld   hl,(rc_pup)
     ld   a,(hl)
     or   a
@@ -985,8 +1035,10 @@ rc_rows
     ; ---- A DOOR PART WAY THROUGH ITS RUN HAS RISEN.  Walls never do,
     ;      so this is one test on the kind byte for everything else.
     ld   a,(rc_kind)
-    and  1
-    jr   z,rc_nolift
+    and  2                          ; bit 1: a door in MOTION, and only
+    jr   z,rc_nolift                ; those ever rise
+    ld   a,(rc_r0)
+    ld   (rc_ltop),a
     ld   a,(rc_r1)
     call rc_lift
     ld   (rc_r1),a
@@ -1137,8 +1189,10 @@ rc_etsml
 rc_et1ok
     ld   (rc_r1t),a
     ld   a,(rc_kind)                ; ...and the taller column with it, or
-    and  1                          ; the edge run would hang below the
+    and  2                          ; the edge run would hang below the
     jr   z,rc_etnolift              ; door it belongs to
+    ld   a,(rc_r0t)
+    ld   (rc_ltop),a
     ld   a,(rc_r1t)
     call rc_lift
     ld   (rc_r1t),a
@@ -1320,16 +1374,17 @@ rc_tx2
 ;  instead moved both edges and read as the door being crushed towards
 ;  eye level rather than lifted out of the way.
 ;
-;  ONLY THE BOTTOM MOVES, AND IT STOPS AT THE HORIZON.  That is not a
-;  cosmetic choice.  rc_up / rc_dn describe a pair's covered rows as ONE
-;  interval CENTRED ON THE HORIZON -- the whole occlusion scheme rests on
-;  it (see the header).  A bottom edge that stayed below the horizon
-;  keeps the covered rows contiguous through it, so the two bytes still
-;  describe them exactly; a bottom edge allowed to rise PAST the horizon
-;  would leave a hole between itself and the horizon that the interval
-;  cannot express, and a farther face would be skipped over rows it
-;  should have drawn.  So the lift is clamped, and the door vanishes
-;  (SOLID clears) on the frame it would have passed.
+;  ONLY THE BOTTOM MOVES, and it travels the face's WHOLE height --
+;  from its own bottom row all the way to its own top row, so the door
+;  opens completely rather than stopping half way.
+;
+;  IT COULD NOT DO THAT IN THE NORMAL PASS.  rc_up / rc_dn describe a
+;  pair's covered rows as ONE interval CENTRED ON THE HORIZON, and a door
+;  risen past the horizon covers an interval that does not touch it --
+;  which those two bytes cannot express.  So it was clamped at the
+;  horizon, and the door stopped half way and then vanished.  A moving
+;  door is now drawn in a SECOND PASS, on top and outside the occlusion
+;  scheme altogether (see raster_colframe), and the clamp goes with it.
 ;
 ;  Clobbers AF B DE HL; C is preserved by rc_mul8 and carries the input.
 rc_lift
@@ -1340,15 +1395,17 @@ rc_lift
     ld   e,a
     ld   d,0
     ld   a,c
-    sub  RC_RC
-    jr   c,rcl_no                   ; already at or above the horizon
+    ld   hl,rc_ltop
+    sub  (hl)                       ; the face's own height at this pair
+    jr   c,rcl_no
     jr   z,rcl_no
-    call rc_mul8                    ; HL = (row - RC_RC) * dlift
+    call rc_mul8                    ; HL = height * dlift
     ld   a,c
     sub  h                          ; ...of which H is the lift
-    cp   RC_RC
+    ld   hl,rc_ltop
+    cp   (hl)
     ret  nc
-    ld   a,RC_RC                    ; clamped: never past the horizon
+    ld   a,(hl)                     ; never above its own top row
     ret
 rcl_no
     ld   a,c
@@ -1670,6 +1727,8 @@ rc_hr4      db 0
 rc_hneg     db 0
 rc_acc      db 0
 rc_dlift    db 0                ; how far a running door has risen, /256
+rc_over     db 0                ; 1 while drawing the overlay pass
+rc_ltop     db 0                ; the top row rc_lift measures from
 rc_texpg    db 0
 rc_page     db 0
 rc_step     dw 0
@@ -1693,8 +1752,16 @@ rc_tf       db 0                ; rc_charge: rows still free at the pair
 rc_jhi      db 0                ; ...upper bound on the taller column's j
     endif
 
-rc_up       defs CNPAIR         ; uncovered rows above the horizon
-rc_dn       defs CNPAIR         ; first uncovered row below it
+; THE OCCLUSION ARRAYS LIVE IN THE FREE RAM ABOVE QUADS, not in the code
+; segment.  They are CNPAIR bytes each and `assert game_end <= BUCK0`
+; fired the moment the second drawing pass arrived; march.asm places
+; SOLID and MARK the same way and game.asm the door tables.  QUADS ends
+; at #3DBF and the door tables take #3DC0-#3DEF, so #3E00 up is free, and
+; the CPU stack tops out at #3FF0.
+RC_COVER    equ #3E00
+rc_up       equ RC_COVER            ; uncovered rows above the horizon
+rc_dn       equ RC_COVER+CNPAIR     ; first uncovered row below it
+    assert RC_COVER+CNPAIR*2 <= #3FF0
 
 
 ; =====================================================================
