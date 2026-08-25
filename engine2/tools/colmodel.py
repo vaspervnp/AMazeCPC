@@ -294,27 +294,29 @@ def new_cover(c):
     return [[c.CYH] * n, [c.CYH + 1] * n]
 
 
-def lift_row(bottom, top, j, cyh, dlift):
-    """rastcol.asm:rc_lift -- where a sliding slab's bottom edge is now.
+def slide(rows, idx, step, dlift):
+    """rastcol.asm:rc_slide -- how far a moving door's slab has gone up,
+    and its texture with it.
 
-    IT MOVES BY A FRACTION OF THE SLAB, NOT OF WHAT YOU CAN SEE OF IT.
-    A door close enough to open is typically twice the viewport tall, so
-    its VISIBLE height is half the slab; lifting by dlift/256 of the
-    visible rows moved the geometry at half the speed the texture was
-    sliding, and the door stopped half way up and then vanished when
-    SOLID cleared.  The slab is 2j+1 rows unclipped and its bottom edge
-    is at CYH+j, so:
+    -> (d, idx') where d is the rise in ROWS and idx' the coordinate
+    shifted by exactly those rows:
 
-        d      = (2j+1) * dlift >> 8      rows it has risen
-        bottom = CYH + j - d              its edge, then clipped
+        d    = (rows * dlift) >> 8
+        idx' = idx + d * step
 
-    which is the same fraction the texture offset uses -- dlift/256 of
-    the WHOLE art -- so the two now move together.
+    THE SHIFT IS THE SAME ROWS TIMES THE SAME STEP, so the slab is rigid
+    by construction -- there is no second constant that has to be kept in
+    step with the first.
+
+    AND `rows` IS WHAT IS ON SCREEN, NOT THE WHOLE SLAB.  A door close
+    enough to open is about twice the viewport tall, so its bottom edge
+    starts BELOW the screen.  Measured against the whole slab, the first
+    quarter of the run moved an edge nobody could see: the opening did
+    not grow, the art slid on its own, and what the player saw was a copy
+    of the door left standing while the texture crawled past it.
     """
-    if dlift <= 0:
-        return bottom
-    d = (((2 * j + 1) * dlift) >> 8)
-    return max(top, min(bottom, cyh + j - d))
+    d = (rows * dlift) >> 8
+    return d, (idx + d * step) & 0xFFFF
 
 
 def is_moving(q):
@@ -467,20 +469,12 @@ def pair_walk(q, c, cover=None, over=False, dlift=0):
         j = js
         r0 = max(0, c.CYH - js)
         r1 = min(c.VP_H - 1, c.CYH + js)
-        if moving:
-            r1 = lift_row(r1, r0, js, c.CYH, dlift)
         if r1 < r0:
             continue
         step, idx0 = tab[tix(hs)]
-        if moving:
-            # THE SLAB HAS SLID UP AND THE ART WENT WITH IT.  Raising the
-            # bottom row alone clips the door and leaves the texture
-            # nailed in place -- the lock band stays at eye level the
-            # whole way up.  A slab risen by dlift/256 of its height
-            # shows, at its first visible row, the point dlift/256 of the
-            # way down the art.  The coordinate is 8.8 over a 256-byte
-            # page, so that is dlift in its high byte.
-            idx0 = (idx0 + (dlift << 8)) & 0xFFFF
+        if moving and r1 > r0:
+            d, idx0 = slide(r1 - r0, idx0, step, dlift)
+            r1 -= d
         # The band ABOVE the horizon starts at the face's own first
         # visible row, so its texture coordinate is CTAB's idx0 and needs
         # no arithmetic at all.  The band BELOW starts wherever the nearer
@@ -500,12 +494,11 @@ def pair_walk(q, c, cover=None, over=False, dlift=0):
         r0t, r1t = r0, r1
         if jt > js:
             stept, idx0t = tab[tix(ht)]
-            if moving:
-                idx0t = (idx0t + (dlift << 8)) & 0xFFFF
             r0t = max(0, c.CYH - jt)
             r1t = min(c.VP_H - 1, c.CYH + jt)
-            if moving:
-                r1t = lift_row(r1t, r0t, jt, c.CYH, dlift)
+            if moving and r1t > r0t:
+                dt, idx0t = slide(r1t - r0t, idx0t, stept, dlift)
+                r1t -= dt
             e1 = min(r0 - 1, up[p])
             if r0t <= e1:
                 edges.append((r0t, e1, idx0t, ofs))

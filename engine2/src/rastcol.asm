@@ -1004,25 +1004,6 @@ rc_jset
     inc  hl
     ld   d,(hl)
     ld   (rc_idx0),de
-    ; ---- A DOOR IN MOTION HAS SLID UP, AND THE TEXTURE WENT WITH IT.
-    ;      Raising the bottom row alone CLIPS the slab and leaves the art
-    ;      nailed where it was -- the lock band sat in the middle of the
-    ;      screen the whole way up.  A slab that has risen by dlift/256
-    ;      of its height shows, at its first visible row, the point
-    ;      dlift/256 of the way DOWN the art; the top of the slab has
-    ;      gone above the lintel.  The coordinate is 8.8 over a 256-byte
-    ;      page, so "dlift/256 of the whole texture" is dlift added to
-    ;      its HIGH byte, and nothing else has to change: the per-row
-    ;      step is unaltered, and the band below and the edge runs both
-    ;      derive their start from this one.
-    ld   a,(rc_kind)
-    and  2
-    jr   z,rc_noslide
-    ld   a,(rc_dlift)
-    ld   hl,rc_idx0+1
-    add  a,(hl)
-    ld   (hl),a
-rc_noslide
 
     ; ---- the row range: RC_RC -+ j, clipped to the viewport
     ld   hl,(rc_j)
@@ -1056,13 +1037,20 @@ rc_rows
     ld   a,(rc_kind)
     and  2                          ; bit 1: a door in MOTION, and only
     jr   z,rc_nolift                ; those ever rise
-    ld   a,(rc_r0)
-    ld   (rc_ltop),a
+    ld   hl,rc_r0
     ld   a,(rc_r1)
-    ld   c,a                        ; C survives rc_mul8; B does not
-    ld   hl,(rc_j)
-    call rc_lift
-    ld   (rc_r1),a
+    sub  (hl)                       ; the rows of the slab ON SCREEN
+    jr   c,rc_nolift
+    jr   z,rc_nolift
+    ld   hl,(rc_step)
+    ld   (rc_lstep),hl
+    ld   hl,rc_idx0
+    call rc_slide                   ; A = d, and idx0 slid by d rows
+    ld   hl,rc_r1
+    ld   c,a
+    ld   a,(hl)
+    sub  c
+    ld   (hl),a                     ; ...and the edge risen by the same
 rc_nolift
     ; (the pair's charge was taken at the TOP of rc_column, by rc_charge,
     ;  as an upper bound -- see costcol.inc.  Charging here, where the
@@ -1182,14 +1170,6 @@ rc_nobanddn
     inc  hl
     ld   d,(hl)
     ld   (rc_eidx0),de
-    ld   a,(rc_kind)                ; ...and the taller column slides too
-    and  2
-    jr   z,rc_enoslide
-    ld   a,(rc_dlift)
-    ld   hl,rc_eidx0+1
-    add  a,(hl)
-    ld   (hl),a
-rc_enoslide
 
     ; the taller column's own row range, clipped to the viewport
     ld   hl,(rc_jt)
@@ -1231,13 +1211,20 @@ rc_etrows
     ld   a,(rc_kind)
     and  2
     jr   z,rc_etnolift
-    ld   a,(rc_r0t)
-    ld   (rc_ltop),a
+    ld   hl,rc_r0t
     ld   a,(rc_r1t)
+    sub  (hl)
+    jr   c,rc_etnolift
+    jr   z,rc_etnolift
+    ld   hl,(rc_estep)
+    ld   (rc_lstep),hl
+    ld   hl,rc_eidx0
+    call rc_slide
+    ld   hl,rc_r1t
     ld   c,a
-    ld   hl,(rc_jt)
-    call rc_lift
-    ld   (rc_r1t),a
+    ld   a,(hl)
+    sub  c
+    ld   (hl),a
 rc_etnolift
 
     ; the byte column: 2*p + which side
@@ -1428,58 +1415,51 @@ rc_tx2
 ;  scheme altogether (see raster_colframe), and the clamp goes with it.
 ;
 ;  Clobbers AF B DE HL; C is preserved by rc_mul8 and carries the input.
-rc_lift
-    ld   a,(rc_dlift)
-    or   a
-    ld   a,c
-    ret  z                          ; not moving: the bottom is unchanged
-    ld   (rc_lj),hl                 ; keep j
-    add  hl,hl
-    inc  hl                         ; full = 2j+1, the UNCLIPPED height
-    ld   (rc_lfull),hl
-    ; d = (full * dlift) >> 8, as two 8x8s: (hi*256 + lo)*f >> 8 is
-    ; hi*f + (lo*f >> 8), and full <= 769 so hi <= 3.
-    ld   a,(rc_dlift)
+; A = the rows of a face that are ON SCREEN, HL -> its 8.8 texture
+; coordinate, DE = the per-row step.
+;   -> A = d, how far the slab has slid up, in rows
+;      (HL) advanced by d rows' worth of texture
+;
+;  A DOOR IN MOTION SLIDES, AND THE ART GOES WITH IT EXACTLY.  The shift
+;  is the SAME number of rows the edge moved times the per-row step, so
+;  the slab stays rigid by construction -- there is no second constant to
+;  keep in step with the first.
+;
+;  IT IS MEASURED IN ROWS ON SCREEN, NOT IN THE SLAB.  A door close
+;  enough to open is about twice the viewport tall, so its bottom edge
+;  starts BELOW the screen: a rise measured against the whole slab spent
+;  its first quarter moving an edge nobody could see, the opening did not
+;  grow at all, and the art slid on its own -- which is exactly what a
+;  copy of the door left behind looks like.  Against the rows on screen
+;  the opening grows from the first frame and reaches the lintel on the
+;  last.
+;
+;  Clobbers AF BC DE HL.
+rc_slide
+    ld   c,a                        ; C = the visible rows; rc_mul8 keeps it
+    ld   (rc_lidx),hl
     ld   e,a
     ld   d,0
-    ld   a,(rc_lfull+1)
-    call rc_mul8
-    ld   (rc_lacc),hl
     ld   a,(rc_dlift)
-    ld   e,a
-    ld   d,0
-    ld   a,(rc_lfull)
-    call rc_mul8
-    ld   e,h                        ; ...the high byte of lo*f
-    ld   d,0
-    ld   hl,(rc_lacc)
-    add  hl,de                      ; HL = d, the rows it has risen
+    call rc_mul8                    ; HL = rows * dlift
+    ld   a,h                        ; d = (rows * dlift) >> 8, <= rows
+    ld   (rc_ld),a
+    ld   hl,(rc_lidx)
+    ld   c,(hl)
+    inc  hl
+    ld   b,(hl)                     ; BC = the coordinate
+    push bc
+    ld   a,(rc_ld)
+    ld   de,(rc_lstep)
+    call rc_mul8                    ; HL = d * step, low 16 -- it wraps,
+    pop  de                         ; and the page is 256 bytes so it may
+    add  hl,de                      ; wrap the same way the walk does
     ex   de,hl
-    ld   hl,(rc_lj)                 ; CYH + j, the UNCLIPPED bottom edge --
-    ld   a,l                        ; added WITHOUT touching BC, because C
-    add  a,RC_RC                    ; carries the clipped bottom across
-    ld   l,a                        ; both rc_mul8 calls and `ld bc,nn`
-    ld   a,h                        ; would have thrown it away
-    adc  a,0
-    ld   h,a
-    or   a
-    sbc  hl,de                      ; ...after the slide
-    bit  7,h
-    jr   nz,rcl_top                 ; risen clean off the top
-    ld   a,h
-    or   a
-    jr   nz,rcl_keep                ; still below the viewport: keep clip
-    ld   a,l
-    cp   c
-    jr   nc,rcl_keep                ; ...never lower than it already was
-    ld   hl,rc_ltop
-    cp   (hl)
-    ret  nc
-rcl_top
-    ld   a,(rc_ltop)                ; never above its own top row
-    ret
-rcl_keep
-    ld   a,c
+    ld   hl,(rc_lidx)
+    ld   (hl),e
+    inc  hl
+    ld   (hl),d
+    ld   a,(rc_ld)
     ret
 
 ; HL = a half height, Q12.4 -> HL = j, clamped to [0, CJMAX].
@@ -1833,14 +1813,12 @@ rc_sp       equ RC_VARS+98
 rc_sp2      equ RC_VARS+100  
 rc_tf       equ RC_VARS+102  ; rc_charge: rows still free at the pair
 rc_jhi      equ RC_VARS+103  ; ...upper bound on the taller column's j
-; rc_lift's 16-bit scratch.  The slide is computed over the face's FULL
-; height, 2j+1, which reaches 769 rows on a near door -- so it does not
-; fit the byte arithmetic the rest of this block is made of.
-rc_lj       equ RC_VARS+104     ; j, kept across the two multiplies
-rc_lfull    equ RC_VARS+106     ; 2j+1
-rc_lacc     equ RC_VARS+108     ; the high half of the product
-rc_ltop     equ RC_VARS+110     ; the face's own top row at this pair
-    assert RC_VARS+111 <= #3FF0
+; rc_slide's scratch.  The row count is a byte, but the coordinate and
+; the step are 16-bit and rc_mul8 wants DE, so they go through memory.
+rc_lidx     equ RC_VARS+104     ; rc_slide: -> the coordinate it moves
+rc_lstep    equ RC_VARS+106     ; ...its per-row step
+rc_ld       equ RC_VARS+108     ; ...and the rows it decided on
+    assert RC_VARS+109 <= #3FF0
 
 ; ...EXCEPT this one, which stays a LABEL in the code segment because it
 ; is the one byte a harness has to write from outside: rasm puts only
