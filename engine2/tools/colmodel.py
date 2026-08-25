@@ -534,6 +534,24 @@ def pair_walk(q, c, cover=None, over=False, dlift=0):
     return
 
 
+def far_quad(c):
+    """-> the FAR PLANE as a quad record, or None when it is off.
+
+    A flat face spanning the whole viewport at a fixed half height,
+    handed to the ordinary face walk AFTER the real ones and BEFORE the
+    moving doors.  The ordinary occlusion then decides where it lands:
+    only on the pairs no real face covered.  Where the room genuinely
+    ends inside the march radius it draws nothing.
+
+    It is a wall that is not there, and that is the point -- marching far
+    enough to draw a real one costs about two vsync periods per cell of
+    sight (vpcfg.inc), and this costs one face.
+    """
+    if not c.RC_FARH:
+        return None
+    return (0, c.VP_BW, c.RC_FARH, c.RC_FARH, 0, 8)
+
+
 def passes(quads):
     """-> the quad list split the way raster_colframe walks it.
 
@@ -620,7 +638,7 @@ def charge_terms(quads, c, dlift=0):
     """
     cover = new_cover(c)
     out = []
-    if not quads:
+    if not quads and not far_quad(c):
         return out                       # raster_colframe rets before
     z = {"frame": 0, "face": 0, "skip": 0, "pair": 0,
          "bands": 0, "rows": 0, "edges": 0, "steps": 0}
@@ -630,7 +648,9 @@ def charge_terms(quads, c, dlift=0):
     # ones that are not for that pass, so each quad pays C_CFACE exactly
     # once -- in its own pass.
     p0, p1 = passes(quads)
-    for over, group in ((False, p0), (True, p1)):
+    far = far_quad(c)
+    for over, group in ((False, p0), (False, [far] if far else []),
+                        (True, p1)):
       for q in reversed(group):
         out.append(dict(z, face=1))      # the top of rc_face: every record
         for i in pair_walk(q, c, cover, over, dlift):
@@ -691,7 +711,9 @@ def render(quads, c=None, pages_wall=None, pages_door=None,
     # door in MOTION, front to back, and then the moving doors ON TOP and
     # outside the occlusion interval.  See passes().
     p0, p1 = passes(quads)
-    for over, group in ((False, p0), (True, p1)):
+    far = far_quad(c)
+    for over, group in ((False, p0), (False, [far] if far else []),
+                        (True, p1)):
       for q in reversed(group):
         pages = pd if (q[4] & 1) else pw
         for (p, u, _j, _r0, _r1, step, bands,

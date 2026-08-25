@@ -65,6 +65,10 @@ class Cfg:
         self.XMAX_Q4 = v["XMAX_Q4"]
         self.MAXPUSH = v["MAXPUSH"]
         self.COURSES = v["COURSES"]
+        # THE FAR PLANE.  0 turns it off; see the note in vpcfg.inc for
+        # what it fakes and why marching further instead costs two vsync
+        # periods a cell.
+        self.RC_FARH = v.get("RC_FARH", 0)
         assert self.CY_Q4 == self.CYH * 16
         assert self.CYH * 2 == self.VP_H
         assert self.MAXPUSH * 2 == self.VP_BW

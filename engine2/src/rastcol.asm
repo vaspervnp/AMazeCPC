@@ -156,9 +156,13 @@ RC_SCRW     equ 80
 ;  raster_colframe -- the whole quad list, front to back.
 ; ---------------------------------------------------------------------
 raster_colframe
+    if RC_FARH == 0
     ld   a,(fg_nquad)
     or   a
     ret  z
+    endif
+    ; ...WITH A FAR PLANE THERE IS ALWAYS SOMETHING TO DRAW, even when the
+    ; march filed nothing at all -- which is the view that needs it most.
     ld   (rc_sp),sp
     if RC_PACED
     ; WHAT THE FRAME'S OWN SETUP COSTS -- the two LDIRs that clear the
@@ -213,6 +217,8 @@ raster_colframe
     ld   (rc_over),a
 rc_pass
     ld   a,(fg_nquad)
+    or   a
+    jp   z,rc_noface            ; no faces at all: straight to the far plane
     ld   (rc_left),a
     dec  a
     ld   l,a
@@ -232,9 +238,29 @@ rc_faceloop
     dec  a
     ld   (rc_left),a
     jr   nz,rc_faceloop
-
-    ld   hl,rc_over             ; ...and again for the moving doors
-    inc  (hl)
+rc_noface
+    ld   hl,rc_over
+    ld   a,(hl)
+    or   a
+    jr   nz,rc_nofar
+    if RC_FARH
+    ; ---- THE FAR PLANE, between the real faces and the moving doors.
+    ;      It is farther than every real face, so front to back it comes
+    ;      after them; and it must come BEFORE the overlay pass, which
+    ;      scribbles on the occlusion state of the pairs it draws.
+    ;
+    ;      It is an ordinary FACE and goes through the ordinary rc_face,
+    ;      so the ordinary occlusion decides where it lands: only on the
+    ;      pairs no real face covered.  See vpcfg.inc for why the honest
+    ;      alternative -- marching further -- costs two vsync periods a
+    ;      cell and this costs one face.
+    push hl
+    ld   hl,rc_farrec
+    call rc_face
+    pop  hl
+    endif
+rc_nofar
+    inc  (hl)                   ; ...and again for the moving doors
     ld   a,(hl)
     cp   2
     jp   c,rc_pass
@@ -1839,6 +1865,17 @@ rc_ld       equ RC_VARS+108     ; ...and the rows it decided on
 ; labels in the .sym file, never equs, so an equ here is invisible to
 ; engine2/tools/emu_rcol.py -- which pokes it to verify the door's slide.
 ; door_lift writes it on the disc; the test harness pokes it directly.
+; THE FAR PLANE'S RECORD, in exactly the layout kernel.asm writes: a
+; flat face spanning the whole viewport at RC_FARH, kind 0 (wall), and a
+; painter key one past the farthest the march can file.
+rc_farrec   db 0, VP_BW
+            dw RC_FARH, RC_FARH
+            db 0, 8                 ; kind 0 = wall; the painter key is
+                                    ; a literal because this renderer
+                                    ; never reads it -- only `kind` picks
+                                    ; anything -- and gen_slopes.inc's
+                                    ; RMAX is not in the test harness
+
 rc_dlift    db 0
 
 ; THE OCCLUSION ARRAYS LIVE IN THE FREE RAM ABOVE QUADS, not in the code

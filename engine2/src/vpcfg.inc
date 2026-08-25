@@ -361,3 +361,58 @@ COURSES      equ 0
 ;  119.81 ms, 8.35 fps, locked over the whole reachable state space.
 ; ------------------------------------------------------------------
 VPCOL        equ 1
+
+; --------------------------------------------------------------------
+;  RC_FARH -- THE FAR PLANE, in Q12.4 half-scanlines.  0 turns it off.
+;
+;  The march reaches L1 R_MAX and files faces to L1 R_MAX+1, and BEYOND
+;  THAT NOTHING IS DRAWN -- so a sight line down a corridor or through an
+;  open door simply stops, and what fills the gap is bg_fill's ceiling
+;  and floor.  The room reads as an open field with a sliver of wall on
+;  the horizon.
+;
+;  THE HONEST FIX IS TO MARCH FURTHER AND IT IS NOT AFFORDABLE.  MEASURED
+;  (engine2/tools/roomcost.py and the R_MAX sweep in the handoff): the
+;  flood's area grows as the square of the radius, so one more cell of
+;  sight costs about TWO VSYNC PERIODS --
+;
+;      R_MAX 6   worst charged frame 178193 us   11 periods   4.55 fps
+;      R_MAX 7                       220574      13           3.85
+;      R_MAX 8                       243486      14           3.58
+;
+;  -- and it needs an eighth face bucket, because march.asm files by
+;  |dx|+|dy| with no upper bound and a key of 8 would land in the flood
+;  stack.
+;
+;  SO THIS DRAWS A WALL THAT IS NOT THERE.  It is a synthetic FACE, flat,
+;  at a fixed half height, spanning the whole viewport, handed to the
+;  ordinary rc_face after the real ones -- so the ordinary occlusion
+;  decides where it lands, and it lands ONLY on the pairs no real face
+;  covered.  Where the room genuinely ends within the march radius it
+;  draws nothing at all.
+;
+;  IT IS A FAKE AND THE FAKE IS THE POINT: it costs one face and the
+;  pairs that were empty anyway, and it does not touch the flood.
+;
+;  96 is a wall 8 cells off (CYH*16/8), a 13-scanline band on the
+;  horizon -- one cell beyond the farthest face the march can file, so it
+;  never contradicts a real wall it could have drawn.
+;
+;  IT SHIPS AT 0, AND THE MEASUREMENT IS WHY.  "Cheap to draw" was wrong:
+;
+;      far plane OFF   worst charged frame 178193 us   11 periods
+;      far plane ON                        224567      13
+;      R_MAX 7 instead                     220574      13
+;
+;  It costs THE SAME AS MARCHING A CELL FURTHER, and marching gives real
+;  walls where this gives a painted one.  The reason is the reason
+;  engine2/tools/pcprof.py already found: a pair costs C_COLS = 1800 us
+;  of SETUP whatever it draws, so a 13-scanline band across 22 pairs is
+;  39600 us before a pixel is written -- as much as a full-height wall.
+;
+;  A far plane that is actually cheap has to be its own fill and not a
+;  FACE: one constant band, no u division, no Bresenham probes, no CTABT,
+;  no per-pair face machinery.  That is about 8000 us by the same
+;  arithmetic, and it is the version worth building.
+; --------------------------------------------------------------------
+RC_FARH      equ 0
