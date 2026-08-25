@@ -294,7 +294,26 @@ def new_cover(c):
     return [[c.CYH] * n, [c.CYH + 1] * n]
 
 
-def pair_walk(q, c, cover=None):
+def lift_row(bottom, top, dlift):
+    """rastcol.asm:rc_lift -- raise a face's BOTTOM row towards its top.
+
+    A door in motion rises: only the bottom edge moves, and it travels
+    the face's whole height, so `dlift` of 256 puts it on the top row.
+    The asm takes the HIGH BYTE of height*dlift, i.e. an unsigned
+    (height*dlift) >> 8, and clamps at the top.
+    """
+    if dlift <= 0 or bottom <= top:
+        return bottom
+    return max(top, bottom - (((bottom - top) * dlift) >> 8))
+
+
+def is_moving(q):
+    """Bit 1 of the kind byte: a door part way through its run.  Bit 0
+    still says `door` and still picks the texture."""
+    return bool(q[4] & 2)
+
+
+def pair_walk(q, c, cover=None, over=False, dlift=0):
     """Walk one face's column PAIRS front to back, EVERY pair in the
     face's range -- the ones a nearer face already owns too.
 
@@ -339,7 +358,8 @@ def pair_walk(q, c, cover=None):
         return
     up, dn = (cover if cover is not None
               else [[c.CYH] * npair, [c.CYH + 1] * npair])
-    if all(up[p] < 0 and dn[p] > c.VP_H - 1 for p in range(pa, pb)):
+    if not over and all(up[p] < 0 and dn[p] > c.VP_H - 1
+                        for p in range(pa, pb)):
         return
 
     _sh, han, hbn = normalise(w, ha, hb)
@@ -348,6 +368,7 @@ def pair_walk(q, c, cover=None):
     dD = 2 * (hbn - han)
     dh = hb - ha
     hq = (dh if dh >= 0 else -dh) // w2
+    moving = is_moving(q) and dlift > 0
     tab = CTAB()
 
     for p in range(pa, pb):
@@ -360,11 +381,17 @@ def pair_walk(q, c, cover=None):
         def _h(tt):
             return (ha + (tt * dh) // w2) if dh >= 0 else (ha - (tt * -dh) // w2)
 
+        if over:
+            # OVERLAY: forget what covered this pair.  The moving door is
+            # in front of all of it and this is the last pass to run, so
+            # scribbling on the interval is free -- rastcol.asm's
+            # rc_pairloop writes the same two bytes.
+            up[p], dn[p] = c.CYH, c.CYH + 1
         t2c = min(max(2 * (2 * p - xa) + 2, 1), w2 - 1)
         delta = min(2 * (2 * (p + 1) - xa) + 2, w2 - 1) - t2c
         info = {"p": p, "up0": up[p], "dn0": dn[p],
                 "h": _h(t2c), "hq": hq, "delta": delta}
-        if up[p] < 0 and dn[p] > c.VP_H - 1:
+        if not over and up[p] < 0 and dn[p] > c.VP_H - 1:
             info["closed"] = True
             yield info
             continue
@@ -430,6 +457,8 @@ def pair_walk(q, c, cover=None):
         j = js
         r0 = max(0, c.CYH - js)
         r1 = min(c.VP_H - 1, c.CYH + js)
+        if moving:
+            r1 = lift_row(r1, r0, dlift)
         if r1 < r0:
             continue
         step, idx0 = tab[tix(hs)]
@@ -454,6 +483,8 @@ def pair_walk(q, c, cover=None):
             stept, idx0t = tab[tix(ht)]
             r0t = max(0, c.CYH - jt)
             r1t = min(c.VP_H - 1, c.CYH + jt)
+            if moving:
+                r1t = lift_row(r1t, r0t, dlift)
             e1 = min(r0 - 1, up[p])
             if r0t <= e1:
                 edges.append((r0t, e1, idx0t, ofs))
@@ -481,7 +512,21 @@ def pair_walk(q, c, cover=None):
     return
 
 
-def face_columns(q, c, cover=None):
+def passes(quads):
+    """-> the quad list split the way raster_colframe walks it.
+
+    TWO PASSES, and the second is what lets a door open all the way.
+    Pass 0 is everything except a door in MOTION, front to back with the
+    occlusion interval; pass 1 is the moving doors, drawn on top and
+    outside the interval altogether.  See rastcol.asm:rc_pass -- a door
+    risen past the horizon covers rows that the two-byte interval cannot
+    describe, and drawing it last means it does not have to.
+    """
+    return ([q for q in quads if not is_moving(q)],
+            [q for q in quads if is_moving(q)])
+
+
+def face_columns(q, c, cover=None, over=False, dlift=0):
     """pair_walk, drawn pairs only -- what render() paints.
 
     Yields (pair, u, j, r0, r1, step, bands, stept, edges): up to two
@@ -491,7 +536,7 @@ def face_columns(q, c, cover=None):
     The idx in each is the 8.8 texture coordinate at its first row, so
     the caller just walks it.
     """
-    for i in pair_walk(q, c, cover):
+    for i in pair_walk(q, c, cover, over, dlift):
         if i["closed"]:
             continue
         yield (i["p"], i["u"], i["j"], i["r0"], i["r1"], i["step"],
@@ -499,7 +544,7 @@ def face_columns(q, c, cover=None):
 
 
 def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
-           c_colr, c_cedge, c_cstep):
+           c_colr, c_cedge, c_cstep, dlift=0):
     """-> the microsecond charges rastcol.asm takes, in order.
 
     THE TWIN OF THE COST HOOKS, the way pacemodel.quad_units is the twin
@@ -531,10 +576,10 @@ def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
             + u["skip"] * c_cskip + u["pair"] * c_cols
             + u["bands"] * c_cband + u["rows"] * c_colr
             + u["edges"] * c_cedge + u["steps"] * c_cstep
-            for u in charge_terms(quads, c)]
+            for u in charge_terms(quads, c, dlift)]
 
 
-def charge_terms(quads, c):
+def charge_terms(quads, c, dlift=0):
     """-> one dict of REGRESSORS per hook, in the asm's own order.
 
     charge() is this weighted by the constants, so the two cannot drift:
@@ -558,15 +603,23 @@ def charge_terms(quads, c):
     z = {"frame": 0, "face": 0, "skip": 0, "pair": 0,
          "bands": 0, "rows": 0, "edges": 0, "steps": 0}
     out.append(dict(z, frame=1))         # its hook on an empty list
-    for q in reversed(quads):
+    # TWO PASSES, in raster_colframe's own order.  rc_face is entered for
+    # every record in BOTH passes but returns before the charge on the
+    # ones that are not for that pass, so each quad pays C_CFACE exactly
+    # once -- in its own pass.
+    p0, p1 = passes(quads)
+    for over, group in ((False, p0), (True, p1)):
+      for q in reversed(group):
         out.append(dict(z, face=1))      # the top of rc_face: every record
-        for i in pair_walk(q, c, cover):
+        for i in pair_walk(q, c, cover, over, dlift):
             if i["closed"]:
                 out.append(dict(z, skip=1))
             else:
                 # rc_charge's bound, integer for integer.  up0/dn0 are
                 # the cover BEFORE this pair (model terms), the asm's
-                # rc_up count is up0 + 1.
+                # rc_up count is up0 + 1 -- and on the OVERLAY pass they
+                # are the values rc_pairloop has just reset, which is why
+                # pair_walk clears them before it reports them.
                 upc = i["up0"] + 1                   # free rows above
                 free = upc + (c.VP_H - i["dn0"])     # ...and in total
                 nb = ((1 if upc > 0 else 0)
@@ -584,7 +637,8 @@ def charge_terms(quads, c):
 # ===================================================================== #
 #  THE FRAME                                                             #
 # ===================================================================== #
-def render(quads, c=None, pages_wall=None, pages_door=None):
+def render(quads, c=None, pages_wall=None, pages_door=None,
+           dlift=0):
     """-> (16K screen image, stats).
 
     The buffer is the whole &C000 page the Z80 writes, so emu_rast.py can
@@ -611,10 +665,15 @@ def render(quads, c=None, pages_wall=None, pages_door=None):
     # painter order, which is exactly what emu_rast.py's random batches
     # are; sorting here would have made the two disagree on every one of
     # them and blamed the rasteriser.
-    for q in reversed(quads):
+    # TWO PASSES, exactly as raster_colframe walks it: everything but a
+    # door in MOTION, front to back, and then the moving doors ON TOP and
+    # outside the occlusion interval.  See passes().
+    p0, p1 = passes(quads)
+    for over, group in ((False, p0), (True, p1)):
+      for q in reversed(group):
         pages = pd if (q[4] & 1) else pw
         for (p, u, _j, _r0, _r1, step, bands,
-             stept, edges) in face_columns(q, c, cover):
+             stept, edges) in face_columns(q, c, cover, over, dlift):
             page = pages[u]
             for br0, br1, idx in bands:
                 pairs += 1

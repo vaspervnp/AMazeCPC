@@ -126,8 +126,9 @@ class Rig:
         self.c.write_ram(QUADS, raw)
         self.c.poke(self.s("FG_NQUAD"), len(quads))
 
-    def run_once(self, quads):
+    def run_once(self, quads, dlift=0):
         self.c.write_ram(FRONT, self.blank)
+        self.c.poke(self.s("RC_DLIFT"), dlift)
         self.poke_quads(quads)
         self.c.poke(self.s("DONE"), 0)
         self.c.set_pc(E_MANY)
@@ -139,8 +140,8 @@ class Rig:
             raise RuntimeError("raster_colframe never finished")
         return self.c.read_ram(FRONT, SCRSZ)
 
-    def expect(self, quads):
-        scr, st = colmodel.render(quads, self.cfg, self.pw, self.pd)
+    def expect(self, quads, dlift=0):
+        scr, st = colmodel.render(quads, self.cfg, self.pw, self.pd, dlift)
         return scr, st
 
     def bench_exact(self, quads, reps=24, hint=0.0, poll=200):
@@ -260,6 +261,41 @@ def verify():
                 for line in diff_report(got, want, c):
                     print(line)
     print(f"  24 painter batches of 2..8 quads: {24 - nbat} exact")
+
+    # ---- A DOOR PART WAY OPEN, which is the ONLY thing that exercises
+    #      the overlay pass.  Every case above has kind 0 or 1, so both
+    #      passes behave exactly as one pass did and the second pass is
+    #      never entered -- 159 exact screens say nothing about it.
+    #
+    #      A moving door carries bit 1 of the kind byte (march.asm), is
+    #      drawn LAST and on top, ignores the occlusion interval, and has
+    #      its bottom row raised by rc_dlift/256 of its own height.  All
+    #      four of those are checked here, against real quads with a real
+    #      wall behind them so the overlay has something to cover.
+    nmv = 0
+    rnd2 = random.Random(20260825)
+    for _t in range(24):
+        batch = [real[rnd2.randrange(len(real))]
+                 for _ in range(rnd2.randrange(1, 5))]
+        # promote one of them to a door in motion
+        i = rnd2.randrange(len(batch))
+        q = list(batch[i])
+        q[4] = 3                                # door + moving
+        batch[i] = tuple(q)
+        dl = rnd2.choice((0, 42, 85, 128, 170, 213, 255))
+        got = rig.run_once(batch, dl)
+        want, _ = rig.expect(batch, dl)
+        tested += 1
+        if got != want:
+            bad += 1
+            nmv += 1
+            if nmv < 3:
+                print(f"MISMATCH  moving door, dlift {dl}, "
+                      f"batch of {len(batch)}")
+                for line in diff_report(got, want, c):
+                    print(line)
+    print(f"  24 batches with a door IN MOTION (overlay pass, lift "
+          f"0..255): {24 - nmv} exact")
 
     print(f"\nVERIFY: {tested} screens compared byte for byte over all "
           f"{SCRSZ} bytes of the buffer, {tested - bad} exact, {bad} bad")

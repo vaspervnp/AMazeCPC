@@ -350,15 +350,27 @@ fails if either misses. Anything that reasons about the worst frame —
 `C_CELL`, `QUADS`, the bucket occupancy, `PACE_FRAMES` — was fitted
 against the light half until now.
 
-**THE OVERLAY PASS IS NOT IN `colmodel.charge` YET.** A door in motion is
-drawn in a SECOND pass, on top and outside the occlusion scheme
-(`rastcol.asm:rc_pass`), so its pairs draw their FULL row range rather
-than the rows the cover left. The disc charges that correctly -- its own
-`rc_charge` reads the reset interval -- but `colmodel.charge` still walks
-the list once and costs those pairs against the cover, so it
-UNDER-estimates a moving-door frame. `pacescan`'s `moving` configuration
-is therefore optimistic until `colmodel` grows the same two passes. The
-disc paces itself right; the offline sweep does not yet agree with it.
+**THE MODEL IS THE ONLY THING THAT COULD HAVE FOUND THE ANGLED-DOOR BUG,
+AND IT FOUND IT THE HOUR IT LEARNED THE FEATURE.** `colmodel` did not
+know about the overlay pass or the lift, so `emu_rcol verify` ran 159
+screens that never once entered the second pass -- it was green and it
+was blind. Teaching it (`passes()`, `pair_walk(over=, dlift=)`,
+`lift_row()`) and adding 24 batches with a door IN MOTION turned up 4
+mismatches immediately, every one of them on a RAKED door.
+
+The cause: `rc_etbig` -- the path taken when the taller byte column is
+TALLER THAN THE VIEWPORT, which is every near door and every angled one
+-- jumps straight to `rc_etrows`, so a lift placed on the `rc_etsml`
+path alone was skipped by exactly the faces that needed it. The tall
+column's edge run then hung below the risen door and painted door over
+what should have been the room behind. The pair's own lift was already
+after `rc_rows` for this reason; the edge lift is now after `rc_etrows`
+too.
+
+**The lesson is the one this file keeps relearning**: a verification that
+does not exercise a path says nothing about it, and "159 of 159 exact" is
+only as strong as the cases behind it. It is 183 now, and the 24 new ones
+are the only ones that touch the overlay.
 
 **`emu_march.py` had `BUCKHI` written down as `0x26`.** It stopped being
 true the day the working-RAM block moved up four pages for the

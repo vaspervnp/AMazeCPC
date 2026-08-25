@@ -1188,16 +1188,26 @@ rc_etsml
     ld   a,VP_H-1
 rc_et1ok
     ld   (rc_r1t),a
-    ld   a,(rc_kind)                ; ...and the taller column with it, or
-    and  2                          ; the edge run would hang below the
-    jr   z,rc_etnolift              ; door it belongs to
+rc_etrows
+    ; ---- AND THE TALLER COLUMN RISES WITH THE PAIR, or its edge run
+    ;      hangs below the door it belongs to.
+    ;
+    ;      IT SITS AFTER rc_etrows AND NOT BEFORE IT.  rc_etbig -- the
+    ;      path taken when the taller column is TALLER THAN THE VIEWPORT,
+    ;      which is every near door and every raked one -- jumps straight
+    ;      here, so a lift placed on the rc_etsml path alone was skipped
+    ;      by exactly the faces that needed it.  The pair's own lift is
+    ;      after rc_rows for the same reason.  MEASURED: 4 of 24 moving
+    ;      door batches mismatched, every one of them raked.
+    ld   a,(rc_kind)
+    and  2
+    jr   z,rc_etnolift
     ld   a,(rc_r0t)
     ld   (rc_ltop),a
     ld   a,(rc_r1t)
     call rc_lift
     ld   (rc_r1t),a
 rc_etnolift
-rc_etrows
 
     ; the byte column: 2*p + which side
     ld   a,(rc_p)
