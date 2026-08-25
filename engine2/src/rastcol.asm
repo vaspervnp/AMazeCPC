@@ -1059,6 +1059,8 @@ rc_rows
     ld   a,(rc_r0)
     ld   (rc_ltop),a
     ld   a,(rc_r1)
+    ld   c,a                        ; C survives rc_mul8; B does not
+    ld   hl,(rc_j)
     call rc_lift
     ld   (rc_r1),a
 rc_nolift
@@ -1232,6 +1234,8 @@ rc_etrows
     ld   a,(rc_r0t)
     ld   (rc_ltop),a
     ld   a,(rc_r1t)
+    ld   c,a
+    ld   hl,(rc_jt)
     call rc_lift
     ld   (rc_r1t),a
 rc_etnolift
@@ -1425,26 +1429,56 @@ rc_tx2
 ;
 ;  Clobbers AF B DE HL; C is preserved by rc_mul8 and carries the input.
 rc_lift
-    ld   c,a
     ld   a,(rc_dlift)
     or   a
-    jr   z,rcl_no
+    ld   a,c
+    ret  z                          ; not moving: the bottom is unchanged
+    ld   (rc_lj),hl                 ; keep j
+    add  hl,hl
+    inc  hl                         ; full = 2j+1, the UNCLIPPED height
+    ld   (rc_lfull),hl
+    ; d = (full * dlift) >> 8, as two 8x8s: (hi*256 + lo)*f >> 8 is
+    ; hi*f + (lo*f >> 8), and full <= 769 so hi <= 3.
+    ld   a,(rc_dlift)
     ld   e,a
     ld   d,0
-    ld   a,c
-    ld   hl,rc_ltop
-    sub  (hl)                       ; the face's own height at this pair
-    jr   c,rcl_no
-    jr   z,rcl_no
-    call rc_mul8                    ; HL = height * dlift
-    ld   a,c
-    sub  h                          ; ...of which H is the lift
+    ld   a,(rc_lfull+1)
+    call rc_mul8
+    ld   (rc_lacc),hl
+    ld   a,(rc_dlift)
+    ld   e,a
+    ld   d,0
+    ld   a,(rc_lfull)
+    call rc_mul8
+    ld   e,h                        ; ...the high byte of lo*f
+    ld   d,0
+    ld   hl,(rc_lacc)
+    add  hl,de                      ; HL = d, the rows it has risen
+    ex   de,hl
+    ld   hl,(rc_lj)                 ; CYH + j, the UNCLIPPED bottom edge --
+    ld   a,l                        ; added WITHOUT touching BC, because C
+    add  a,RC_RC                    ; carries the clipped bottom across
+    ld   l,a                        ; both rc_mul8 calls and `ld bc,nn`
+    ld   a,h                        ; would have thrown it away
+    adc  a,0
+    ld   h,a
+    or   a
+    sbc  hl,de                      ; ...after the slide
+    bit  7,h
+    jr   nz,rcl_top                 ; risen clean off the top
+    ld   a,h
+    or   a
+    jr   nz,rcl_keep                ; still below the viewport: keep clip
+    ld   a,l
+    cp   c
+    jr   nc,rcl_keep                ; ...never lower than it already was
     ld   hl,rc_ltop
     cp   (hl)
     ret  nc
-    ld   a,(hl)                     ; never above its own top row
+rcl_top
+    ld   a,(rc_ltop)                ; never above its own top row
     ret
-rcl_no
+rcl_keep
     ld   a,c
     ret
 
@@ -1779,7 +1813,6 @@ rc_hr4      equ RC_VARS+69
 rc_hneg     equ RC_VARS+70   
 rc_acc      equ RC_VARS+71   
 rc_over     equ RC_VARS+73   ; 1 while drawing the overlay pass
-rc_ltop     equ RC_VARS+74   ; the top row rc_lift measures from
 rc_texpg    equ RC_VARS+75   
 rc_page     equ RC_VARS+76   
 rc_step     equ RC_VARS+77   
@@ -1800,7 +1833,14 @@ rc_sp       equ RC_VARS+98
 rc_sp2      equ RC_VARS+100  
 rc_tf       equ RC_VARS+102  ; rc_charge: rows still free at the pair
 rc_jhi      equ RC_VARS+103  ; ...upper bound on the taller column's j
-    assert RC_VARS+104 <= #3FF0
+; rc_lift's 16-bit scratch.  The slide is computed over the face's FULL
+; height, 2j+1, which reaches 769 rows on a near door -- so it does not
+; fit the byte arithmetic the rest of this block is made of.
+rc_lj       equ RC_VARS+104     ; j, kept across the two multiplies
+rc_lfull    equ RC_VARS+106     ; 2j+1
+rc_lacc     equ RC_VARS+108     ; the high half of the product
+rc_ltop     equ RC_VARS+110     ; the face's own top row at this pair
+    assert RC_VARS+111 <= #3FF0
 
 ; ...EXCEPT this one, which stays a LABEL in the code segment because it
 ; is the one byte a harness has to write from outside: rasm puts only

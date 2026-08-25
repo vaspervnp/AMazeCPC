@@ -294,17 +294,27 @@ def new_cover(c):
     return [[c.CYH] * n, [c.CYH + 1] * n]
 
 
-def lift_row(bottom, top, dlift):
-    """rastcol.asm:rc_lift -- raise a face's BOTTOM row towards its top.
+def lift_row(bottom, top, j, cyh, dlift):
+    """rastcol.asm:rc_lift -- where a sliding slab's bottom edge is now.
 
-    A door in motion rises: only the bottom edge moves, and it travels
-    the face's whole height, so `dlift` of 256 puts it on the top row.
-    The asm takes the HIGH BYTE of height*dlift, i.e. an unsigned
-    (height*dlift) >> 8, and clamps at the top.
+    IT MOVES BY A FRACTION OF THE SLAB, NOT OF WHAT YOU CAN SEE OF IT.
+    A door close enough to open is typically twice the viewport tall, so
+    its VISIBLE height is half the slab; lifting by dlift/256 of the
+    visible rows moved the geometry at half the speed the texture was
+    sliding, and the door stopped half way up and then vanished when
+    SOLID cleared.  The slab is 2j+1 rows unclipped and its bottom edge
+    is at CYH+j, so:
+
+        d      = (2j+1) * dlift >> 8      rows it has risen
+        bottom = CYH + j - d              its edge, then clipped
+
+    which is the same fraction the texture offset uses -- dlift/256 of
+    the WHOLE art -- so the two now move together.
     """
-    if dlift <= 0 or bottom <= top:
+    if dlift <= 0:
         return bottom
-    return max(top, bottom - (((bottom - top) * dlift) >> 8))
+    d = (((2 * j + 1) * dlift) >> 8)
+    return max(top, min(bottom, cyh + j - d))
 
 
 def is_moving(q):
@@ -458,7 +468,7 @@ def pair_walk(q, c, cover=None, over=False, dlift=0):
         r0 = max(0, c.CYH - js)
         r1 = min(c.VP_H - 1, c.CYH + js)
         if moving:
-            r1 = lift_row(r1, r0, dlift)
+            r1 = lift_row(r1, r0, js, c.CYH, dlift)
         if r1 < r0:
             continue
         step, idx0 = tab[tix(hs)]
@@ -495,7 +505,7 @@ def pair_walk(q, c, cover=None, over=False, dlift=0):
             r0t = max(0, c.CYH - jt)
             r1t = min(c.VP_H - 1, c.CYH + jt)
             if moving:
-                r1t = lift_row(r1t, r0t, dlift)
+                r1t = lift_row(r1t, r0t, jt, c.CYH, dlift)
             e1 = min(r0 - 1, up[p])
             if r0t <= e1:
                 edges.append((r0t, e1, idx0t, ofs))
