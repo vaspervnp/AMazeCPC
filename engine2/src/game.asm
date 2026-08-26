@@ -9,6 +9,14 @@
 ;      game_init      once, after SOLID has been loaded from MAZEDATA
 ;      game_step      once per game frame, BEFORE frame_draw
 ;                     returns A = 0 normally, A = 1 if ESC was pressed
+;      ammo_arm       full magazine, every pickup back -- "start a life"
+;
+;  It also OWNS (plr_ammo) and (gun_recoil), which hud2.asm and gun.asm
+;  read.  Same rule as (plr_moving): the game layer decides what
+;  happened, the drawing layers decide what it looks like.
+;
+;  THE KEYS: cursors walk and turn, SHIFT doubles both, SPACE works the
+;  nearest door, CTRL or Z fires, ESC quits.
 ;
 ;  ------------------------------------------------------------------
 ;  FREE MOVEMENT.  plr_x / plr_y are unsigned 16-bit 8.8 cell
@@ -137,6 +145,43 @@ PRAD        equ 64          ; collision half-width, 8.8 (= 0.25 cell)
 DOOR_SHUT   equ 2
 DOOR_OPEN   equ 8           ; 8 - 2 = SIX frames to run, one step each
 
+; ---------------------------------------------------------------------
+;  AMMUNITION.  Six rounds, six pips in the HUD's top-left readout, and
+;  a magazine that only refills by walking over a pickup.
+;
+;  THE PICKUPS ARE A LIST, NOT A MAP CODE.  gen_march.py emits AMMOTAB
+;  as NAMMO cell indices (y*16+x, the same index SOLID uses) because the
+;  alternative -- a fifth value in SOLID -- would put a test in the
+;  march's hot loop, which reads SOLID four times a cell, for something
+;  that is neither opaque nor solid.  ammo_scan walks NAMMO bytes once a
+;  game frame instead -- 6 compares -- and COLLECTS as it goes: a pickup
+;  at L1 zero is the one the player is standing on, so finding the
+;  nearest and picking one up are the same walk.  It is off the pacer's
+;  critical path inside C_TAIL.
+;
+;  ammo_st IS A COPY, made by game_init, so the map's table stays intact
+;  and a future restart can re-arm every pickup by copying it again.  A
+;  taken pickup is #FF, which no cell index can be (the map is 16x16, so
+;  indices stop at 255 -- but cell 255 is the bottom-right corner and is
+;  always WALL, so it can never be a pickup and never be stood on).
+AMMO_MAX    equ 6
+AMMO_GONE   equ #FF
+AMMO_NODIR  equ #FF         ; (ammo_dir) when the map has none left.  A
+                            ; real value is (band << 4) | bearing with
+                            ; band <= 2 and bearing <= 7, so #FF is a
+                            ; value it can never take
+AMMO_NEAR   equ 3           ; L1 cells: <= this is the near band...
+AMMO_MID    equ 7           ; ...and <= this the middle one.  A room is
+                            ; 4x4 and the rooms sit on a 5-cell pitch, so
+                            ; near is THIS ROOM, mid is the next one over,
+                            ; and far is across the map
+MAXAMMO     equ 6           ; pickups the engine can hold; main3.asm asserts
+                            ; MAXAMMO >= NAMMO once gen_maze.inc is in, the
+                            ; same way MAXDOORS is checked against NDOORS --
+                            ; gen_maze.inc is included after this file, so
+                            ; NAMMO is not a name yet here
+RECOIL_N    equ 2           ; game frames the weapon stays kicked up
+
 ; HOW MANY DOORS THE ENGINE CAN HOLD, and it must be >= the map's.
 ;
 ; game_init scans SOLID and registers doors until it has MAXDOORS of
@@ -183,7 +228,8 @@ door_tg     equ #3DE0                   ; ...and the state it is running to
     assert door_st  == DOORTAB+MAXDOORS
     assert door_tg  == DOORTAB+MAXDOORS*2
     assert DOORTAB+MAXDOORS*3 <= #3FF0  ; clear of the CPU stack
-    assert DOORTAB >= QUADS+120*8       ; ...and of the quad list
+    assert DOORTAB >= QUADS+NQUAD*8    ; ...and of the quad list, whose
+                                      ; length is memmap.inc's now
 DOOR_REACH  equ 320         ; 1.25 cells, 8.8, for the nearest-door search
 
 
@@ -234,7 +280,426 @@ gi_next
     inc  hl
     inc  c
     jr   nz,gi_scan
+
+    call ammo_arm
     ret
+
+
+; ---------------------------------------------------------------------
+;  ammo_arm -- full magazine, every pickup back on the map.
+;
+;  Split out of game_init because it is the whole of "start a life": a
+;  restart calls this and nothing else has to remember what ammo state
+;  consists of.
+; ---------------------------------------------------------------------
+ammo_arm
+    ld   a,AMMO_MAX
+    ld   (plr_ammo),a
+    ld   hl,ammo_blip               ; no blip anywhere until the first scan,
+    ld   b,MAXAMMO                  ; and the slots past NAMMO stay that way
+aa_bl
+    ld   (hl),AMMO_NODIR
+    inc  hl
+    djnz aa_bl
+    ld   a,AMMO_NODIR
+    ld   (ammo_dir),a
+    ld   hl,ammo_st                 ; ...and every slot of the live list is
+    ld   b,MAXAMMO                  ; GONE before the map's own are copied
+aa_st                               ; over it, so a MAXAMMO bigger than
+    ld   (hl),AMMO_GONE             ; NAMMO cannot leave a stale cell index
+    inc  hl                         ; in the tail
+    djnz aa_st
+    ld   hl,AMMOTAB
+    ld   de,ammo_st
+    ld   bc,NAMMO
+    ldir
+    ret
+
+
+; ---------------------------------------------------------------------
+;  fire_edge -- fire if the fire key went down THIS frame.
+;
+;  TWO KEYS, AND THE SECOND ONE IS THERE TO BE TESTED.  CTRL (row 2 bit
+;  7) is what a CPC player reaches for, and it is the same byte the
+;  SHIFT test above already read.  But engine2/tools/emu_verify3.py
+;  drives the machine through the emulator's key_down(), and that maps
+;  ASCII to the matrix: it can press every letter and digit and NOT a
+;  single modifier -- probed, all 255 codes, and none of them pulls row
+;  2 bit 7.  A fire key only reachable by CTRL would therefore be the
+;  one input in this engine with no test behind it.
+;
+;  So Z (row 8 bit 7, the row ESC already lives in) fires as well.  It
+;  is on the left of the keyboard, where the hand that is not on the
+;  cursor keys is, which is where a CPC fire key belongs anyway.
+;
+;  THE EDGE IS WHAT MAKES ONE PRESS ONE ROUND.  Held down, the bit stays
+;  low every frame and the magazine would empty in six.  The matrix is
+;  ACTIVE LOW, so ANDing the two bytes gives a bit that is 0 when EITHER
+;  key is down -- one test for both.
+;
+;  Clobbers AF HL (and whatever fire clobbers).
+; ---------------------------------------------------------------------
+fire_edge
+    ld   a,(KEYS+2)
+    ld   hl,KEYS+8
+    and  (hl)
+    and  #80
+    ret  nz                         ; neither key is down
+    ld   a,(PREVKEYS+2)
+    ld   hl,PREVKEYS+8
+    and  (hl)
+    and  #80
+    ret  z                          ; ...it was down last frame too
+    ; fall through
+
+
+; ---------------------------------------------------------------------
+;  fire -- one round, if there is one.
+;
+;  IN   nothing.  OUT  A/F clobbered.
+;
+;  An empty magazine is a NO-OP AND NOT AN UNDERFLOW: the pips are drawn
+;  from this byte and 255 of them would run the length of the HUD.
+; ---------------------------------------------------------------------
+fire
+    ld   hl,plr_ammo
+    ld   a,(hl)
+    or   a
+    ret  z
+    dec  (hl)
+    call fx_fire                    ; ...and work out what it hit
+    ld   a,RECOIL_N                 ; THE RECOIL IS THE FEEDBACK.  The pip
+    ld   (gun_recoil),a             ; going out in the HUD is 8 pixels in
+    ret                             ; the corner of the screen and the shot
+                                    ; is otherwise silent, so the weapon
+                                    ; kicks: gun.asm aims the bob at the
+                                    ; top of its swing while this counts
+                                    ; down, and eases back after.
+                                    ;
+                                    ; THE STATE LIVES HERE, not in gun.asm,
+                                    ; the same way (plr_moving) does -- the
+                                    ; game owns what happened and the gun
+                                    ; owns how it looks.  It also keeps
+                                    ; game.asm assemblable without gun.asm,
+                                    ; which engine2/test/tst_game.asm needs.
+
+
+; ---------------------------------------------------------------------
+;  ammo_scan -- WHERE THE NEAREST LIVE PICKUP IS, packed for the HUD.
+;
+;  OUT  (ammo_dir) = (band << 4) | bearing, or AMMO_NODIR if the map has
+;                    no pickup left on it.
+;       bearing 0..7 is RELATIVE TO THE NOSE: 0 dead ahead, then
+;       clockwise, which is the direction turn_right takes plr_a.
+;       band 0 near / 1 mid / 2 far, by L1 distance in CELLS.
+;  Clobbers AF BC DE HL.
+;
+;  WHY THIS EXISTS.  The pickups are not drawn in the 3D view -- the
+;  engine has no billboard path -- so without this the player has six
+;  invisible boxes in a sixteen-cell maze and no way to look for them.
+;  The pad in the HUD is the sense of smell the renderer cannot give.
+;
+;  THE BEARING IS EIGHT SECTORS AND THAT IS ON PURPOSE.  The pad has
+;  eight cells, so anything finer would be thrown away; and eight
+;  sectors is the one quantisation that needs no trigonometry at all --
+;  the sign of dx and dy picks the quadrant, and one comparison of
+;  slopes picks which third of it.
+;
+;  THE SLOPE TEST IS 5:2 AND NOT 1:1.  The sector boundaries want to be
+;  at 22.5 and 67.5 degrees.  Comparing |dy| against |dx| directly puts
+;  them at 45, which would make the four diagonal cells cover everything
+;  and the four axis cells almost nothing.  2|dy| vs |dx| is the usual
+;  cheap fix and puts them at 26.57; 5|dy| vs 2|dx| puts them at 21.80
+;  and 68.20, within a degree of right, and costs one extra ADD because
+;  5n is (n<<2)+n.  |dx| and |dy| are at most 15 cells, so 5n is at most
+;  75 and none of it can carry out of a byte.
+; ---------------------------------------------------------------------
+ammo_scan
+    ld   a,AMMO_NODIR               ; --- the nearest live one, by L1
+    ld   (as_best),a
+    ld   (as_dist),a                ; ...at a distance nothing can lose to
+    ld   hl,ammo_st
+    ld   b,NAMMO
+as_next
+    ld   a,(hl)
+    inc  hl
+    cp   AMMO_GONE
+    jr   z,as_gone
+    push hl
+    push bc
+    ld   c,a                        ; C = the cell
+    ld   a,NAMMO                    ; ...and this pickup's SLOT, taken now
+    sub  b                          ; because as_l1 clobbers B -- it uses it
+    ld   (as_ix),a                  ; for |dx|, and reading it back after
+    ld   a,c                        ; gave a garbage index and a blip read
+    call as_l1                      ; out of the wrong slot
+    or   a                          ; SIGNED offsets in as_tdx / as_tdy
+    jp   z,as_take                  ; ...ZERO: we are standing on it.  jp:
+                                    ; as_take sits past the sector code
+    ld   (as_cur),a
+    ld   hl,as_dist
+    cp   (hl)
+    jr   nc,as_far                  ; strictly nearer wins, so the first
+    ld   (hl),a                     ; of two equals keeps the readouts steady
+    ld   a,c
+    ld   (as_best),a
+    ld   a,(as_tdx)                 ; ...and its offsets come with it
+    ld   (as_dx),a
+    ld   a,(as_tdy)
+    ld   (as_dy),a
+    ld   a,(as_ix)                  ; ...and WHICH slot it was, so the
+    ld   (as_bi),a                  ; bearing can be read back off its blip
+as_far
+    ; ---- THE BLIP FOR THIS ONE.  Every live pickup gets a packed
+    ;      (band << 4) | WORLD SECTOR, which is what the dial draws: the
+    ;      radar is world-referenced, like the dial it sits in, so the
+    ;      needle and the blips can be lined up by eye.  The nose-relative
+    ;      bearing the pad wants is one subtraction off the winner's.
+    call as_sector                  ; -> A = sector 0..7 for as_tdx/as_tdy
+    ld   c,a
+    ld   a,(as_cur)
+    call as_band                    ; -> A = #00 / #10 / #20
+    or   c
+    push af                         ; ...af: as_slot clobbers A, and A is
+    call as_slot                    ; the packed blip we came here to store
+    pop  af
+    ld   (hl),a
+    pop  bc
+    pop  hl
+    djnz as_next
+    jr   as_done
+as_gone
+    push hl
+    push bc
+    ld   a,NAMMO
+    sub  b
+    ld   (as_ix),a
+    call as_slot
+    ld   (hl),AMMO_NODIR            ; no blip in this slot
+    pop  bc
+    pop  hl
+    djnz as_next
+as_done
+
+    ld   a,(as_best)
+    cp   AMMO_NODIR
+    jr   z,as_none
+
+    ; ---- the pad's bearing is the winner's sector minus the nose's.
+    ;      That is round(plr_a / 9): 72 headings over 8 sectors.  A
+    ;      72-BYTE TABLE WAS THE FIRST ANSWER and it cost more of the body
+    ;      than the whole scanner -- game_end went 142 bytes past BUCK0.
+    ;      Nine never divides more than eight times into 75, so
+    ;      subtracting it in a loop is twelve bytes and 25 us.
+    ld   a,(as_bi)
+    ld   c,a
+    ld   b,0
+    ld   hl,ammo_blip
+    add  hl,bc
+    ld   a,(hl)
+    ld   e,a
+    and  7                          ; E keeps the band, A the sector
+    ld   c,a
+    ld   a,(plr_a)
+    add  a,4                        ; ...+ half a sector, so it ROUNDS
+    ld   d,0
+as_div
+    sub  9
+    jr   c,as_gotp
+    inc  d
+    jr   as_div
+as_gotp
+    ld   a,c
+    sub  d
+    and  7                          ; ...and it wraps, both ways
+    ld   c,a
+    ld   a,e
+    and  #30                        ; the band came packed already
+    or   c
+    ld   (ammo_dir),a
+    ret
+
+as_none
+    ld   (ammo_dir),a               ; A is AMMO_NODIR already -- it is what
+    ret                             ; the compare above just matched
+
+; --- COLLECTING IT IS THE SAME WALK.  A pickup at L1 zero is the one
+;     the player is standing on, so ammo_pick's separate pass over the
+;     same six bytes, doing the same cell compare, was doing the work
+;     twice.  The readouts go dark for ONE frame and find the next one on
+;     the next, which reads as the blink of having picked something up.
+as_take
+    pop  bc
+    pop  hl
+    dec  hl                         ; back to the entry just read
+    ld   (hl),AMMO_GONE
+    ld   a,AMMO_MAX
+    ld   (plr_ammo),a
+    call as_slot                    ; ...and its blip goes out with it, so
+    ld   (hl),AMMO_NODIR            ; the dial does not show a pickup that
+    ld   a,AMMO_NODIR               ; is already in the magazine
+    ld   (as_best),a
+    ld   (ammo_dir),a
+    ret
+
+; ---------------------------------------------------------------------
+;  mon_scan -- THE MONSTER'S BLIP, by the same rule as a pickup's.
+;
+;  OUT  (mon_blip) = (band << 4) | WORLD SECTOR, or AMMO_NODIR when the
+;       map has no monster on it.
+;
+;  It is a separate byte and not a seventh entry of ammo_blip because the
+;  dial draws it in its own colour and remembers it separately: a pickup
+;  that moves must not repaint the monster and the other way round.
+;
+;  Clobbers AF BC DE HL.
+; ---------------------------------------------------------------------
+mon_scan
+    ld   a,(MONCELL)
+    cp   #FF
+    jr   z,ms_none
+    ld   c,a
+    call as_l1                      ; A = L1, as_tdx / as_tdy = the signed
+    ld   (as_cur),a                 ; offsets it went through
+    call as_sector
+    ld   c,a
+    ld   a,(as_cur)
+    call as_band
+    or   c
+ms_none
+    ld   (mon_blip),a               ; ...or A = #FF from the compare above
+    ret
+
+
+; --- HL -> ammo_blip[as_ix].  Clobbers AF BC HL.
+as_slot
+    ld   a,(as_ix)
+    ld   c,a
+    ld   b,0
+    ld   hl,ammo_blip
+    add  hl,bc
+    ret
+
+; --- A = the distance in L1 cells -> A = the band, already shifted into
+;     the high nibble.  Clobbers AF.
+as_band
+    cp   AMMO_NEAR+1
+    ld   a,#00
+    ret  c
+    ld   a,(as_cur)
+    cp   AMMO_MID+1
+    ld   a,#10
+    ret  c
+    ld   a,#20
+    ret
+
+; --- WHICH OF EIGHT SECTORS as_tdx / as_tdy POINT INTO.
+;
+;     Sectors run +x = 0 and CLOCKWISE on a map drawn with +y downward,
+;     which is the way turn_right takes plr_a.
+;
+;     THE SLOPE TEST IS 5:2 AND NOT 1:1.  The boundaries want to be at
+;     22.5 and 67.5 degrees.  Comparing |dy| against |dx| puts them at
+;     45, which would give the four diagonal sectors everything and the
+;     four axis sectors almost nothing.  5|dy| vs 2|dx| puts them at
+;     21.80 and 68.20 and costs one ADD, because 5n is (n<<2)+n.  Both
+;     are at most 15 cells, so 5n cannot carry out of a byte.
+;
+;     OUT A = 0..7.  Clobbers AF BC DE HL.
+as_sector
+    ld   a,(as_tdx)                 ; --- |dx| in B, |dy| in C
+    or   a
+    jp   p,as_axp
+    neg
+as_axp
+    ld   b,a
+    ld   a,(as_tdy)
+    or   a
+    jp   p,as_ayp
+    neg
+as_ayp
+    ld   c,a
+
+    ld   d,1                        ; --- D = the shape: 0 flat, 1
+    ld   a,b                        ;     diagonal, 2 upright
+    add  a,a
+    add  a,a
+    add  a,b                        ; 5|dx|
+    ld   e,a
+    ld   a,c
+    add  a,a                        ; 2|dy|
+    cp   e
+    jr   c,as_notup
+    ld   d,2                        ; 2|dy| >= 5|dx|: upright
+    jr   as_shape
+as_notup
+    ld   a,c
+    add  a,a
+    add  a,a
+    add  a,c                        ; 5|dy|
+    ld   e,a
+    ld   a,b
+    add  a,a                        ; 2|dx|
+    cp   e
+    jr   c,as_shape
+    ld   d,0                        ; 2|dx| >= 5|dy|: flat
+as_shape
+
+    ld   a,(as_tdy)                 ; --- THE QUADRANT IS JUST THE TWO SIGN
+    rlca                            ;     BITS.  rlca drops bit 7 into bit
+    and  1                          ;     0, so this is the sign of dy in
+    add  a,a                        ;     one instruction and no branch;
+    ld   e,a                        ;     OCTAB is laid out in (sy, sx)
+    ld   a,(as_tdx)                 ;     order to suit.
+    rlca
+    and  1
+    add  a,e                        ; i = sy*2 + sx
+    ld   e,a
+    add  a,a                        ; --- the sector: OCTAB[i*3 + s]
+    add  a,e                        ; ... 3i, as 2i + i
+    add  a,d                        ; ... + the shape
+    ld   e,a
+    ld   d,0
+    ld   hl,OCTAB
+    add  hl,de
+    ld   a,(hl)
+    ret
+
+
+; --- IN C = a cell index.  OUT A = |dx| + |dy| from the player, cells.
+;     Clobbers AF B E.  C is left alone: the caller still wants it.
+as_l1
+    ld   a,c
+    and  #0F
+    ld   e,a
+    ld   a,(plr_x+1)                ; plr_x is 8.8: the high byte IS the
+    ld   b,a                        ; cell
+    ld   a,e
+    sub  b                          ; dx = cx - px, SIGNED
+    ld   (as_tdx),a
+    jr   nc,al_xp                   ; both are 0..15, so the borrow IS
+    neg                             ; the sign, and the store above does
+al_xp                               ; not touch it
+    ld   b,a
+    ld   a,c
+    rrca
+    rrca
+    rrca
+    rrca
+    and  #0F
+    ld   e,a
+    ld   a,(plr_y+1)
+    ld   d,a
+    ld   a,e
+    sub  d                          ; dy = cy - py
+    ld   (as_tdy),a
+    jr   nc,al_yp
+    neg
+al_yp
+    add  a,b
+    ret
+
+
 
 
 ; ---------------------------------------------------------------------
@@ -309,6 +774,12 @@ gs_setmv                            ; and freezing the sway there reads as
     ld   (plr_moving),a             ; the game having stopped responding.
 gs_walked
 
+    call ammo_scan                  ; --- collect the pickup we are on,
+                                    ;     else say where the nearest is
+    call mon_scan                   ; --- ...and where the monster is
+
+    call fire_edge                  ; --- CTRL or Z, on the press edge
+
     ld   hl,KEYS+5                  ; --- SPACE, on the press edge only
     bit  7,(hl)
     jr   nz,gs_nospace
@@ -371,25 +842,79 @@ tl_ok
 ;  step_vector -- (mv_dx)(mv_dy) = STEPTAB[plr_a], sign extended.
 ; ---------------------------------------------------------------------
 step_vector
+    ; ---- ONE QUADRANT OF TABLE, FOLDED FOUR WAYS.
+    ;      STEPTAB was all 72 headings, 144 bytes, in a body segment
+    ;      whose `assert game_end <= BUCK0` has fired ten times.  The
+    ;      first quadrant is enough because the other three are exact
+    ;      sign flips of it -- cos(90+t) = -sin t and sin(90+t) = cos t,
+    ;      and the ROUNDING survives that: checked in Python over all 72
+    ;      headings, 0 of them disagree with the folded value.  36 bytes
+    ;      of table and about 40 of code, against 144.
     ld   a,(plr_a)
+    ld   b,0                        ; B = the quadrant, A = the heading
+sv_quad                             ; within it (0..17)
+    cp   18
+    jr   c,sv_got
+    sub  18
+    inc  b
+    jr   sv_quad
+sv_got
     add  a,a
     ld   l,a
     ld   h,0
     ld   de,STEPTAB
     add  hl,de
-    ld   a,(hl)
-    ld   e,a
-    add  a,a                        ; carry = sign
-    sbc  a,a                        ; A = 0 or #FF
-    ld   d,a
-    ld   (mv_dx),de
+    ld   e,(hl)                     ; E = cos, D = sin, both signed bytes
     inc  hl
-    ld   a,(hl)
+    ld   d,(hl)
+    ; quadrant 0 (c, s)   1 (-s, c)   2 (-c, -s)   3 (s, -c)
+    ld   a,b
+    or   a
+    jr   z,sv_store
+    dec  a
+    jr   nz,sv_q23
+    ld   a,e                        ; q1: (-s, c)
+    ld   e,d
+    neg
+    ld   d,a
+    ex   de,hl                      ; ...E must end up x, D y
+    ld   a,l
+    ld   l,h
+    ld   h,a
+    ex   de,hl
+    jr   sv_store
+sv_q23
+    dec  a
+    jr   nz,sv_q3
+    ld   a,e                        ; q2: (-c, -s)
+    neg
     ld   e,a
+    ld   a,d
+    neg
+    ld   d,a
+    jr   sv_store
+sv_q3
+    ld   a,d                        ; q3: (s, -c)
+    ld   d,e
+    ld   e,a
+    ld   a,d
+    neg
+    ld   d,a
+sv_store
+    ld   a,e                        ; x, sign extended
+    ld   c,a
     add  a,a
     sbc  a,a
-    ld   d,a
-    ld   (mv_dy),de
+    ld   b,a
+    ld   a,c
+    ld   c,a
+    ld   (mv_dx),bc
+    ld   a,d                        ; ...and y
+    ld   c,a
+    add  a,a
+    sbc  a,a
+    ld   b,a
+    ld   (mv_dy),bc
     ret
 
 neg_step
@@ -874,10 +1399,11 @@ sk_row
 ;  rasm's int() ROUNDS, and its cos/sin take DEGREES, not radians -- both
 ;  checked against Python before this table was trusted.
 STEPTAB
-    repeat N_ANGLES,IA
+    repeat N_ANGLES/4,IA
     db int(1.0*STEP*cos((IA-1)*360.0/N_ANGLES))
     db int(1.0*STEP*sin((IA-1)*360.0/N_ANGLES))
     rend
+    assert N_ANGLES == 72           ; step_vector folds by quadrants of 18
 
 
 ; --------------------------------------------------------- variables ---
@@ -896,6 +1422,54 @@ cf_x1       db 0
 
 door_n      db 0
 mv_fast     db 0                ; non-zero while SHIFT is held
+
+plr_ammo    db AMMO_MAX         ; rounds left, 0..AMMO_MAX.  hud2.asm reads
+                                ; it; ammo_arm sets it
+gun_recoil  db 0                ; frames of kick left.  gun.asm's consumer
+ammo_st     ds MAXAMMO          ; the live pickups: a cell index each, or
+                                ; AMMO_GONE once collected
+ammo_blip   ds MAXAMMO          ; ONE PACKED (band << 4) | WORLD SECTOR
+                                ; per pickup, or AMMO_NODIR where there
+                                ; is none left.  hud2.asm's radar draws
+                                ; straight off this; ammo_dir below is
+                                ; the same thing for the WINNER, turned
+                                ; nose-relative for the direction pad.
+as_cur      db 0                ; the distance of the pickup being looked at
+as_ix       db 0                ; ...and its slot in ammo_blip
+mon_blip    db AMMO_NODIR       ; the monster's packed bearing, for the
+                                ; dial.  Its own byte -- see mon_scan
+as_bi       db 0                ; ...and which slot the winner was in
+ammo_dir    db AMMO_NODIR       ; the scanner's packed bearing.  hud2.asm
+                                ; reads it; ammo_scan writes it
+as_best     db AMMO_NODIR       ; ammo_scan's working set: the nearest
+as_dist     db #FF              ; live cell so far and its L1 distance...
+as_dx       db 0                ; ...and, once found, its signed offset
+as_dy       db 0                ; from the player in cells
+as_tdx      equ PIPVARS+5       ; as_l1's scratch: the offsets of whatever
+as_tdy      equ PIPVARS+6       ; cell it was last asked about.  In the
+                                ; gap above the door tables with pip.asm's
+                                ; -- see there for why, and for the assert
+                                ; that keeps them clear of RC_COVER
+
+; WHICH OF EIGHT SECTORS A DIRECTION IS IN, by the SIGNS of its offset
+; and its shape.  Sectors run +x = 0 and clockwise on a map drawn with +y
+; downward, which is the way turn_right takes plr_a.
+;
+;   row  i = (dy<0)*2 + (dx<0)      shape  0 flat (mostly x)
+;        0  right and below                1 diagonal
+;        1  left  and below                2 upright (mostly y)
+;        2  right and above
+;        3  left  and above
+;
+; A TABLE AND NOT A BRANCH TREE.  The twelve cases are four lines here
+; against about forty of jumps, and the thing that is easy to get wrong
+; -- which way the sector numbers run round the quadrants -- is visible
+; all at once instead of spread over a page.  The row order is the order
+; the two sign bits fall out in, so there is no quadrant to decode at all.
+OCTAB       db 0,1,2            ; dx>=0 dy>=0:  E  SE S
+            db 4,3,2            ; dx<0  dy>=0:  W  SW S
+            db 0,7,6            ; dx>=0 dy<0:   E  NE N
+            db 4,5,6            ; dx<0  dy<0:   W  NW N
 door_anim   db DOOR_SHUT        ; the state of whichever door is mid-run
 
 ; HOW FAR UP, as a fraction of 256 of the door's own height below the

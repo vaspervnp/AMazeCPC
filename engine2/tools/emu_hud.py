@@ -49,6 +49,9 @@ from cpc import CPC                                            # noqa: E402
 BUILD = os.path.join(_E2, "build")
 E_ONCE, E_UPD, E_SAME, E_TURN, E_TURNCTL, E_STATIC, E_EMPTY = (
     0x8000, 0x8004, 0x8008, 0x800C, 0x8010, 0x8014, 0x8018)
+E_AMMO, E_AMMOB = 0x801C, 0x8020
+E_SCAN, E_SCANB = 0x8024, 0x8028
+E_RADAR = 0x802C
 SCR = 0xC000
 POISON = 0x5A
 SCR_W, SCR_H = cpc.SCR_W_BYTES, cpc.SCR_H
@@ -140,6 +143,25 @@ class Rig:
             self.c.write_ram(SCR, bytes([POISON]) * 0x4000)
         self.run(E_ONCE)
         return self.c.read_ram(SCR, 0x4000)
+
+    def ammo(self, n, bufh=0xC0):
+        self.c.poke(self.s("BUFH"), bufh)
+        self.c.poke(self.s("AMMON"), n)
+        self.run(E_AMMO)
+        return self.c.read_ram(0x8000 if bufh == 0x80 else SCR, 0x4000)
+
+    def scan(self, state, bufh=0xC0):
+        self.c.poke(self.s("BUFH"), bufh)
+        self.c.poke(self.s("SCANN"), state)
+        self.run(E_SCAN)
+        return self.c.read_ram(0x8000 if bufh == 0x80 else SCR, 0x4000)
+
+    def radar(self, blips, mon=0xFF, bufh=0xC0):
+        self.c.poke(self.s("BUFH"), bufh)
+        self.c.write_ram(self.s("AMMO_BLIP"), bytes(blips))
+        self.c.poke(self.s("MON_BLIP"), mon)
+        self.run(E_RADAR)
+        return self.c.read_ram(0x8000 if bufh == 0x80 else SCR, 0x4000)
 
     def upd(self, heading, bufh=0xC0):
         self.c.poke(self.s("BUFH"), bufh)
@@ -255,6 +277,222 @@ def verify_back(rig):
     return len(bad)
 
 
+def verify_ammo(rig):
+    """Every count from a full magazine down to empty and back up.
+
+    IN SEQUENCE, and that is the point: hud_ammo remembers what it last
+    drew per buffer and returns without touching the screen when the
+    count has not moved, so a test that set each count from a clean
+    screen would never exercise the memo or the repaint of a pip that
+    has to go OUT again.  Here 6->5 has to blank one and 0->6 has to
+    bring all six back.
+    """
+    rig.once(0)                             # furniture, and hud_force with it
+    bad = 0
+    counts = list(range(genhud.ammo_slot()[5], -1, -1)) + [genhud.ammo_slot()[5]]
+    for n in counts:
+        ram = rig.ammo(n)
+        want = {}
+        for (x, y, w, h, b) in genhud.ammo_rects(n):
+            for yy in range(y, y + h):
+                for xx in range(x, x + w):
+                    want[off(xx, yy)] = b
+        wrong = [(o, ram[o], b) for o, b in want.items() if ram[o] != b]
+        if wrong:
+            o, got, exp = wrong[0]
+            print(f"  ammo {n}: WRONG at {len(wrong)} bytes, first "
+                  f"+&{o:04X} got &{got:02X} want &{exp:02X}")
+            bad += len(wrong)
+            break
+        # ...and nothing OUTSIDE the pips moved: the furniture is still
+        # exactly what hud_static left, everywhere.
+        img = want_image(0)
+        spill = [o for o, b in img.items() if o not in want and ram[o] != b]
+        if spill:
+            print(f"  ammo {n}: SPILLED onto {len(spill)} furniture bytes, "
+                  f"first +&{spill[0]:04X}")
+            bad += len(spill)
+            break
+    if not bad:
+        print(f"  ammo: {len(counts)} counts drawn in sequence "
+              f"({genhud.ammo_slot()[5]} down to 0 and back), every pip exact, "
+              f"no byte outside the readout touched")
+    # A REPEAT MUST BE A NO-OP.  Poison the readout behind hud_ammo's back
+    # and ask for the count it already thinks is on screen: if it repaints,
+    # the memo is not doing its job and C_AMMO -- 3.8 ms, charged by
+    # hud_ammo itself -- is being spent on every frame instead of the few
+    # a round moves on.
+    x, y, w, h, dx, n = genhud.ammo_slot()
+    for yy in range(y, y + h):
+        for xx in range(x, x + (n - 1) * dx + w):
+            rig.c.poke(SCR + off(xx, yy), POISON)
+    ram = rig.ammo(n)
+    kept = sum(1 for yy in range(y, y + h)
+               for xx in range(x, x + (n - 1) * dx + w)
+               if ram[off(xx, yy)] == POISON)
+    if kept != h * ((n - 1) * dx + w):
+        print(f"  ammo: the unchanged-count early-out REPAINTED "
+              f"({kept} of {h*((n-1)*dx+w)} poisoned bytes survived)")
+        bad += 1
+    else:
+        print(f"  ammo: an unchanged count writes nothing at all "
+              f"({kept} poisoned bytes survive)")
+    return bad
+
+
+def verify_scan(rig):
+    """Every bearing and every distance band, in sequence.
+
+    THE WHOLE PAD IS CHECKED, not just the two rectangles hud_scan is
+    allowed to write.  genhud.scan_pad() says what all nine cells must
+    read back as, so an erase that puts the wrong colour back, or one
+    that lands on the hub, or a bearing that indexes SCANPOS off by one,
+    all show up as a wrong cell rather than as nothing.
+
+    IN SEQUENCE, because the erase is the half that has state: hud_scan
+    only knows which cell to put back from the byte it remembered, so a
+    test that reset the pad between states would never exercise it.
+    """
+    rig.once(0)                             # furniture, hud_force with it
+    bad = 0
+    # every bearing at every band, then a lap of bands on one bearing,
+    # then out to nothing and back -- 0xFF is "no pickup left".
+    states = ([b * 16 + o for o in range(8) for b in range(3)]
+              + [0x00, 0x10, 0x20, 0x10, 0x00]
+              + [0xFF, 0x03, 0xFF, 0x25])
+    for st in states:
+        ram = rig.scan(st)
+        want = {}
+        for (x, y, w, h, b) in genhud.scan_pad(st):
+            for yy in range(y, y + h):
+                for xx in range(x, x + w):
+                    want[off(xx, yy)] = b
+        wrong = [(o, ram[o], b) for o, b in want.items() if ram[o] != b]
+        if wrong:
+            o, got, exp = wrong[0]
+            print(f"  scan #{st:02X}: WRONG at {len(wrong)} of {len(want)} "
+                  f"pad bytes, first +&{o:04X} got &{got:02X} want &{exp:02X}")
+            bad += len(wrong)
+            break
+        img = want_image(0)                 # ...and nothing outside the pad
+        spill = [o for o, b in img.items() if o not in want and ram[o] != b]
+        if spill:
+            print(f"  scan #{st:02X}: SPILLED onto {len(spill)} bytes, "
+                  f"first +&{spill[0]:04X}")
+            bad += len(spill)
+            break
+    if not bad:
+        print(f"  scanner: {len(states)} bearings and bands drawn in "
+              f"sequence, all nine pad cells exact every time, no byte "
+              f"outside the pad touched")
+
+    # AND THE EARLY-OUT.  Poison the pad behind hud_scan's back and ask
+    # for the state it already believes is on screen.
+    x0, y0, bw, bh, sx, sy = genhud.scan_slot()
+    cells = [genhud.scan_xy(c, r) for (c, r) in
+             genhud.SCAN_CELL + [genhud.SCAN_HUBCELL]]
+    n = 0
+    for (x, y) in cells:
+        for yy in range(y, y + bh):
+            for xx in range(x, x + bw):
+                rig.c.poke(SCR + off(xx, yy), POISON)
+                n += 1
+    ram = rig.scan(states[-1])
+    kept = sum(1 for (x, y) in cells for yy in range(y, y + bh)
+               for xx in range(x, x + bw) if ram[off(xx, yy)] == POISON)
+    if kept != n:
+        print(f"  scanner: the unchanged-bearing early-out REPAINTED "
+              f"({kept} of {n} poisoned bytes survived)")
+        bad += 1
+    else:
+        print(f"  scanner: an unchanged bearing writes nothing at all "
+              f"({kept} poisoned bytes survive)")
+    return bad
+
+
+def verify_radar(rig):
+    """The dial's blips and its sweep, over a sequence of blip sets.
+
+    IN SEQUENCE, like everything else here, because the erase is the half
+    with state: hud_radar only knows which square to put back from the
+    byte it remembered, and it draws nothing at all when the set has not
+    moved.  The sweep advances one tick a call whatever happens, so this
+    also walks it right round the dial twice.
+
+    ALL 24 BLIP SQUARES ARE CHECKED EVERY TIME, not just the lit ones --
+    see genhud.radar_cells.  So is every one of the eight ticks, which is
+    what catches a sweep that lights the right one and forgets to put the
+    last one back in ITS OWN colour: north's tick is a different size and
+    a different pen from the other seven.
+    """
+    rig.once(0)                             # furniture, and hud_force
+    bad = 0
+    N = 6
+    #  (ammo blips, monster blip).  The last two pairs are the ones that
+    #  matter: a monster ON a pickup's square must show as the MONSTER,
+    #  and a monster that leaves must put the dial back -- including when
+    #  a pickup is underneath it, which is the case a naive erase to
+    #  DIAL_BG gets wrong.
+    sets = [
+        ([0xFF] * N, 0xFF),                 # nothing on the map
+        ([0x16] + [0xFF] * (N - 1), 0xFF),  # one pickup, mid ring
+        ([0x16, 0x27] + [0xFF] * (N - 2), 0x04),
+        ([0x00, 0x11, 0x22, 0x03, 0x14, 0x25], 0x12),
+        ([0x20, 0x21, 0x22, 0x23, 0x24, 0x25], 0x26),   # all six + monster
+        ([0x00] * N, 0x00),                 # monster ON a pickup
+        ([0x00] * N, 0xFF),                 # ...and off it again
+        ([0xFF] * N, 0x05),                 # monster alone
+        ([0x27, 0xFF, 0x16, 0xFF, 0x05, 0xFF], 0xFF),
+    ]
+    # the sweep starts wherever hud_static left it; track it the way the
+    # asm does -- one on, modulo eight, per call.
+    lit = rig.c.peek(rig.s("HUD_SWA"))
+    # THE DIAL IS THREE LAYERS AND THE ORDER IS THE POINT: furniture,
+    # then the blips, then the NEEDLE ON TOP.  hud_radar redraws the
+    # needle after any blip moves -- see the note there -- so a blip and
+    # the needle can want the same square and the needle wins.  Modelling
+    # it as "blip square = blip colour" fails on the outer ring straight
+    # ahead, where the needle's tip is; modelling an unlit square as
+    # black fails one row lower.  Both happened.
+    for st, mon in sets:
+        lit = (lit + 1) % 8
+        ram = rig.radar(st, mon)
+        grid = genhud.paint(genhud.furniture())        # layer 1
+        for (x, y, w, h, b) in genhud.radar_cells(st, mon):  # layer 2
+            if b is None:
+                continue
+            for yy in range(y, y + h):
+                for xx in range(x, x + w):
+                    grid[yy][xx] = b
+        for (x, y, h, pen) in genhud.dots(0):           # layer 3, on top
+            for yy in range(y, y + h):
+                for xx in range(x, x + genhud.NDL_W):
+                    grid[yy][xx] = genhud.SOLID[pen]
+        want = {}
+        for (x, y, w, h, _b) in (genhud.radar_cells(st, mon)
+                                 + genhud.sweep_cells(lit)):
+            for yy in range(y, y + h):
+                for xx in range(x, x + w):
+                    want[off(xx, yy)] = grid[yy][xx]
+        for (x, y, w, h, b) in genhud.sweep_cells(lit):  # the lit tick is
+            for yy in range(y, y + h):                   # not furniture
+                for xx in range(x, x + w):
+                    want[off(xx, yy)] = b
+        wrong = [(o, ram[o], b) for o, b in want.items() if ram[o] != b]
+        if wrong:
+            o, got, exp = wrong[0]
+            print(f"  radar {[hex(v) for v in st]} mon {hex(mon)}: "
+                  f"WRONG at {len(wrong)} of "
+                  f"{len(want)}, first +&{o:04X} got &{got:02X} want &{exp:02X}")
+            bad += len(wrong)
+            break
+    if not bad:
+        print(f"  radar: {len(sets)} blip sets drawn in sequence -- pickups "
+              f"and the monster, including a monster standing on a pickup "
+              f"-- all 24 ring squares and all 8 ticks exact every time")
+    return bad
+
+
 # -------------------------------------------------------------- measure ----
 def calibrate(rig):
     src = os.path.join(BUILD, "cal.asm")
@@ -296,6 +534,8 @@ def measure(rig):
     turn = rig.bench(E_TURN, target=2000) - ovh
     ctl = rig.bench(E_TURNCTL) - ovh
     stat = rig.bench(E_STATIC, target=200) - ovh
+    ammo = rig.bench(E_AMMOB) - ovh
+    scan = rig.bench(E_SCANB) - ovh
     nb = sum(w * h for (_x, _y, w, h, _b) in RECTS.r)
     print()
     print(f"  hud_update, heading UNCHANGED   {same:8.2f} us   "
@@ -305,6 +545,17 @@ def measure(rig):
           f"(erase + redraw, {4*2} blocks)")
     print(f"    the turn loop itself           {ctl:8.2f} us   "
           f"(subtracted: (plr_a) advance, not HUD)")
+    print(f"  hud_ammo, count CHANGED         {ammo:8.2f} us   "
+          f"{100.0*ammo/80000:5.3f}% of the frame   "
+          f"(all {genhud.ammo_slot()[5]} pips repainted; unchanged is the "
+          f"early-out, a few us)")
+    print(f"  hud_scan, bearing MOVED         {scan:8.2f} us   "
+          f"{100.0*scan/80000:5.3f}% of the frame   "
+          f"(erase one cell of the pad, light another -- the two-rect "
+          f"case; a band change alone is one rect)")
+    print(f"    -> C_HUD covers hud_update alone; hud_ammo charges "
+          f"C_AMMO itself,\n       and only on the frames it paints "
+          f"(worst frame, both: {turn-ctl+ammo:.0f} us)")
     nr = sum(h for (_x, _y, _w, h, _b) in RECTS.r)
     print(f"  hud_static, once per buffer     {stat:8.1f} us   "
           f"{stat/nb:5.3f} us/byte over {nb} bytes")
@@ -313,7 +564,7 @@ def measure(rig):
           f"and {stat-2.0*nb:.0f} us of per-row setup ({(stat-2.0*nb)/nr:.0f} "
           f"us a row).  Narrow rows cannot amortise a LINETAB lookup, and "
           f"this runs twice, at startup, so it is left alone.")
-    return same, turn - ctl, stat
+    return same, turn - ctl, stat, ammo, scan
 
 
 def main():
@@ -323,7 +574,8 @@ def main():
           f"{len(rig.code)} bytes")
 
     print("\n=== verify against the model ===")
-    bad = verify_static(rig) + verify_turn(rig) + verify_back(rig)
+    bad = (verify_static(rig) + verify_turn(rig) + verify_back(rig)
+           + verify_ammo(rig) + verify_scan(rig) + verify_radar(rig))
 
     print("\n=== timing method calibration ===")
     calibrate(rig)

@@ -1637,6 +1637,43 @@ rf_pair
     add  hl,de
     ld   b,(hl)                 ; dn: the first free row below
 
+    if RC_PACED
+    ; ---- ONE HOOK PER PAIR, DRAWN OR NOT, which is what rc_pairloop
+    ;      already does for faces and for the same reason.
+    ;
+    ;      Hooking only the pairs that FILL does not work, and the way it
+    ;      fails is worth writing down: the interval a hook has to cover
+    ;      runs to the NEXT hook, so the last filled pair's hook was
+    ;      paying for its own band AND every remaining loop iteration
+    ;      after it.  MEASURED 979 us over C_CFARP at a state whose last
+    ;      filled pair was six from the end.  Covering that from the
+    ;      filled pair's own charge would mean C_CFARP = 2200 to bound
+    ;      the worst gap, and 22 filled pairs would then be charged
+    ;      48400 against 18442 measured.
+    ;
+    ;      So every pair takes a hook and the amount says which kind it
+    ;      is.  The tests are repeated from the draw code below because
+    ;      the hook has to run BEFORE the work, and the draw code
+    ;      interleaves its tests with its bands -- twenty bytes rather
+    ;      than restructuring a fill that emu_rcol verifies byte for
+    ;      byte.
+    ld   a,c
+    cp   RC_FAR0+1
+    jr   nc,rf_pay
+    ld   a,RC_FAR1
+    cp   b
+    jr   nc,rf_pay
+    push bc
+    ld   bc,C_CFARS             ; this pair draws nothing
+    jr   rf_hook
+rf_pay
+    push bc
+    ld   bc,C_CFARP             ; ...this one does
+rf_hook
+    call cost_unit
+    pop  bc
+    endif
+
     ld   a,c                    ; ---- the band ABOVE: RC_FAR0 .. up-1
     cp   RC_FAR0+1
     jr   c,rf_below
@@ -1667,6 +1704,19 @@ rf_next
     ld   hl,rc_farn
     dec  (hl)
     jp   nz,rf_pair
+    if RC_PACED
+    ; ---- AND ONE FOR THE WAY OUT.  The interval a hook covers runs to
+    ;      the NEXT hook, so the last pair's hook was also paying for
+    ;      rc_far's return, raster_colframe's pass-1 entry and, when no
+    ;      moving door follows, the whole frame epilogue -- the bank 4
+    ;      restore and the SP restore.  MEASURED 236 us over C_CFARS.
+    ;
+    ;      That work was never charged on its own; the old single-hook
+    ;      C_CFAR of 13000 simply absorbed it along with everything else.
+    ;      Taking it apart is what made it visible.
+    ld   bc,C_CFAREND
+    call cost_unit
+    endif
     ret
     endif
 

@@ -12,8 +12,26 @@ with horizontal `PUSH DE` runs.
     make gun        # the weapon: every bob offset, byte for byte, then timed
     make pace       # the frame period and the walking speed that follows
 
-Boot with `RUN"DISC`. Arrow keys move and turn; **SPACE** opens a door you are
-standing beside; **ESC** returns to BASIC.
+Boot with `RUN"DISC`. A title screen lists the keys; **SPACE** starts.
+
+Arrow keys move and turn; **SHIFT** runs (and turns twice as fast);
+**SPACE** opens a door you are standing beside; **CTRL** or **Z** fires;
+**ESC** returns to BASIC.
+
+See [plan.md](plan.md) for what a complete game still needs, and for the
+map editor.
+
+Six rounds, shown as pips in the HUD's top-left slot. Firing spends one and
+kicks the weapon up; there is no way to reload except to walk over one of the
+six ammunition pickups scattered around the map, which refill the magazine
+outright.
+
+Pickups are drawn on the floor as orange blocks, occluded by walls. The
+**slot below the pips is a direction pad** pointing at the nearest one —
+eight bearings around a white hub, relative to where you are looking, the
+lit block yellow / orange / red by distance. The **dial is also a radar**:
+ammo shows as orange blips and the monster as mauve, at their bearing and
+at a radius that is their distance, with a sweep round the ticks.
 
 | | |
 |---|---|

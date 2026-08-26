@@ -26,6 +26,7 @@ _ROOT = os.path.dirname(_E2)
 sys.path.insert(0, os.path.expanduser("~/cpcemu"))
 
 from cpc import CPC                                          # noqa: E402
+import bootdisc                                              # noqa: E402
 
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
@@ -86,6 +87,7 @@ def main():
     c.run_frames(150)
     c.type_text('RUN"DISC\n')
     c.run_frames(400)
+    bootdisc.start(c)   # past the title screen -- see bootdisc.py
     print(f"{'':30s} {'game frames':>12s} {'vsyncs each':>12s} {'ms':>7s}"
           f" {'fps':>6s}")
     for (name, cx, cy, a) in PLACES:

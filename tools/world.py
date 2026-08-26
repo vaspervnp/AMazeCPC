@@ -122,6 +122,26 @@ MAZE_SRC_M2 = [
     "################",
 ]
 
+# ---- AMMUNITION, scattered one to a room ---------------------------
+#  Cell coordinates, not a map character: SOLID's alphabet is the
+#  KERNEL's -- 0 open, 1 wall, 2 shut door, 3 door in motion -- and the
+#  march reads it four times a cell in its hot loop.  A fifth code would
+#  buy a test in that loop for something the renderer does not draw and
+#  the collision does not care about, so pickups live in their own short
+#  list instead, the way the doors already do.
+#
+#  Six of the nine rooms, so a player who has emptied the magazine has
+#  somewhere to walk to but not one underfoot.  load_maze() asserts every
+#  one of them is FLOOR.
+AMMO_CELLS = [(2, 2), (8, 3), (13, 2),
+              (3, 8), (12, 7), (7, 13)]
+
+# ---- THE MONSTER, one of it, standing still -------------------------
+#  In the room the player starts in, two cells to the west, so it is in
+#  view the moment they turn round.  It is a test target for the shot's
+#  impact effect, not a game character.
+MONSTER_CELL = (1, 12)
+
 FLOOR, WALL, DOOR = 0, 1, 2
 
 MAZE_W = len(MAZE_SRC[0])
@@ -179,6 +199,32 @@ def load_maze():
     assert sx >= 0, "maze has no '@' start position"
     _check_connected(grid, sx, sy)
     return grid, sx, sy
+
+
+def monster_cell(grid, sx, sy):
+    """-> (x, y) for the standing monster, or None for this layout."""
+    if _ACTIVE is not MAZE_SRC:
+        return None
+    x, y = MONSTER_CELL
+    assert grid[y][x] == FLOOR, f"monster {(x, y)} is not floor"
+    assert (x, y) != (sx, sy), "monster on the player's start cell"
+    assert (x, y) not in AMMO_CELLS, "monster standing on a pickup"
+    return MONSTER_CELL
+
+
+def ammo_cells(grid, sx, sy):
+    """-> [(x, y)] pickups for this layout, validated against the grid.
+
+    Only the mode 0 maze is furnished; the mode 2 disc has no shooting.
+    """
+    if _ACTIVE is not MAZE_SRC:
+        return []
+    for x, y in AMMO_CELLS:
+        assert 0 <= x < MAZE_W and 0 <= y < MAZE_H, f"ammo {(x, y)} off map"
+        assert grid[y][x] == FLOOR, f"ammo {(x, y)} is not floor"
+        assert (x, y) != (sx, sy), "ammo on the player's start cell"
+    assert len(set(AMMO_CELLS)) == len(AMMO_CELLS), "duplicate ammo cell"
+    return list(AMMO_CELLS)
 
 
 # ------------------------------------------------------------- facing ----

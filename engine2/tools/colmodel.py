@@ -647,7 +647,8 @@ def face_columns(q, c, cover=None, over=False, dlift=0):
 
 
 def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
-           c_colr, c_cedge, c_cstep, dlift=0, c_cfar=0):
+           c_colr, c_cedge, c_cstep, dlift=0, c_cfar=0, c_cfarp=0,
+           c_cfars=0, c_cfarend=0):
     """-> the microsecond charges rastcol.asm takes, in order.
 
     THE TWIN OF THE COST HOOKS, the way pacemodel.quad_units is the twin
@@ -679,7 +680,8 @@ def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
             + u["skip"] * c_cskip + u["pair"] * c_cols
             + u["bands"] * c_cband + u["rows"] * c_colr
             + u["edges"] * c_cedge + u["steps"] * c_cstep
-            + u["far"] * c_cfar
+            + u["far"] * c_cfar + u["farp"] * c_cfarp
+            + u["fars"] * c_cfars + u["farend"] * c_cfarend
             for u in charge_terms(quads, c, dlift)]
 
 
@@ -705,7 +707,8 @@ def charge_terms(quads, c, dlift=0):
     if not quads and far_rows(c) is None:
         return out                       # raster_colframe rets before
     z = {"frame": 0, "face": 0, "skip": 0, "pair": 0,
-         "bands": 0, "rows": 0, "edges": 0, "steps": 0, "far": 0}
+         "bands": 0, "rows": 0, "edges": 0, "steps": 0,
+         "far": 0, "farp": 0, "fars": 0, "farend": 0}
     out.append(dict(z, frame=1))         # its hook on an empty list
     # TWO PASSES, in raster_colframe's own order.  rc_face is entered for
     # every record in BOTH passes but returns before the charge on the
@@ -714,8 +717,27 @@ def charge_terms(quads, c, dlift=0):
     p0, p1 = passes(quads)
     for over, group in ((False, p0), ("far", None), (True, p1)):
       if group is None:
-        if far_rows(c) is not None:
-            out.append(dict(z, far=1))   # ONE hook for the whole pass
+        # THE FAR PLANE: a FIXED hook and then ONE PER FILLED PAIR.
+        #
+        # It was one hook for the whole pass, charged C_CFAR, and that
+        # was wrong in both directions once RC_FARH went from 96 to 144:
+        # 13000 us against 18442 MEASURED at a state that fills all 22
+        # pairs, and against 1420 at the far commoner state that fills
+        # none.  See costcol.inc for the fit and the numbers.  rc_far's
+        # loop takes a hook at EVERY pair -- C_CFARP where it draws and
+        # C_CFARS where it does not -- so this does the same, off the
+        # same cover bytes the asm reads.
+        rows = far_rows(c)
+        if rows is not None:
+            out.append(dict(z, far=1))
+            r0, r1 = rows
+            up, dn = cover
+            for p in range(c.VP_BW // 2):
+                if r0 <= up[p] or dn[p] <= r1:
+                    out.append(dict(z, farp=1))
+                else:
+                    out.append(dict(z, fars=1))
+            out.append(dict(z, farend=1))       # the way out of the pass
         continue
       for q in reversed(group):
         out.append(dict(z, face=1))      # the top of rc_face: every record

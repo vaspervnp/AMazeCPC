@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(_ROOT, "tools"))
 
 import cpc as cpcmod                                         # noqa: E402
 from cpc import CPC                                          # noqa: E402
+import bootdisc                                              # noqa: E402
 import world                                                 # noqa: E402
 
 
@@ -129,6 +130,28 @@ def _equ(name):
     raise SystemExit(f"{name} not found in game.asm")
 
 
+AMMO_MAX = _equ("AMMO_MAX")     # game.asm's magazine size
+AMMO_NEAR = _equ("AMMO_NEAR")   # ...and its distance bands, in
+AMMO_MID = _equ("AMMO_MID")     # L1 cells
+
+# ...and the MAP's numbers, from the include gen_march.py wrote: how many
+# pickups it scattered, and where the player starts (world.py asserts no
+# pickup is on that cell, which is what makes it the right place to test
+# firing from).
+_GM = open(os.path.join(_E2, "src", "gen_maze.inc")).read().split("\n")
+
+
+def _gm(name):
+    for line in _GM:
+        p = line.split()
+        if len(p) >= 3 and p[0] == name and p[1] == "equ":
+            return int(p[2])
+    raise SystemExit(f"{name} not found in gen_maze.inc")
+
+
+NAMMO = _gm("NAMMO")
+START = (_gm("START_X"), _gm("START_Y"))
+
 DOOR_MIN_FRAMES = 6
 assert _equ("DOOR_OPEN") - _equ("DOOR_SHUT") >= DOOR_MIN_FRAMES, (
     "game.asm's door runs in %d frames, under the %d this checks for"
@@ -151,7 +174,8 @@ class Game:
         self.c.insert_disc(DSK)
         self.c.run_frames(150)
         self.c.type_text('RUN"DISC\n')
-        self.c.run_frames(500)          # loader + two hud_static passes
+        self.c.run_frames(500)
+        bootdisc.start(self.c)   # past the title screen -- see bootdisc.py          # loader + two hud_static passes
 
     def player(self):
         x, y = struct.unpack("<HH", self.c.read_ram(self.s["PLR_X"], 4))
@@ -405,7 +429,157 @@ def main():
           f"{ndoor - len(dead)} of {ndoor} opened"
           + (f"; DEAD: {dead}" if dead else ""))
 
-    print("\n7  FRAME PERIOD (measured, one gap at a time, five samples a"
+    print("\n7  SHOOTING AND PICKUPS (Z fires; CTRL does too, but the "
+          "emulator\n       cannot press a modifier -- see game.asm's "
+          "fire_edge)")
+    tab = c.read_ram(g.s["AMMOTAB"], NAMMO)
+    amx = g.s["PLR_AMMO"]
+    # The map's list, as cells.  Read off the RUNNING MACHINE rather than
+    # imported from world.py, so a table the build failed to emit shows up
+    # here as a wrong cell and not as a Python constant agreeing with
+    # itself.
+    cells = [(b & 15, b >> 4) for b in tab]
+    def shoot():
+        """One press edge, guaranteed.
+
+        A GAME frame is PACE_FRAMES vsyncs, so the key has to be held
+        for longer than that or scan_keys can miss the press entirely --
+        the first version held it for 4 and silently lost two shots in
+        six.  Down for PACE_N+5 and up for PACE_N+5 means at least one
+        scan sees it down and at least one sees it up: exactly one edge,
+        every time."""
+        c.key_down(ord('z'))
+        c.run_frames(PACE_N + 5)
+        c.key_up(ord('z'))
+        c.run_frames(PACE_N + 5)
+
+    g.place(START[0] * 256 + 128, START[1] * 256 + 128, 0)  # no pickup here
+    check(c.peek(amx) == AMMO_MAX, "the magazine starts full",
+          f"plr_ammo = {c.peek(amx)} of {AMMO_MAX}")
+
+    n0 = c.peek(amx)
+    shoot()
+    check(c.peek(amx) == n0 - 1, "Z fires one round",
+          f"{n0} -> {c.peek(amx)}")
+
+    n0 = c.peek(amx)                    # HELD DOWN is still one round
+    c.key_down(ord('z'))
+    c.run_frames(120)
+    held = c.peek(amx)
+    c.key_up(ord('z'))
+    c.run_frames(12)
+    check(held == n0 - 1, "holding Z down does NOT empty the magazine",
+          f"{n0} -> {held} over 120 frames held")
+
+    for _ in range(AMMO_MAX + 2):       # empty it, then keep pulling
+        shoot()
+    check(c.peek(amx) == 0, "an empty magazine stays at zero, it does not"
+          " wrap", f"plr_ammo = {c.peek(amx)} after {AMMO_MAX+2} more shots")
+
+    # ...and the pickups.  Stand on each one in turn: ammo_pick runs every
+    # game frame off the player's cell, so a teleport onto it is the same
+    # thing the walk is.
+    got, missed = [], []
+    for i, (cx, cy) in enumerate(cells):
+        g.place(cx * 256 + 128, cy * 256 + 128, 0)
+        if c.peek(amx) == AMMO_MAX and c.peek(g.s["AMMO_ST"] + i) == 0xFF:
+            got.append((cx, cy))
+        else:
+            missed.append(((cx, cy), c.peek(amx),
+                           c.peek(g.s["AMMO_ST"] + i)))
+        for _ in range(AMMO_MAX):       # empty it again for the next one
+            shoot()
+    check(not missed, f"every one of the {len(cells)} pickups refills the "
+          "magazine and is then gone",
+          f"{len(got)} of {len(cells)}: {got}"
+          + (f"; MISSED: {missed}" if missed else ""))
+
+    # A TAKEN PICKUP IS TAKEN.  Walk back onto the first one on an empty
+    # magazine: nothing should happen.
+    cx, cy = cells[0]
+    g.place(cx * 256 + 128, cy * 256 + 128, 0)
+    check(c.peek(amx) == 0, "a pickup already collected does not come back",
+          f"plr_ammo = {c.peek(amx)} standing on {(cx, cy)} again")
+
+    print("\n8  THE AMMO SCANNER (the direction pad in the middle-left "
+          "slot)")
+    # THE RULE, IN PYTHON, from game.asm:ammo_scan.  Not a restatement of
+    # the answer -- a restatement of the METHOD, which is what makes a
+    # disagreement mean something.
+    OCTAB = [0, 1, 2,  4, 3, 2,  0, 7, 6,  4, 5, 6]
+
+    def scan_model(px, py, a, live):
+        best, bd = None, 999
+        for (cx, cy) in live:                       # strictly nearer wins
+            d = abs(cx - px) + abs(cy - py)
+            if d < bd:
+                bd, best = d, (cx, cy)
+        if best is None:
+            return 0xFF
+        dx, dy = best[0] - px, best[1] - py
+        ax, ay = abs(dx), abs(dy)
+        shape = 2 if 2 * ay >= 5 * ax else (0 if 2 * ax >= 5 * ay else 1)
+        i = (1 if dy < 0 else 0) * 2 + (1 if dx < 0 else 0)
+        o = OCTAB[i * 3 + shape]
+        p, n = 0, a + 4                             # round(a / 9)
+        while n >= 9:
+            n -= 9
+            p += 1
+        band = 0 if bd <= AMMO_NEAR else (1 if bd <= AMMO_MID else 2)
+        return (band << 4) | ((o - p) & 7)
+
+    adir = g.s["AMMO_DIR"]
+    # RE-ARM FIRST.  Section 7 walked over every pickup to prove they can
+    # be collected, so by here the map is stripped -- and a scanner test
+    # run against an empty map is not a test: every case would compare
+    # #FF against #FF and pass.  Put the map's own table back, which is
+    # exactly what game.asm's ammo_arm does.
+    c.write_ram(g.s["AMMO_ST"], tab)
+    g.place(START[0] * 256 + 128, START[1] * 256 + 128, 0)
+    live = [cell for cell, b in
+            zip(cells, c.read_ram(g.s["AMMO_ST"], NAMMO)) if b != 0xFF]
+    check(len(live) == NAMMO, "the pickups are back for this section",
+          f"{len(live)} of {NAMMO} live: {live}")
+    print(f"       {len(live)} pickups on the map: {live}")
+
+    # (a) ALL 72 HEADINGS from one spot -- the heading half of the sum,
+    #     which is where an off-by-one sector would live.
+    bad = []
+    for a in range(72):
+        g.place(START[0] * 256 + 128, START[1] * 256 + 128, a, settle=14)
+        got, want = c.peek(adir), scan_model(START[0], START[1], a, live)
+        if got != want:
+            bad.append((a, got, want))
+    check(not bad, "the bearing is right at all 72 headings",
+          f"from the start cell {START}"
+          + (f"; WRONG at {len(bad)}: {bad[:4]}" if bad else ""))
+
+    # (b) MANY POSITIONS at a fixed heading -- the geometry half.  Every
+    #     floor cell that is not itself a pickup, so nothing is collected.
+    bad, n = [], 0
+    for cy in range(1, 15):
+        for cx in range(1, 15):
+            if c.peek(SOLID + cy * 16 + cx) != 0 or (cx, cy) in live:
+                continue
+            n += 1
+            if n % 3:                       # a third of them: ~40 places
+                continue
+            g.place(cx * 256 + 128, cy * 256 + 128, 0, settle=14)
+            got, want = c.peek(adir), scan_model(cx, cy, 0, live)
+            if got != want:
+                bad.append(((cx, cy), got, want))
+    check(not bad, "...and at a third of the standable cells, facing east",
+          f"{n // 3} places checked"
+          + (f"; WRONG at {len(bad)}: {bad[:4]}" if bad else ""))
+
+    # (c) AND IT GOES DARK when the map has been stripped.
+    for i in range(NAMMO):
+        c.poke(g.s["AMMO_ST"] + i, 0xFF)
+    g.place(START[0] * 256 + 128, START[1] * 256 + 128, 0)
+    check(c.peek(adir) == 0xFF, "with every pickup taken the pad goes dark",
+          f"ammo_dir = #{c.peek(adir):02X}")
+
+    print("\n9  FRAME PERIOD (measured, one gap at a time, five samples a"
           " vsync)")
     print("       The old four-chunk pad gave 80 ms 79% / 100 ms 20% /"
           " 120 ms 1% / 140 ms\n"

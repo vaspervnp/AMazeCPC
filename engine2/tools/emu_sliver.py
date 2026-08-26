@@ -234,6 +234,7 @@ def disc():
     m.run_frames(150)
     m.type_text('RUN"DISC\n')
     m.run_frames(500)
+    bootdisc.start(m)   # past the title screen -- see bootdisc.py
     assert m.mode == 0
     tot = {"sliver": 0, "left": 0, "right": 0}
     for tag, px, py, a in [("worst frame in the maze",) + WORST,

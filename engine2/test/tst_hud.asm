@@ -18,11 +18,28 @@
 ;    #8010  bench: counter++ ; next heading          -- control for the above
 ;    #8014  bench: counter++ ; hud_static            -- the startup cost
 ;    #8018  bench: counter++                         -- the loop overhead
+;    #801C  hud_ammo with A = (ammon), (done) = #FF
+;    #8020  bench: counter++ ; hud_ammo, the count FLIPPING 0 <-> AMN so
+;           every call takes the repaint branch -- the worst case, which
+;           is the one C_HUD has to cover
+;    #8024  hud_scan with A = (scann), (done) = #FF
+;    #802C  hud_radar with (ammo_blip) as poked, (done) = #FF
+;    #8028  bench: counter++ ; hud_scan, the bearing FLIPPING between two
+;           DIFFERENT cells, which is the two-rectangle case -- the worst
+;           one, and the one C_SCAN has to cover
 ; =====================================================================
 
     include "tab_equ_test.inc"
 
 STACK   equ #7FF0
+
+; ---- STAND-INS FOR THE THINGS game.asm OWNS -------------------------
+;  hud2.asm's radar reads the ammo scanner's output.  This harness does
+;  not include game.asm -- it never has, which is why plr_a is declared
+;  at the foot of this file too -- so the two names it needs are given
+;  here.  MAXAMMO has to be an equ up HERE rather than a label below,
+;  because hud2.asm sizes a `ds` with it.
+MAXAMMO equ 6
 
     org #8000
 
@@ -40,6 +57,16 @@ STACK   equ #7FF0
     jp  e_static
     di
     jp  e_empty
+    di
+    jp  e_ammo
+    di
+    jp  e_ammob
+    di
+    jp  e_scan
+    di
+    jp  e_scanb
+    di
+    jp  e_radar
 
 romoff
     ld  bc,#7F8C                ; mode 0, both ROMs disabled
@@ -142,6 +169,73 @@ ee_l
     ld  (counter),hl
     jr  ee_l
 
+e_ammo
+    ld  sp,STACK
+    call romoff
+    xor a
+    ld  (done),a
+    call setbuf
+    ld  a,(ammon)
+    call hud_ammo
+    ld  a,#FF
+    ld  (done),a
+    jp  e_spin          ; ...jp: e_spin is out of jr range from down here
+
+e_ammob
+    ld  sp,STACK
+    call romoff
+    call setbuf
+    ld  hl,0
+    ld  (counter),hl
+ea_l
+    ld  hl,(counter)
+    inc hl
+    ld  (counter),hl
+    ld  a,(ammon)               ; flip 0 <-> HUD_AMN so hud_ammo can never
+    xor HUD_AMN                 ; take its early-out
+    ld  (ammon),a
+    call hud_ammo
+    jr  ea_l
+
+e_scan
+    ld  sp,STACK
+    call romoff
+    xor a
+    ld  (done),a
+    call setbuf
+    ld  a,(scann)
+    call hud_scan
+    ld  a,#FF
+    ld  (done),a
+    jp  e_spin
+
+e_scanb
+    ld  sp,STACK
+    call romoff
+    call setbuf
+    ld  hl,0
+    ld  (counter),hl
+es_sl
+    ld  hl,(counter)
+    inc hl
+    ld  (counter),hl
+    ld  a,(scann)               ; flip between bearing 0 and bearing 4, so
+    xor 4                       ; the cell always MOVES: erase one, draw
+    ld  (scann),a               ; the other, which is the two-rectangle
+    call hud_scan               ; worst case
+    jr  es_sl
+
+e_radar
+    ld  sp,STACK
+    call romoff
+    xor a
+    ld  (done),a
+    call setbuf
+    call hud_radar
+    ld  a,#FF
+    ld  (done),a
+    jp  e_spin
+
 ; one 5-degree step of turn -- what the compass actually has to follow
 nextang
     ld  a,(plr_a)
@@ -158,5 +252,11 @@ counter dw 0
 done    db 0
 bufh    db #C0
 plr_a   db 0                    ; in the real build this lives in march.asm
+ammon   db 0                    ; ...and this one in game.asm, as plr_ammo
+scann   db #FF                  ; ...and this one, as ammo_dir
+ammo_blip ds MAXAMMO            ; ...and this array, which the radar draws
+                                ; from.  e_radar below pokes it.
+mon_blip  db #FF                ; ...and the monster's own bearing, which
+                                ; the radar draws in its own colour
 
     include "hud2.asm"

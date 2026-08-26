@@ -216,6 +216,8 @@ def furniture():
             rc.add(wx, wy, ww, wh, LIGHT)
             rc.add(wx + 1, wy + 2, ww - 2, wh - 4, SHADOW)
 
+    scan_furniture(rc)                  # the ammo scanner's resting pad
+
     # ---- the dial: a cyan disc with a black well cut out of it -------
     ellipse_bands(rc, cxb, cy, DIAL_RXB, DIAL_RY, LIGHT)
     ellipse_bands(rc, cxb, cy, DIAL_RXB - RIM_XB, DIAL_RY - RIM_Y, DIAL_BG)
@@ -330,7 +332,287 @@ def check(rects, tab):
 # =====================================================================
 #  output
 # =====================================================================
+def ammo_slot():
+    """-> (x, y, w, h, dx, n) for the six ammo pips.
+
+    DERIVED FROM THE SLOT THAT HOLDS THEM, not written down: the readout
+    lives in the inner well of the TOP-LEFT bevelled slot, whose geometry
+    is the ww/wh/gap arithmetic in furniture() above.  Move the slots and
+    the pips follow; hud2.asm carries no coordinate of its own.
+
+    Every width is EVEN, which hud_rect requires -- its unrolled PUSH
+    block is entered in units of two bytes.
+    """
+    ww, wh, gap = 22, 22, 5
+    _cxb, cy = dial_centre()
+    wx = 2                                  # the LEFT column of slots
+    wy = cy - (3 * wh + 2 * gap) // 2       # ...and the TOP one of three
+    ix, iy, iw, ih = wx + 1, wy + 2, ww - 2, wh - 4      # the inner well
+    n, w = 6, 2
+    dx = 3                                  # 2 bytes of pip, 1 of gap
+    span = (n - 1) * dx + w
+    assert span <= iw, (span, iw)
+    h = 8
+    return ix + (iw - span) // 2, iy + (ih - h) // 2, w, h, dx, n
+
+
+def ammo_rects(n):
+    """-> [(x, y, w, h, byte)] the readout showing `n` rounds.
+
+    THE MODEL OF hud_ammo, and the only one: emu_hud.py compares the
+    bytes hud_ammo writes against exactly this.  Spent pips are drawn in
+    the slot's own SHADOW colour rather than skipped, because the count
+    goes down as well as up and a skipped pip would leave the last one
+    on screen for ever.
+    """
+    x, y, w, h, dx, cnt = ammo_slot()
+    out = []
+    for i in range(cnt):
+        pen = pal.HUD_AMMO if i < n else SHADOW
+        out.append((x + i * dx, y, w, h, SOLID[pen]))
+    return out
+
+
+# =====================================================================
+#  THE AMMO SCANNER -- a 3x3 direction pad in the MIDDLE-LEFT slot.
+#
+#  The pips above it say how many rounds are left; this says where the
+#  next box of them is.  Eight outer cells are the eight bearings
+#  RELATIVE TO THE PLAYER'S HEADING -- top-centre is straight ahead and
+#  they run clockwise -- and the hub is the player.
+#
+#  THE EIGHT UNLIT CELLS ARE FURNITURE, and that is what makes the whole
+#  thing cheap.  They go in with the rest of the static rectangles at
+#  startup, so hud_scan never draws a layout: it paints ONE cell in the
+#  distance colour and paints the previous one back to SCAN_OFF, exactly
+#  the way the compass needle erases itself.  A pad drawn from scratch
+#  every time the bearing moved would be nine rectangles instead of two.
+#
+#  Everything below is derived from the slot, like ammo_slot() above.
+SCAN_OFF = PANEL                    # 11, blue  -- an unlit bearing
+SCAN_HUB = MARK                     # 15, white -- the player, at the hub
+
+#  Relative octant -> which of the nine cells lights.  0 is dead ahead and
+#  they run CLOCKWISE, which on a map drawn with +x right and +y down is
+#  the direction game.asm's turn_right takes plr_a (STEPTAB is
+#  (cos 5a, sin 5a), so a = 18 is +y, i.e. east turns to south).
+SCAN_CELL = [(1, 0),        # 0  ahead
+             (2, 0),        # 1  ahead-right
+             (2, 1),        # 2  right
+             (2, 2),        # 3  behind-right
+             (1, 2),        # 4  behind
+             (0, 2),        # 5  behind-left
+             (0, 1),        # 6  left
+             (0, 0)]        # 7  ahead-left
+SCAN_HUBCELL = (1, 1)
+
+
+def scan_slot():
+    """-> (x0, y0, bw, bh, sx, sy) for the 3x3 pad.
+
+    bw is EVEN because hud_rect's unrolled PUSH block is entered in units
+    of two bytes; the asserts below are what keep it so.
+    """
+    ww, wh, gap = 22, 22, 5
+    _cxb, cy = dial_centre()
+    wx = 2                                  # the LEFT column of slots...
+    wy = cy - (3 * wh + 2 * gap) // 2 + (wh + gap)      # ...MIDDLE of three
+    ix, iy, iw, ih = wx + 1, wy + 2, ww - 2, wh - 4     # the inner well
+    bw, bh, pad = 6, 5, 1
+    sx, sy = bw + pad, bh + pad
+    assert 3 * bw + 2 * pad == iw, (bw, iw)
+    assert 3 * bh + 2 * pad <= ih, (bh, ih)
+    assert bw % 2 == 0, bw
+    return ix, iy + (ih - (3 * bh + 2 * pad)) // 2, bw, bh, sx, sy
+
+
+def scan_xy(col, row):
+    x0, y0, _bw, _bh, sx, sy = scan_slot()
+    return x0 + col * sx, y0 + row * sy
+
+
+def scan_furniture(rc):
+    """The pad's resting state: eight blue bearings and a white hub."""
+    _x0, _y0, bw, bh, _sx, _sy = scan_slot()
+    for (col, row) in SCAN_CELL:
+        x, y = scan_xy(col, row)
+        rc.add(x, y, bw, bh, SCAN_OFF)
+    x, y = scan_xy(*SCAN_HUBCELL)
+    rc.add(x, y, bw, bh, SCAN_HUB)
+
+
+def scan_rects(state, prev=None):
+    """-> [(x, y, w, h, byte)] the pad AFTER hud_scan has drawn `state`.
+
+    THE MODEL OF hud_scan, and the only one -- emu_hud.py compares the
+    bytes it writes against exactly this.  `state` is the packed byte the
+    game hands over: (band << 4) | octant, or 0xFF for "no pickup left".
+    `prev` is what was on screen before, because hud_scan restores that
+    cell and nothing else: the eight unlit cells are furniture and it
+    must not be repainting them.
+    """
+    _x0, _y0, bw, bh, _sx, _sy = scan_slot()
+    out = []
+    if prev is not None and prev != 0xFF and prev != state:
+        if state == 0xFF or (state & 15) != (prev & 15):
+            x, y = scan_xy(*SCAN_CELL[prev & 7])
+            out.append((x, y, bw, bh, SOLID[SCAN_OFF]))
+    if state != 0xFF:
+        x, y = scan_xy(*SCAN_CELL[state & 7])
+        out.append((x, y, bw, bh, SOLID[pal.HUD_SCAN[(state >> 4) & 3]]))
+    return out
+
+
+# =====================================================================
+#  THE RADAR -- ammo blips inside the dial, and a sweep round its ticks.
+#
+#  THE DIAL IS ALREADY A COMPASS ROSE, so the blips use its own mapping:
+#  dots(a) puts heading a at angle 5a with 0 straight up, and a world
+#  SECTOR o is heading 9o (72 headings over 8 sectors), so a blip for
+#  sector o goes at 45o degrees -- exactly where the needle points when
+#  the player faces it.  Line the needle up with a blip and walk.
+#
+#  RADIUS IS DISTANCE.  Three rings, near / mid / far, the same three
+#  bands game.asm's ammo_scan already sorts pickups into for the pad and
+#  the floor block.  So a blip on the inner ring is in this room.
+#
+#  THE SWEEP IS THE EIGHT TICKS THAT ARE ALREADY THERE, lit one at a
+#  time.  It costs two rectangles a frame and -- this is the point -- it
+#  lives OUTSIDE the rim, where the needle and the blips never go, so
+#  none of the three can erase another.  Inside the dial that is not
+#  free: the needle spans every radius along its own bearing, so it and
+#  the blips do collide, and hud_radar deals with that by ordering the
+#  repaints rather than by pretending they cannot.
+RADAR_R = [3, 6, 9]                 # blip radii in BYTES: near, mid, far
+RADAR_W, RADAR_H = 2, 3             # ...and the block, like a needle dot
+RADAR_PEN = pal.HUD_AMMO            # the ammo orange, as everywhere else
+MON_PEN = 13                        # mauve -- THE SAME PEN THE MONSTER IS
+                                    # DRAWN IN, so the blip and the thing
+                                    # it stands for are one colour.  It is
+                                    # also none of the three the dial
+                                    # already spends: white needle, red
+                                    # tail, orange ammo.
+SWEEP_PEN = 7                       # bright yellow: the lit tick
+
+
+def radar_pos(sector, band):
+    """-> (x, y) of the blip block for a world sector and distance band."""
+    cxb, cy = dial_centre()
+    th = math.radians(45.0 * sector)
+    r = RADAR_R[band]
+    dx = rnd(r * math.sin(th))
+    dy = rnd(-r * ASPECT * math.cos(th))
+    return cxb - RADAR_W // 2 + dx, cy + dy - (RADAR_H - 1) // 2
+
+
+def tick_rects():
+    """-> [(x, y, w, h, byte)] the eight ticks, exactly as furniture()
+    draws them.  The sweep lights one and puts the last one back, so it
+    needs their geometry AND their resting colour -- and north's tick is
+    a different size and a different pen from the other seven."""
+    cxb, cy = dial_centre()
+    out = []
+    for k in range(8):
+        th = math.radians(45.0 * k)
+        dx = rnd(TICK_RXB * math.sin(th))
+        dy = rnd(-TICK_RY * math.cos(th))
+        if k == 0:
+            out.append((cxb - 2 + dx, cy + dy - 2, 4, 5, SOLID[MARK]))
+        else:
+            out.append((cxb - 1 + dx, cy + dy - 1, 2, 3, SOLID[LIGHT]))
+    return out
+
+
+def radar_check():
+    """Every blip lands on DIAL_BG, so erasing one restores the dial.
+
+    The same invariant the needle has (see the header), and for the same
+    reason -- a blip that overlapped the rim or the hub could not be
+    taken back.  Asserted at generation time over all 24 positions.
+    """
+    grid = paint(furniture())
+    bg = SOLID[DIAL_BG]
+    bad = []
+    for o in range(8):
+        for b in range(3):
+            x, y = radar_pos(o, b)
+            for yy in range(y, y + RADAR_H):
+                for xx in range(x, x + RADAR_W):
+                    if grid[yy][xx] != bg:
+                        bad.append((o, b, xx, yy, grid[yy][xx]))
+    assert not bad, f"blips off the dial background: {bad[:4]}"
+    return len(bad) == 0
+
+
+def radar_cells(blips, mon=0xFF, under=None):
+    """-> [(x, y, w, h, byte or None)] every one of the 24 blip squares.
+
+    THE WHOLE RING SET, not just the ones a blip is on: the thing that
+    goes wrong with an erase is that it puts the wrong colour back, or
+    puts it back somewhere else, and only checking the squares that
+    SHOULD be lit cannot see either.
+
+    AN UNLIT SQUARE IS NOT NECESSARILY BLACK, and assuming it was is the
+    first thing this model got wrong.  The needle spans every radius
+    along its own bearing, so at heading 0 its second dot sits exactly on
+    the sector-0 middle-ring square -- hud_radar draws the needle back
+    over the blips for precisely that reason.
+
+    AND IT IS NOT ONE COLOUR EITHER, which is the second thing it got
+    wrong: the needle dot is three scanlines and the ring square is
+    three, offset by one, so the square is needle on two rows and dial
+    background on the third.  An unlit square therefore comes back as
+    None -- "whatever the dial has here" -- and the caller compares it
+    against the dial it painted for itself, byte by byte.
+    """
+    lit = {}
+    for b in blips:
+        if b != 0xFF:
+            lit[(b & 7, (b >> 4) & 3)] = SOLID[RADAR_PEN]
+    # THE MONSTER GOES ON LAST, so a monster sharing a square with a
+    # pickup shows as the monster -- which is the one you want to know
+    # about.  hud_radar draws them in that order for the same reason.
+    if mon != 0xFF:
+        lit[(mon & 7, (mon >> 4) & 3)] = SOLID[MON_PEN]
+    out = []
+    for o in range(8):
+        for band in range(3):
+            x, y = radar_pos(o, band)
+            out.append((x, y, RADAR_W, RADAR_H, lit.get((o, band))))
+    return out
+
+
+def sweep_cells(lit):
+    """-> the eight ticks, with tick `lit` in the sweep colour."""
+    out = []
+    for k, (x, y, w, h, b) in enumerate(tick_rects()):
+        out.append((x, y, w, h, SOLID[SWEEP_PEN] if k == lit else b))
+    return out
+
+
+def scan_pad(state):
+    """-> [(x, y, w, h, byte)] the WHOLE pad as it should look.
+
+    scan_rects() above is what hud_scan is allowed to WRITE; this is what
+    the nine cells must READ BACK as afterwards.  Checking the whole pad
+    rather than just the two rectangles is what catches an erase that
+    puts the wrong colour back, or one that lands on the hub.
+    """
+    _x0, _y0, bw, bh, _sx, _sy = scan_slot()
+    out = []
+    for i, (col, row) in enumerate(SCAN_CELL):
+        x, y = scan_xy(col, row)
+        pen = SCAN_OFF
+        if state != 0xFF and (state & 7) == i:
+            pen = pal.HUD_SCAN[(state >> 4) & 3]
+        out.append((x, y, bw, bh, SOLID[pen]))
+    x, y = scan_xy(*SCAN_HUBCELL)
+    out.append((x, y, bw, bh, SOLID[SCAN_HUB]))
+    return out
+
+
 def write_inc(path, rects, tab):
+    radar_check()               # every blip must land on DIAL_BG
     cxb, cy = dial_centre()
     L = []
     L.append("; Generated by engine2/tools/genhud.py -- do not edit.")
@@ -342,6 +624,82 @@ def write_inc(path, rects, tab):
     L.append(f"HUD_CY       equ {cy}   ; ... and scanline y")
     L.append(f"HUD_NDOT     equ {len(NDL_DOTS)}   ; blocks in the needle")
     L.append(f"HUD_NW       equ {NDL_W}   ; every block is this many bytes")
+
+    # ---- THE AMMO READOUT, in the top-left slot ----------------------
+    #  Six pips in the slot's inner well.  The geometry is DERIVED from
+    #  the same numbers that drew the slot -- ammo_slot() below -- so a
+    #  slot that moves takes its pips with it, and hud2.asm never has a
+    #  coordinate of its own.  Every width is EVEN because hud_rect's
+    #  unrolled PUSH block is entered in units of two bytes.
+    ax, ay, aw, ah, adx, an = ammo_slot()
+    L.append("")
+    L.append(f"HUD_AMX      equ {ax}   ; first ammo pip, byte x")
+    L.append(f"HUD_AMY      equ {ay}   ; ... and scanline y")
+    L.append(f"HUD_AMW      equ {aw}   ; pip width in BYTES (even)")
+    L.append(f"HUD_AMH      equ {ah}   ; ... and height in scanlines")
+    L.append(f"HUD_AMDX     equ {adx}   ; byte pitch from one pip to the next")
+    L.append(f"HUD_AMN      equ {an}   ; how many rounds the readout shows")
+    # ...as BYTES and not pens: hud_rect pushes the byte straight to the
+    # screen, and Rects.add is the only thing that maps one to the other.
+    L.append(f"HUD_AMPEN    equ #{SOLID[pal.HUD_AMMO]:02X}   "
+             f"; a round the player still has")
+    L.append(f"HUD_AMBG     equ #{SOLID[SHADOW]:02X}   "
+             f"; ... and one already fired")
+
+    # ---- THE AMMO SCANNER, in the middle-left slot -------------------
+    #  A 3x3 direction pad.  hud2.asm is handed a packed byte -- see
+    #  scan_rects() -- and needs three things from here: how big a cell
+    #  is, where each of the eight bearings is, and what to paint.  The
+    #  eight positions are a TABLE rather than a base and a pitch,
+    #  because the mapping from bearing to cell is not a straight line:
+    #  it walks a ring, and a ring is not arithmetic hud2.asm should be
+    #  doing.
+    sx0, sy0, sbw, sbh, _ssx, _ssy = scan_slot()
+    L.append("")
+    L.append(f"HUD_SCW      equ {sbw}   ; a scanner cell, bytes (even)")
+    L.append(f"HUD_SCH      equ {sbh}   ; ... and scanlines")
+    L.append(f"HUD_SCOFF    equ #{SOLID[SCAN_OFF]:02X}   "
+             f"; an unlit bearing -- what hud_scan restores")
+    L.append(f"HUD_SCN      equ {len(SCAN_CELL)}   ; bearings on the pad")
+    L.append("SCANPEN                     ; by distance band: near, mid, far")
+    L.append("    db " + ",".join("#%02X" % SOLID[p] for p in pal.HUD_SCAN))
+    L.append("SCANPOS                     ; by RELATIVE bearing: 0 is dead")
+    L.append("                            ; ahead, then clockwise")
+    for i, (col, row) in enumerate(SCAN_CELL):
+        x, y = scan_xy(col, row)
+        L.append("    db %3d,%4d   ; %d" % (x, y, i))
+    assert sx0 == scan_xy(0, 0)[0] and sy0 == scan_xy(0, 0)[1]
+
+
+    # ---- THE RADAR, on the dial ---------------------------------------
+    #  Blips by (sector, band) and the eight ticks the sweep lights.  The
+    #  tick table carries each tick's RESTING colour as well as its box,
+    #  because north's is a different size and a different pen from the
+    #  other seven and the sweep has to put back exactly what it found.
+    L.append("")
+    L.append(f"HUD_RADW     equ {RADAR_W}   ; a blip block, bytes (even)")
+    L.append(f"HUD_RADH     equ {RADAR_H}   ; ... and scanlines")
+    L.append(f"HUD_RADPEN   equ #{SOLID[RADAR_PEN]:02X}   "
+             f"; the ammo orange, as on the floor and in the pips")
+    L.append(f"HUD_RADBG    equ #{SOLID[DIAL_BG]:02X}   "
+             f"; ...and what erasing one puts back")
+    L.append(f"HUD_MONPEN   equ #{SOLID[MON_PEN]:02X}   "
+             f"; ...and a monster, in the pen it is drawn in")
+    L.append(f"HUD_SWPEN    equ #{SOLID[SWEEP_PEN]:02X}   "
+             f"; the lit tick")
+    L.append(f"HUD_NSECT    equ 8   ; sectors round the dial")
+    L.append("RADPOS                      ; db x, y -- by sector*3 + band,")
+    L.append("                            ; band 0 near (inner ring)")
+    for o in range(8):
+        row = []
+        for b in range(3):
+            x, y = radar_pos(o, b)
+            row.append(f"{x:3d},{y:4d}")
+        L.append("    db " + ", ".join(row) + f"   ; sector {o}")
+    L.append("TICKTAB                     ; db x, y, w, h, resting byte")
+    for (x, y, w, h, b) in tick_rects():
+        L.append(f"    db {x:3d},{y:4d},{w:3d},{h:3d},#{b:02X}")
+
     L.append("")
     L.append("; ---- static furniture: db x, y, w, h, byte ----")
     L.append("HUDRECTS")

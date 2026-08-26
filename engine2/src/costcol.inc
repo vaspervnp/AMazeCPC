@@ -172,14 +172,69 @@ C_CEDGE     equ 168         ; per possible EDGE row, bounded by
                             ; rebuild-the-address-every-row loop.
                             ; MEASURED 160, and 8*C_COLR = 168 covers it
                             ; while making the whole bound one multiply.
-C_CFAR      equ 13000       ; THE WHOLE FAR PLANE, one hook for the pass.
-                            ; rc_far fills a 13-scanline band on every
-                            ; pair no real face covered: about 430 us a
-                            ; pair, of which 263 is the fill itself, so
-                            ; ~9500 for all 22 and this bounds it.  ONE
-                            ; hook and not one per pair because the whole
-                            ; pass is well under COST_THI, and the fewer
-                            ; hooks the less the accumulator wastes.
+C_CFAR      equ 300         ; THE FAR PLANE'S ENTRY: the step and page
+                            ; setup and the walk down to the first pair's
+                            ; hook.  The 22-iteration loop is NOT in here
+                            ; any more -- every pair takes its own hook,
+                            ; C_CFARP or C_CFARS below.
+                            ;
+                            ; IT WAS 13000 AND IT PAID FOR THE WHOLE PASS,
+                            ; ONE HOOK, and that was wrong in both
+                            ; directions at once.
+                            ;
+                            ; The comment here used to read "fills a
+                            ; 13-scanline band ... about 430 us a pair ...
+                            ; ~9500 for all 22".  That was true at
+                            ; RC_FARH 96.  vpcfg.inc raised RC_FARH to 144
+                            ; -- a NINETEEN-scanline band -- and this
+                            ; constant was never re-derived.  MEASURED at
+                            ; the shipped height the pass is
+                            ;
+                            ;     1430 us + 776.2 us a FILLED pair
+                            ;
+                            ; (least squares over ten states at 0, 1, 2,
+                            ; 15, 16, 17, 19, 20, 21 and 22 filled pairs,
+                            ; every point measured by emu_rcol.measure).
+                            ; So:
+                            ;
+                            ;   UNDER-CHARGED wherever the far plane fills
+                            ;   15 pairs or more -- 13105 us against 13000
+                            ;   at 15, and 18442 against 13000 at 22.  And
+                            ;   those states are REACHABLE: sampling 2928
+                            ;   of them found 5 that leave 21 of the 22
+                            ;   pairs to the far plane.  18442 us is 92.4%
+                            ;   of a whole 19968 us vsync period IN ONE
+                            ;   INTERVAL, which is precisely the failure
+                            ;   the notes at the head of this file exist
+                            ;   to prevent.
+                            ;
+                            ;   OVER-CHARGED everywhere else, and that is
+                            ;   most frames: a state whose walls cover the
+                            ;   horizon band leaves the far plane nothing
+                            ;   to do and costs 1420 us against a charge
+                            ;   of 13000.  11580 us of a 175104 us frame
+                            ;   budget -- 6.6% -- thrown away on almost
+                            ;   every frame.
+                            ;
+                            ; One hook per FILLED pair fixes both, and it
+                            ; is what every other thing this renderer
+                            ; draws already does.
+C_CFARP     equ 1000        ; ...one pair of it that FILLS.  MEASURED
+                            ; 776.2 us of band by the fit, 928 worst as a
+                            ; whole interval; 72 us of margin.
+C_CFAREND   equ 400         ; ...and the way out of the pass: rc_far's own
+                            ; return, raster_colframe's move to the
+                            ; overlay pass, and -- when no moving door
+                            ; follows -- the frame epilogue.  MEASURED
+                            ; 236 us at the worst state of eleven.
+C_CFARS     equ 175         ; ...and one that does not: the two compares
+                            ; and the loop step, nothing else.  MEASURED
+                            ; 150-154 us over fourteen states; 150 was
+                            ; UNDER by 4 at the worst of them, which is
+                            ; the whole reason this file measures rather
+                            ; than reasons.  The pass takes a hook at
+                            ; EVERY pair -- see the note in
+                            ; rastcol.asm:rf_pair for what forced it.
 C_CSTEP     equ 260         ; one single-column step of rc_pnext's slow
                             ; path, on top of the C_CSKIP its hook also
                             ; charges.  MEASURED 213.

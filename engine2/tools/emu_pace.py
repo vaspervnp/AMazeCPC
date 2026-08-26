@@ -32,6 +32,7 @@ _ROOT = os.path.dirname(_E2)
 sys.path.insert(0, os.path.expanduser("~/cpcemu"))
 
 from cpc import CPC                                          # noqa: E402
+import bootdisc                                              # noqa: E402
 import cpc as cpcmod                                         # noqa: E402
 
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
@@ -136,6 +137,7 @@ class Rig:
         self.c.run_frames(150)
         self.c.type_text('RUN"DISC\n')
         self.c.run_frames(500)
+        bootdisc.start(self.c)   # past the title screen -- see bootdisc.py
         self.solid = self.c.read_ram(SOLID, 256)
         # DI / LD SP,#3FF0 / JP main_loop, in the free RAM at #39C0.  See
         # place() for why teleporting the player needs it.

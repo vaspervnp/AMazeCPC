@@ -40,6 +40,36 @@ C_DOORACT = 900      # door_act, MEASURED 756.6 us worst -- the SPACE
                      # billed to every frame.  The sweep below carries it
                      # on EVERY frame anyway, which is the pessimistic
                      # direction: a player who taps SPACE every frame.
+C_AMMO = 4000        # hud_ammo when the round count MOVED, MEASURED
+                     # 3811.1 us worst (emu_hud.py).  Charged by hud2.asm
+                     # itself through cost_add, like C_DOORACT and for
+                     # the same reason -- it is owed on the frame a round
+                     # is fired or a pickup taken, not on all of them.
+                     # The sweeps below carry it on EVERY frame, which is
+                     # a player who fires as fast as the engine draws.
+C_SCAN = 650         # hud_scan when the ammo scanner's lit bearing
+                     # MOVED, MEASURED 551.4 us worst (emu_hud.py).
+                     # Charged by hud2.asm itself, like C_AMMO.  The
+                     # sweeps below carry it on every frame, which is a
+                     # player spinning fast enough to cross a sector
+                     # boundary five times a second.
+C_SWEEP = 1000       # hud_radar's sweep and blip compare, every frame.
+                     # MEASURED 916.0 us.
+C_BLIP = 460         # ...one blip that moved (MEASURED 431).  There
+                     # are EIGHT of them in the worst frame: six
+                     # pickups, the monster, and the monster
+                     # repainted where it already is.
+C_RNEEDLE = 750      # ...and the needle put back over them (680).
+                     # The sweeps below carry the sweep on every frame,
+                     # which is true, and the blips and the needle too,
+                     # which is a player crossing six sector boundaries
+                     # at once, five times a second.
+C_PIP = 8200         # pip.asm's three world drawers -- the pickup on the
+                     # floor, the monster, and the shot's flash and mark.
+                     # MEASURED 7902.6 us worst on the booted disc, with
+                     # the monster a cell away.  Charged unconditionally
+                     # by main3.asm through cost_unit -- see the note
+                     # there for why this one is not a cost_add.
 C_BG = 8600          # bg_fill, MEASURED 8501.3 us at 40x96, fixed
 C_MSETUP = 1550      # march_setup, MEASURED 1372.8-1445.1 us swept over
                      # the movement lattice (emu_holes.py).  It was 1450,
@@ -113,7 +143,7 @@ GUN_CHARGED = _equ("GUN_CHARGED", 1)
 # wrong in the same way.  A model that keeps its own copy of a constant
 # cannot catch that; one that reads the disc's can only be wrong if the
 # disc is.
-for _n in ("C_TAIL", "C_DOORACT", "C_DANIM", "C_BG", "C_MSETUP", "C_CELL",
+for _n in ("C_TAIL", "C_DOORACT", "C_AMMO", "C_SCAN", "C_PIP", "C_SWEEP", "C_BLIP", "C_RNEEDLE", "C_DANIM", "C_BG", "C_MSETUP", "C_CELL",
            "C_FACE",
            "C_REJ", "C_CLIP", "C_HUD", "C_GUN",
            "C_QSET", "C_BLINE", "C_WPAIR", "C_CHUNK", "C_PMUL", "C_WSTEP",
@@ -149,7 +179,10 @@ C_CBAND = _equ("C_CBAND", 460, "costcol.inc")
 C_COLR = _equ("C_COLR", 22, "costcol.inc")
 C_CEDGE = _equ("C_CEDGE", 60, "costcol.inc")
 C_CSTEP = _equ("C_CSTEP", 120, "costcol.inc")
-C_CFAR = _equ("C_CFAR", 13000, "costcol.inc")
+C_CFAR = _equ("C_CFAR", 1600, "costcol.inc")
+C_CFARP = _equ("C_CFARP", 900, "costcol.inc")
+C_CFARS = _equ("C_CFARS", 175, "costcol.inc")
+C_CFAREND = _equ("C_CFAREND", 400, "costcol.inc")
 JOINT_KMAX = _equ("JOINT_KMAX", 3, "raster.asm")
 if COURSES and RQ_SPLIT:
     # ...and say so rather than modelling it silently: this pair draws
@@ -372,12 +405,15 @@ def units(ncell, faces, quads, cyh):
         import rastermodel as _rm
         u += [(0, cc, cc) for cc in
               _cm.charge(quads, _rm.cfg(), C_CFRAME, C_CFACE, C_CSKIP,
-                         C_COLS, C_CBAND, C_COLR, C_CEDGE, C_CSTEP, c_cfar=C_CFAR)]
+                         C_COLS, C_CBAND, C_COLR, C_CEDGE, C_CSTEP,
+                         c_cfar=C_CFAR, c_cfarp=C_CFARP,
+                         c_cfars=C_CFARS, c_cfarend=C_CFAREND)]
     else:
         for q in quads:
             u += [(0, cc, cc) for cc in quad_units(q, cyh)]
             u += [(0, jc, jc) for jc in joint_units(q)]
     u.append((0, C_HUD, C_HUD))
+    u.append((0, C_PIP, C_PIP))     # main3.asm:pip_draw, room then charge
     if GUN and GUN_CHARGED:
         u.append((0, C_GUN, C_GUN))     # main3.asm:gun_paced, room then charge
     return u
@@ -470,7 +506,7 @@ def sweep(n=3000, seed=90210):
         acc = 0
         for _ in range(3):                       # settle the carry-over
             waits, worst, acc = segments(u, acc, n=99,
-                                         tail=C_TAIL + C_DOORACT)
+                                         tail=C_TAIL + C_DOORACT + C_AMMO + C_SCAN)
         hist[waits] += 1
         if worst > wmax:
             wmax, wst = worst, st

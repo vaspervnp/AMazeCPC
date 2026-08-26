@@ -40,6 +40,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _E2 = os.path.dirname(_HERE)
 sys.path.insert(0, _HERE)
 
+import marchmodel as M
 import colmodel
 import walltex                                            # noqa: E402
 import rastermodel as rm                                   # noqa: E402
@@ -108,6 +109,29 @@ def build():
     for w, t in enumerate(rthresh(c)):
         blob += bytes((t & 0xFF, t >> 8))
 
+    # ---- AND THE MARCH'S PER-HEADING CONSTANTS RIDE ALONG -----------
+    #  MARCHTAB is 72 headings x 8 words = 1152 bytes and march_setup
+    #  reads SIXTEEN of them a frame -- one heading's worth, in a single
+    #  LDIR.  It sat in the code segment, where `assert game_end <=
+    #  BUCK0` has now fired twelve times, for the sake of that one copy.
+    #
+    #  Bank 5 is the right home: it is the renderer's table bank, it had
+    #  1942 bytes spare at the tail, and paging it in costs two OUTs
+    #  around the LDIR.  march_setup and raster_colframe never overlap in
+    #  time, so they can share the window.
+    #
+    #  engine2/src/test_march.asm does NOT do this: it runs AT &4000, in
+    #  the very window bank 5 would be paged over, so paging under its
+    #  own program counter would delete the code executing the OUT.  It
+    #  assembles gen_mtab.inc instead -- the same bytes, in base RAM --
+    #  and march.asm picks between the two on MTBANK.
+    global A_MTAB
+    A_MTAB = BANK_BASE + len(blob)
+    for (rgtx, rgty, fwdx, fwdy), (dli, dlj, dri, drj) in zip(M.BASIS,
+                                                              M.LRSTEP):
+        for v in (rgtx, rgty, fwdx, fwdy, dli, dlj, dri, drj):
+            blob += bytes((v & 0xFF, (v >> 8) & 0xFF))
+
     assert len(blob) <= BANK_SIZE, (
         f"bank 5 overflows: {len(blob)} > {BANK_SIZE}")
     return bytes(blob), c
@@ -125,6 +149,9 @@ TEXWALL     equ #{wall:04X}          ; 16 pages of 256, transposed + x4
 TEXDOOR     equ #{door:04X}
 CTABT       equ #{ctab:04X}          ; 4 bytes per j: step.w, idx0.w
 RTHRESH     equ #{rthr:04X}          ; 2 bytes per face width w
+MARCHTB     equ #{mtab:04X}          ; the march's 72 x 8 per-heading words
+                                    ; -- see gentex.py for why they are
+                                    ; here and not in the code segment
 
 CTEX_BW     equ {texbw}              ; texture byte columns
 CTEX_H      equ {texh}               ; texture rows
@@ -155,6 +182,7 @@ def write_inc(path, blob):
     open(path, "w").write(INC.format(
         ramcfg=RAMCFG, ramcfg_c="        ; OUT (&7Fxx),this pages bank 5",
         wall=A_WALL, door=A_DOOR, ctab=A_CTAB, rthr=A_RTHR,
+        mtab=A_MTAB,
         texbw=colmodel.TEX_BW, texh=colmodel.TEX_H, idxn=colmodel.IDX_N,
         jmax=colmodel.JMAX, chmax=colmodel.HMAX_Q4,
         cidxn=colmodel.CIDX_N, npair=c.VP_BW // 2,

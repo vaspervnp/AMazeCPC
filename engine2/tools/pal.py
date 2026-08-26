@@ -89,6 +89,20 @@ DOOR_RAMP = [7, 8, 9, 10, 10, 10, 10]
 CEIL_NEAR, CEIL_FAR = 11, 11
 FLOOR_FAR, FLOOR_NEAR = 12, 12
 HUD_FRAME, HUD_TEXT = 6, 15
+# THE AMMO PIPS, in the top-left readout slot.  Pen 8 is firmware ink 15,
+# warm orange -- DOOR_RAMP's second step, so it is already on screen
+# whenever a door is two cells away, and the readout borrows a pen the
+# palette is spending rather than asking for a seventeenth.  It is also
+# the only warm thing in a HUD that is otherwise cyan on navy, which is
+# what makes six small blocks readable at all down there.
+HUD_AMMO = 8
+
+# THE SCANNER'S DISTANCE RAMP -- the one lit block on the direction pad,
+# by how far away the pickup it points at is.  Bright yellow, orange, red:
+# a real LUMINANCE ramp (inks 24, 15, 3) as well as a hue one, so it still
+# reads as near/mid/far on a monitor that has lost its colour.  The middle
+# step is HUD_AMMO itself, which ties the pad to the pips above it.
+HUD_SCAN = [7, 8, 10]
 
 # ---------------------------------------------------------------------
 #  MORTAR -- the pen raster.asm:raster_joint paints the two course

@@ -57,9 +57,10 @@ _ROOT = os.path.dirname(_E2)
 sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.expanduser("~/cpcemu"))
 
+import genhud                                                # noqa: E402
 import gunart                                                # noqa: E402
 import gentab as G                                           # noqa: E402
-from emu_pacefit import Rig                                  # noqa: E402
+from emu_pacefit import Rig, BASE                            # noqa: E402
 
 CORRIDOR = (10 * 256 + 128, 13 * 256 + 128, 0)      # (10,13) facing east
 
@@ -153,7 +154,14 @@ def place(rig, pos, dx, dy):
 
 
 BOB_FRAMES = 200
-BOB_BUF = 0x3B00                # free RAM above emu_pacefit's #3A00 code
+# THE TRAIL BUFFER.  #3B00 is march.asm's MARK page (the flood's
+# already-pushed flags, #3B00-#3BFF) and the head of the quad list above
+# it, and that is fine HERE and nowhere else: this phase runs
+# gun_step and nothing else, so nothing marches and nothing projects
+# while the 400 bytes below are being filled; march_init wipes MARK and
+# the quad list is rebuilt from scratch by the next frame anyway.  The harness CODE is a different matter -- it goes
+# at emu_pacefit's BASE, which is above QUADS for exactly that reason.
+BOB_BUF = 0x3B00
 
 
 def bob_model(n, moving=True, start=None):
@@ -227,8 +235,8 @@ def bob(rig):
         "    pop bc",
         "    djnz lp",
         "spin jr spin"])
-    rig.c.write_ram(0x3A00, blob)
-    rig.c.set_pc(0x3A00)
+    rig.c.write_ram(BASE, blob)         # ...and BASE is what _head org'd it
+    rig.c.set_pc(BASE)
     rig.c.run_us(200000)
     got = rig.c.read_ram(BOB_BUF, BOB_FRAMES * 2)
     want = bob_model(BOB_FRAMES)
@@ -298,12 +306,29 @@ def verify(rig):
     # THE WHOLE 16K, not just the viewport: a row drawn past the bottom
     # clamp would land in the HUD, which the viewport comparison cannot
     # see, and that is exactly the failure this phase now exists to catch.
+    #
+    # EXCEPT THE EIGHT TICKS OF THE DIAL, which are the one part of the
+    # screen that moves on its own.  hud_radar lights one of them a
+    # frame as a radar sweep (hud2.asm), so the "clean" reference frame
+    # and the 45 posed frames are taken with the sweep at different
+    # points and 360 bytes disagree -- all of them #3C against #FC, the
+    # resting tick colour against the lit one.  That is the indicator
+    # doing its job, not the blitter missing.  The boxes are masked out
+    # by NAME, from genhud's own tick geometry, so a tick that moves
+    # takes its mask with it and nothing else is forgiven.
+    skip = set()
+    for (tx, ty, tw, th, _b) in genhud.tick_rects():
+        for yy in range(ty, ty + th):
+            for xx in range(tx, tx + tw):
+                skip.add(addr(yy, xx, 0))
     n = 0
     for dx, dy in OFFSETS:
         place(rig, CORRIDOR, dx, dy)
         got = read_screen(rig)
         want = {addr(y, x, 0): b for (y, x), b in want_rows(dx, dy).items()}
         for off in range(len(got)):
+            if off in skip:
+                continue
             exp = want.get(off, clean[off])
             if got[off] != exp:
                 if bad < 12:
@@ -313,8 +338,9 @@ def verify(rig):
                           f"{'  (sprite)' if off in want else ''}")
                 bad += 1
         n += 1
-    print(f"  {n} bob offsets x {len(clean)} screen bytes = "
-          f"{n * len(clean)} bytes compared, {bad} wrong")
+    print(f"  {n} bob offsets x {len(clean) - len(skip)} screen bytes = "
+          f"{n * (len(clean) - len(skip))} bytes compared, {bad} wrong"
+          f"  ({len(skip)} bytes of radar tick masked)")
     rig.c.write_ram(rig.s["GUN_STEP"], step)
     return bad
 
@@ -414,12 +440,30 @@ def generation(rig):
               f"(gun_sig #{got:04X}, this art #{want:04X}). "
               f"Run `make` -- the pixels below would ALL be noise.")
         bad += 1
+    # ...AND PARK THE CPU SOMEWHERE BANK 4 IS ACTUALLY PAGED IN.  The
+    # peeks below see the CPU's CURRENT paging, and "main3.asm leaves bank
+    # 4 at #4000" is only true BETWEEN renders: rastcol.asm swaps bank 5
+    # in over the same window for the textured fill and swaps 4 back at
+    # rc_done.  The rig stops wherever run_frames(500) happens to land,
+    # which at 9 vsyncs a game frame is an arbitrary point inside one, so
+    # whether this read saw tables or TEXTURE was a coin flip -- and it
+    # came up tails the first time the frame's shape changed, reporting
+    # 27 of 31 GUNBAND bytes wrong on a disc that was perfectly fresh.
+    #
+    # So: stop the machine, select RAM config 4 by hand, and spin.  This
+    # rig is discarded when generation() returns -- main() builds a fresh
+    # one per phase -- so taking the PC out of the game loop costs
+    # nothing here.
+    rig.c.run_code(0x3AC0, bytes([0xF3,   # #3AC0-#3FEF is free RAM               # di
+                                  0x01, 0xC4, 0x7F,   # ld bc,#7FC4
+                                  0xED, 0x49,         # out (c),c
+                                  0x18, 0xFE]), 2)    # jr $
     layout = G.build()[1]
     for name, model in (("GUNBAND", G.t_gunband()), ("GUNPIX", G.t_gunpix())):
         addr = layout[name][0]
         # PEEK, not read_ram.  read_ram reads the BASE 64K -- bank 4 lives
         # in the second 64K and is only visible through the CPU's current
-        # paging, which main3.asm leaves with bank 4 at #4000.
+        # paging.
         on_disc = bytes(rig.c.peek(addr + i) for i in range(len(model)))
         if bytes(model) != on_disc:
             nw = sum(1 for a, b in zip(model, on_disc) if a != b)
@@ -438,7 +482,7 @@ def main():
     what = sys.argv[1] if len(sys.argv) > 1 else "all"
     bad = 0
     # A FRESH MACHINE PER PHASE.  `bob` and `measure` both take the PC out
-    # of main_loop and leave it spinning in the bench harness at #3A00, so
+    # of main_loop and leave it spinning in the bench harness at BASE, so
     # a later phase that expects the GAME to be drawing frames would read a
     # stale screen -- which is exactly what it did, and it failed 6076
     # bytes of a verify that passes on its own.  Booting is a few seconds;

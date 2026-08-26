@@ -5,9 +5,23 @@ head of main_loop).
     python3 engine2/tools/emu_holes.py [nstates]
 
 Method is emu_pacefit.py's: boot build/amaze.dsk, drop a counter loop into
-the free RAM at #3A00 of the RUNNING game, bump a 16-bit counter once per
+the free RAM at #3F00 of the RUNNING game, bump a 16-bit counter once per
 iteration with interrupts off, and subtract an identical loop with the
 CALL removed.  Calibrated against 100 NOPs.
+
+BASE, BASE_TOP AND THE RC_VARS GUARD ARE IMPORTED from emu_pacefit rather
+than written down again here.  This file kept its own `BASE = 0x3A00`,
+which is where memmap.inc now puts QUADS.
+
+OF THE TWO DEFECTS THAT COST emu_pacefit ITS NUMBERS, ONLY ONE WAS LIVE
+HERE, AND IT IS THE ONE THAT MOVED THE READINGS.  Nothing this file
+benches is project_all, so the quad list was never written and the
+harness was never overwritten -- #3A00 was wrong and harmless, a trap
+armed for whoever next added a call to it.  The PAGING was not harmless:
+the rig boots the disc and stops the CPU at an arbitrary point in the
+frame, rastcol.asm pages bank 5 over #4000 for its fill, and game_step
+and march_setup both read the table bank -- so `_head` now selects bank 4
+before it does anything else.  See the note above emu_pacefit.BASE.
 
 The two additions here:
 
@@ -36,13 +50,17 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.expanduser("~/cpcemu"))
 
 from cpc import CPC                                          # noqa: E402
+import bootdisc                                              # noqa: E402
 import cpc as cpcmod                                         # noqa: E402
 import pacemodel as P                                        # noqa: E402
+# ONE number, not a second copy of it.  BASE/BASE_TOP and the RC_VARS
+# guard live in emu_pacefit; importing them means moving the harness
+# window moves it for every rig at once.
+from emu_pacefit import BASE, BASE_TOP, _rc_vars_end          # noqa: E402
 
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
 SCRATCH = os.path.join(_E2, "build")
-BASE = 0x3A00                   # free RAM: #39C0-#3FEF, stack top #3FF0
 
 
 class Rig:
@@ -57,6 +75,7 @@ class Rig:
         self.c.run_frames(150)
         self.c.type_text('RUN"DISC\n')
         self.c.run_frames(500)
+        bootdisc.start(self.c)   # past the title screen -- see bootdisc.py
         self.solid = self.c.read_ram(addrs.SOLID, 256)
         self.ovh = 0.0
 
@@ -71,10 +90,36 @@ class Rig:
                            cwd=SCRATCH, capture_output=True)
         if r.returncode:
             raise RuntimeError(r.stdout.decode() + r.stderr.decode())
-        return open(os.path.join(SCRATCH, name + ".bin"), "rb").read()
+        blob = open(os.path.join(SCRATCH, name + ".bin"), "rb").read()
+        # ---- AND CHECK IT FITS WHERE IT IS PUT.  The harnesses here are
+        # small -- the biggest is the 100-NOP calibration at 141 bytes,
+        # against the 192 the window holds -- but "small" was true of the
+        # old ones too and nothing checked, so it is checked.
+        lo = _rc_vars_end()
+        assert BASE >= lo, (
+            "harness BASE #%04X is inside rastcol.asm's RC_VARS "
+            "(ends #%04X)" % (BASE, lo))
+        assert BASE + len(blob) <= BASE_TOP, (
+            "harness `%s` is %d bytes, #%04X..#%04X, past #%04X -- the "
+            "CPU stack grows down into it from #3FF0"
+            % (name, len(blob), BASE, BASE + len(blob), BASE_TOP))
+        return blob
 
     def _head(self):
-        return ["    org #%04X" % BASE, "    di", "    ld sp,#3FF0",
+        # ---- SELECT BANK 4 FIRST.  This rig boots the disc and calls
+        # run_frames(500), which stops the CPU at an ARBITRARY point
+        # inside a 9-vsync game frame; rastcol.asm pages bank 5 over
+        # #4000 for its textured fill and pages 4 back at rc_done, so
+        # whether a harness read LINETAB/PROJ/BOBV or TEXTURE was a coin
+        # flip nothing in the tool controlled.  march_setup and game_step
+        # both read the table bank, so this is not decoration.
+        #
+        # BASE and the stack are below #4000, so the `out` is outside the
+        # window it moves and cannot pull the ground out from under the
+        # code doing it.
+        return ["    org #%04X" % BASE, "    di",
+                "    ld bc,#7FC4", "    out (c),c",     # RAM config 4
+                "    ld sp,#3FF0",
                 "    xor a", "    ld (#%04X),a" % self.s["PACE_LEFT"],
                 "    ld hl,0", "    ld (#%04X),hl" % self.s["COST_ACC"],
                 # pace_wait waits even with the budget gone, which is the

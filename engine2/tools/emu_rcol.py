@@ -357,7 +357,64 @@ def charges_for(quads, c):
     import pacemodel as P
     return colmodel.charge(quads, c, P.C_CFRAME, P.C_CFACE, P.C_CSKIP,
                            P.C_COLS, P.C_CBAND, P.C_COLR, P.C_CEDGE,
-                           P.C_CSTEP, c_cfar=P.C_CFAR)
+                           P.C_CSTEP, c_cfar=P.C_CFAR,
+                           c_cfarp=P.C_CFARP,
+                           c_cfars=P.C_CFARS,
+                           c_cfarend=P.C_CFAREND)
+
+
+def _far_pairs(qs, c):
+    """-> how many column pairs the far plane is left to fill.
+
+    The far pass's cost is linear in this and in nothing else, so it is
+    the axis atomic() has to sweep -- see _atomic_states().
+    """
+    cover = colmodel.new_cover(c)
+    p0, _p1 = colmodel.passes(qs)
+    for q in reversed(p0):
+        for _i in colmodel.pair_walk(q, c, cover, False, 0):
+            pass
+    rows = colmodel.far_rows(c)
+    if rows is None:
+        return 0
+    r0, r1 = rows
+    up, dn = cover
+    return sum(1 for p in range(c.VP_BW // 2)
+               if r0 <= up[p] or dn[p] <= r1)
+
+
+def _atomic_states(nstates, seed, c):
+    """Random states, PLUS the ones that stress the far plane.
+
+    A RANDOM SAMPLE DOES NOT COVER THIS AND THAT COST A SHIPPED BUG.
+    C_CFAR was a single hook for the whole far pass, derived when
+    RC_FARH was 96 and never re-derived when vpcfg.inc raised it to 144.
+    At the shipped height the pass costs 776 us for every pair it fills,
+    so a state that fills 22 of them measures 18442 us against a charge
+    of 13000 -- 92% of a whole vsync period in ONE interval, which is
+    the exact failure this file exists to catch.
+
+    atomic() ran and said "every interval inside its charge" anyway,
+    because the states that leave the far plane most of the screen are
+    about 0.2% of the space and twelve random draws never hit one.  A
+    verification that does not exercise a path says nothing about it.
+
+    So the sample is now seeded with the degenerate EMPTY quad list --
+    the far plane's true worst case, every pair to fill -- and then
+    sorted so the states that leave it the most work come first.
+    """
+    pool = list(_states(max(nstates * 4, 40), seed))
+    pool.sort(key=lambda st: -_far_pairs(st[3], c))
+    out = [(0, 0, 0, [])]                       # the far plane's worst case
+    seen = {0}
+    for st in pool:                             # then the busiest real ones
+        n = _far_pairs(st[3], c)
+        if len(out) >= nstates:
+            break
+        if n not in seen or len(out) < nstates // 2:
+            seen.add(n)
+            out.append(st)
+    return out[:max(nstates, 1)]
 
 
 def atomic(nstates=3, seed=1337):
@@ -378,7 +435,7 @@ def atomic(nstates=3, seed=1337):
     rig = Rig(paced=True)
     c = rig.cfg
     worst = []
-    for px, py, a, qs in _states(nstates, seed):
+    for px, py, a, qs in _atomic_states(nstates, seed, c):
         ch = charges_for(qs, c)
         # THE PRECISE PATH, not bench(): counting whole iterations of a
         # fixed window quantises each PREFIX by up to one iteration --
@@ -395,6 +452,7 @@ def atomic(nstates=3, seed=1337):
             z80.append(struct.unpack(
                 "<H", rig.c.read_ram(rig.s("HOOKBC"), 2))[0])
         print(f"\nstate ({px:04X},{py:04X},{a})  {len(qs)} quads, "
+              f"{_far_pairs(qs, c)} far pairs, "
               f"{len(ch)} hooks, whole render {sum(iv):.0f} us")
         bad, dis = [], 0
         for i, cc in enumerate(ch):

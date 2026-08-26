@@ -111,15 +111,27 @@
 ; The CPU stack (#3FF0) and bank 4 are untouched.
 ; THE WHOLE BLOCK MOVED UP THREE MORE PAGES when the column renderer
 ; grew its second drawing pass, its door slide and its far plane, and
-; `assert game_end <= BUCK0` fired for the EIGHTH time.  The three pages
+; `assert game_end <= BUCK0` fired for the ELEVENTH time -- and this time
+; the two pages came out of QUADS rather than out of the code.  See
+; memmap.inc: the list held 120 records for a MEASURED maximum of NINE,
+; so shrinking it to 56 freed 512 bytes of low RAM and let everything
+; below it move UP by two pages, which is 512 bytes handed back to the
+; body.  Nothing ABOVE QUADS moved, which is what keeps the door tables,
+; RC_COVER and engine2/tools/emu_pacefit.py's harness where they are.
+;
+; AND THE FLOOD STACK GAVE UP ANOTHER PAGE, the twelfth time the assert
+; fired.  It is 256 bytes now -- 25 entries against the same exhaustive
+; maximum of 14, so still 1.8x over -- and BUCK0 moved up with it.
+;
+; The three pages
 ; came out of the flood stack, which had 1280 bytes for a stack that
 ; MEASURES 14 entries at its worst -- 8 with every door shut, 14 with
-; every door open (engine2/tools/roomcost.py, exhaustive).  512 bytes is
+; every door open (engine2/tools/roomcost.py, exhaustive).  512 bytes was
 ; 51 entries, still three and a half times the worst ever seen.
-MSTKBOT     equ #3500       ; flood stack, grows DOWN from MSTKTOP
-MSTKTOP     equ #3700       ; 512 bytes = 51 entries of 10, against a
+MSTKBOT     equ #3800       ; flood stack, grows DOWN from MSTKTOP
+MSTKTOP     equ #3900       ; 256 bytes = 25 entries of 10, against a
                             ; MEASURED worst of 14.
-FTAB        equ #3700       ; L1 tables + bucket write pointers
+FTAB        equ #3900       ; L1 tables + bucket write pointers
 O_LX1       equ #C0         ; 16 bytes, |cx - pcx|
 O_LY1       equ #D0         ; 16 bytes, |cy - pcy|
 O_BPTR      equ #E0         ; 8 BYTES, bucket write offset within its page
@@ -132,10 +144,10 @@ DOORMOV     equ 3           ; a door part way through its run:
                             ; player out of it.  Opacity and solidity are
                             ; different questions; this is the code that
                             ; separates them.
-SOLID       equ #3800       ; 256 bytes, idx = cy*16 + cx
+SOLID       equ #3A00       ; 256 bytes, idx = cy*16 + cx
                             ;   0 = open, 1 = wall, 2 = shut door,
                             ;   3 = door in motion (see DOORMOV)
-MARK        equ #3900       ; 256 bytes, flood "already pushed" flags
+MARK        equ #3B00       ; 256 bytes, flood "already pushed" flags
 
 ; BUCKET 0 IS A REAL PAGE AND IT MUST NOT BE CODE.  A bucket's page is
 ; BUCKHI + k, so k = 0 addresses the page BELOW BUCKETS -- and O_BPTR is
@@ -155,11 +167,11 @@ MARK        equ #3900       ; 256 bytes, flood "already pushed" flags
 ;
 ; So BUCKETS keeps a spare page under it, deliberately, and the assert at
 ; the foot of main3.asm guards THAT page rather than the first bucket.
-BUCK0       equ #2D00       ; bucket 0: never filed into, never read, and
+BUCK0       equ #3000       ; bucket 0: never filed into, never read, and
                             ; deliberately not code.  `assert game_end <=
                             ; BUCK0` in main3.asm is what keeps it so.
-BUCKHI      equ #2D         ; bucket k (k = 1..7) is the page BUCKHI+k,
-BUCKETS     equ #2E00       ; i.e. #2E00 (k=1) .. #3400 (k=7).
+BUCKHI      equ #30         ; bucket k (k = 1..7) is the page BUCKHI+k,
+BUCKETS     equ #3100       ; i.e. #3100 (k=1) .. #3700 (k=7).
 BUCKSZ      equ 16          ; face record; 16 per page, 15 usable
                             ; (measured worst bucket occupancy: 8)
 
@@ -775,6 +787,45 @@ mf_tail                             ; A = i0 of endpoint A
 ;  code had the same hole and never noticed it, because it also never
 ;  cleared MARK before the first frame.
 ; =====================================================================
+; ---------------------------------------------------------------------
+;  maze_unpack -- MAZEDATA -> SOLID, two bits a cell to one byte a cell.
+;
+;  THE MAP IS PACKED BECAUSE THE BODY BUDGET SAYS SO.  SOLID's alphabet
+;  is four values wide (open, wall, shut door, door in motion), so the
+;  16x16 map is 64 bytes of source and 256 bytes of working RAM, and
+;  main3.asm's `assert game_end <= BUCK0` has now fired nine times.  A
+;  256-byte table that is read ONCE and never again was the cheapest 192
+;  bytes in the file to hand back.
+;
+;  It lives HERE, next to SOLID, because march.asm owns SOLID and both
+;  main3.asm and engine2/src/test_march.asm need the same unpacking --
+;  they used to carry an LDIR each.
+;
+;  Cell i is bits (i & 3)*2 of byte i >> 2, lowest cell in the lowest
+;  bits, so this only ever shifts right.  Clobbers AF BC DE HL.
+; ---------------------------------------------------------------------
+maze_unpack
+    ld hl,MAZEDATA
+    ld de,SOLID
+    ld b,64
+mu_byte
+    ld c,(hl)
+    inc hl
+    push bc
+    ld b,4
+mu_cell
+    ld a,c
+    and 3
+    ld (de),a
+    inc de
+    srl c
+    srl c
+    djnz mu_cell
+    pop bc
+    djnz mu_byte
+    ret
+
+
 march_init
     ld hl,MARK
     ld de,MARK+1
@@ -873,11 +924,34 @@ ms_bp
     add hl,hl
     add hl,hl
     add hl,hl                       ; ang*16
-    ld de,MARCHTAB
+    ld de,MARCHTB
     add hl,de
+    ; ---- MARCHTB LIVES IN RAM BANK 5 ON THE DISC, and this is the only
+    ;      code that reads it: sixteen bytes, once a frame.  1152 bytes
+    ;      of code segment for one LDIR was the largest thing left to
+    ;      give back, and `assert game_end <= BUCK0` had fired twelve
+    ;      times.  Two OUTs is what it costs.
+    ;
+    ;      Bank 5 is the column renderer's texture bank and it is paged
+    ;      in for the whole of raster_colframe -- but march_setup runs
+    ;      before that and returns before it starts, so the two never
+    ;      want the window at the same moment.
+    ;
+    ;      engine2/src/test_march.asm leaves MTBANK undefined and gets
+    ;      the table in base RAM from gen_mtab.inc instead, because it
+    ;      RUNS at &4000: paging there would swap the window out from
+    ;      under its own program counter.
+    ifdef MTBANK
+    ld bc,#7F00+TEXCFG
+    out (c),c
+    endif
     ld de,mv_sxi
     ld bc,16
     ldir
+    ifdef MTBANK
+    ld bc,#7FC4                     ; bank 4 back before anything else
+    out (c),c
+    endif
 
     ; ---- the seed: view coords of the player's OWN cell corner,
     ;      xv = -xv0, zv = -z0.  These four multiplies are the only ones

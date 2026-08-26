@@ -2,11 +2,64 @@
 ; The HUD's furniture and its compass needle.  See that file
 ; for what every table means and what is asserted about it.
 
-HUD_NRECT    equ 62   ; static furniture rectangles
+HUD_NRECT    equ 71   ; static furniture rectangles
 HUD_CXB      equ 40   ; dial centre: byte BOUNDARY x ...
 HUD_CY       equ 150   ; ... and scanline y
 HUD_NDOT     equ 4   ; blocks in the needle
 HUD_NW       equ 2   ; every block is this many bytes
+
+HUD_AMX      equ 4   ; first ammo pip, byte x
+HUD_AMY      equ 119   ; ... and scanline y
+HUD_AMW      equ 2   ; pip width in BYTES (even)
+HUD_AMH      equ 8   ; ... and height in scanlines
+HUD_AMDX     equ 3   ; byte pitch from one pip to the next
+HUD_AMN      equ 6   ; how many rounds the readout shows
+HUD_AMPEN    equ #03   ; a round the player still has
+HUD_AMBG     equ #00   ; ... and one already fired
+
+HUD_SCW      equ 6   ; a scanner cell, bytes (even)
+HUD_SCH      equ 5   ; ... and scanlines
+HUD_SCOFF    equ #CF   ; an unlit bearing -- what hud_scan restores
+HUD_SCN      equ 8   ; bearings on the pad
+SCANPEN                     ; by distance band: near, mid, far
+    db #FC,#03,#0F
+SCANPOS                     ; by RELATIVE bearing: 0 is dead
+                            ; ahead, then clockwise
+    db  10, 141   ; 0
+    db  17, 141   ; 1
+    db  17, 147   ; 2
+    db  17, 153   ; 3
+    db  10, 153   ; 4
+    db   3, 153   ; 5
+    db   3, 147   ; 6
+    db   3, 141   ; 7
+
+HUD_RADW     equ 2   ; a blip block, bytes (even)
+HUD_RADH     equ 3   ; ... and scanlines
+HUD_RADPEN   equ #03   ; the ammo orange, as on the floor and in the pips
+HUD_RADBG    equ #00   ; ...and what erasing one puts back
+HUD_MONPEN   equ #F3   ; ...and a monster, in the pen it is drawn in
+HUD_SWPEN    equ #FC   ; the lit tick
+HUD_NSECT    equ 8   ; sectors round the dial
+RADPOS                      ; db x, y -- by sector*3 + band,
+                            ; band 0 near (inner ring)
+    db  39, 139,  39, 129,  39, 119   ; sector 0
+    db  41, 142,  43, 135,  45, 128   ; sector 1
+    db  42, 149,  45, 149,  48, 149   ; sector 2
+    db  41, 156,  43, 163,  45, 170   ; sector 3
+    db  39, 159,  39, 169,  39, 179   ; sector 4
+    db  37, 156,  35, 163,  33, 170   ; sector 5
+    db  36, 149,  33, 149,  30, 149   ; sector 6
+    db  37, 142,  35, 135,  33, 128   ; sector 7
+TICKTAB                     ; db x, y, w, h, resting byte
+    db  38, 105,  4,  5,#FF
+    db  48, 119,  2,  3,#3C
+    db  52, 149,  2,  3,#3C
+    db  48, 179,  2,  3,#3C
+    db  39, 192,  2,  3,#3C
+    db  30, 179,  2,  3,#3C
+    db  26, 149,  2,  3,#3C
+    db  30, 119,  2,  3,#3C
 
 ; ---- static furniture: db x, y, w, h, byte ----
 HUDRECTS
@@ -29,6 +82,15 @@ HUDRECTS
     db  57, 141, 20,  18,#00
     db  56, 166, 22,  22,#3C
     db  57, 168, 20,  18,#00
+    db  10, 141,  6,   5,#CF
+    db  17, 141,  6,   5,#CF
+    db  17, 147,  6,   5,#CF
+    db  17, 153,  6,   5,#CF
+    db  10, 153,  6,   5,#CF
+    db   3, 153,  6,   5,#CF
+    db   3, 147,  6,   5,#CF
+    db   3, 141,  6,   5,#CF
+    db  10, 147,  6,   5,#FF
     db  37, 114,  6,   1,#3C
     db  36, 115,  8,   2,#3C
     db  35, 117, 10,   1,#3C

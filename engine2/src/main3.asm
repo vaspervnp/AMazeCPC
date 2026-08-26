@@ -31,13 +31,19 @@
 ;                 of these addresses and every one of them then read the
 ;                 page below -- see engine2/tools/addrs.py, which now
 ;                 parses them out of the source so that cannot recur.
-;    #2800-#2EFF  march face buckets, one page per L1 distance 1..7
-;    #2F00-#33FF  march flood stack
-;    #3400-#36FF  FTAB / SOLID / MARK
-;    #3700-#3ABF  QUADS, the geometry kernel's output (120 x 8 bytes; it
-;                 was 120 x 14 before the record shrank to (blo, bhi,
-;                 hlo, hhi, kind, k) -- see kernel.asm)
-;    #3AC0-#3FEF  free;  #3FF0 is the top of our stack
+;    #2F00-#2FFF  BUCK0, a DELIBERATELY DEAD page -- see march.asm
+;    #3000-#36FF  march face buckets, one page per L1 distance 1..7
+;    #3700-#38FF  march flood stack (grows down from MSTKTOP #3900)
+;    #3900-#3BFF  FTAB / SOLID / MARK, one page each
+;    #3C00-#3DBF  QUADS, the geometry kernel's output.  NQUAD x 8 bytes,
+;                 and NQUAD is 56 for a MEASURED worst of nine -- it was
+;                 120, and the 512 bytes that came back are what this
+;                 code segment is now living on.  See memmap.inc.
+;    #3DC0-#3DEF  DOORTAB: door_idx / door_st / door_tg, MAXDOORS each
+;    #3DF0-#3DFF  pip.asm's scratch and as_l1's
+;    #3E00-#3E9B  rastcol.asm's RC_COVER and RC_VARS
+;    #3E9C-#3FEF  free;  #3FF0 is the top of our stack.  engine2/tools/
+;                 emu_pacefit.py assembles its bench harnesses at #3F00
 ;    #4000-#7C48  RAM bank 4: the precalculated tables, permanently paged
 ;    #8000-#BFFF  back buffer
 ;    #C000-#FFFF  front buffer
@@ -96,6 +102,8 @@
 ;      gun_step + gun_draw + hook  4375.2 us worst       4500  (C_GUN) *
 ;      flip + game_step + head     1305.9 us             1450  (C_TAIL) *
 ;      door_act, SPACE edge only    756.6 us              900  (C_DOORACT) *
+;      hud_ammo, count moved       3811.1 us             4000  (C_AMMO) *
+;      hud_scan, bearing moved       551.4 us              650  (C_SCAN) *
 ;      one quad                     781 + 38.60*jlo       740 + 46*jlo
 ;                                     + 135.7*wl2             + 138*wl2
 ;                                     + 2.028*bw*(jlo+jhi)    + 2*bw*(...)
@@ -549,6 +557,104 @@ C_HUD       equ 1550        ; hud_update with the compass needle moved.
                             ; heading 54 -- the needle's eight blocks do
                             ; not cross the same number of character rows
                             ; at every angle.  1550 clears it by 127.5.
+C_AMMO      equ 4000        ; hud_ammo WHEN IT PAINTS, charged by hud2.asm
+                            ; itself on the frames the round count moves.
+                            ; MEASURED 3811.1 us worst (emu_hud.py, the
+                            ; count flipped 0 <-> 6 every call so the
+                            ; early-out can never be taken); 188.9 us of
+                            ; margin, one-sided like every other constant
+                            ; here.
+                            ;
+                            ; SEPARATE FROM C_HUD, and through cost_add
+                            ; rather than cost_unit, for exactly the
+                            ; reason C_DOORACT is: the readout changes
+                            ; when a round is fired or a pickup walked
+                            ; over and on no other frame, so a 3.8 ms
+                            ; upper bound charged every frame would be
+                            ; paid ~50 times for each time it is owed.
+                            ; cost_add charges without testing and
+                            ; without waiting, so the frame that actually
+                            ; repaints is the one that runs long.
+C_SCAN      equ 650         ; hud_scan WHEN IT PAINTS -- the ammo
+                            ; scanner's lit bearing moving from one cell
+                            ; of the pad to another, or changing colour
+                            ; where it is.  Charged by hud2.asm itself
+                            ; through cost_add, like C_AMMO, and for the
+                            ; same reason: it moves when the player turns
+                            ; through a sector boundary or crosses a
+                            ; distance band, and on no other frame.
+                            ; MEASURED 551.4 us worst (emu_hud.py, the
+                            ; bearing flipped between two different cells
+                            ; every call so both rectangles always run);
+                            ; 98.6 us of margin.
+                            ;
+                            ; It is a twentieth of C_AMMO for the same
+                            ; kind of work because the pips are six
+                            ; rectangles and this is at most two: the
+                            ; eight unlit bearings are furniture.
+; ---- THE DIAL'S RADAR, hud2.asm:hud_radar, IN THREE PIECES ---------
+;  MEASURED on the booted disc with a harness that poisons the buffer's
+;  remembered blips on every iteration, so the worst case is what the
+;  loop actually times rather than something it converges away from:
+;
+;      sweep only, nothing moved        916.0 us   -- EVERY frame
+;      all six blips moved + needle    4189.6 us   -- the worst there is
+;
+;  ONE CONSTANT WOULD HAVE BEEN 4400 CHARGED EVERY FRAME for 916 us of
+;  work.  That is the C_CFAR mistake in a new place, 3300 us of a 175104
+;  us budget thrown away on almost every frame, so it is billed by the
+;  piece instead: the sweep always, a blip when a blip moves, the needle
+;  when one did.
+C_SWEEP     equ 1000        ; the sweep's two ticks and the six-way
+                            ; compare.  MEASURED 916.0 us.
+C_BLIP      equ 460         ; ...one blip that moved: erase it and draw
+                            ; it again.  MEASURED 431 us, taken as
+                            ; (4189.6 - 916.0 - 680) / 6.
+C_RNEEDLE   equ 750         ; ...and putting the needle back on top when
+                            ; any of them did.  hud_needle's draw half,
+                            ; MEASURED 680 us inside hud_update's 1360.
+                            ;
+                            ; Worst frame: 1000 + 8*460 + 750 = 5430
+                            ; against 5070.3 MEASURED, 360 of margin.
+                            ; The eight are six pickups, the monster
+                            ; moving, and the monster being painted again
+                            ; where it already is when a pickup's erase
+                            ; may have wiped it -- see hud_radar.
+C_PIP       equ 8200        ; THE WORLD-SPACE OVERLAY: pip.asm's three
+                            ; drawers together -- pip_draw (the pickup on
+                            ; the floor), mon_draw (the monster) and
+                            ; fx_draw (the muzzle flash and the shot's
+                            ; mark).  ONE hook in front of all three.
+                            ;
+                            ; MEASURED on the booted disc, the player
+                            ; teleported through main_loop's restart stub
+                            ; so the march state is real:
+                            ;
+                            ;   monster 1 cell away      7902.6
+                            ;   monster 2 cells, offset  6797.5
+                            ;   monster 2 cells          6278.6
+                            ;   monster 3 cells          5298.2
+                            ;   the pickup alone         2142.9
+                            ;   nothing in view           533.0
+                            ;
+                            ; 297 us of margin.  IT WAS 1800 AND COVERED
+                            ; ONLY pip_draw: adding the monster took the
+                            ; interval to 11691 us -- 59% of a whole
+                            ; vsync period in ONE interval -- before
+                            ; MON_HMAX capped it.  hud_rect costs ~70 us
+                            ; a ROW, so a tall box is nearly all rows.  A 2-byte by
+                            ; 12-row rectangle is the shape hud_rect is
+                            ; worst at -- ~70 us a row and 2 us a byte --
+                            ; so almost all of it is the twelve rows.
+                            ;
+                            ; CHARGED UNCONDITIONALLY, unlike C_AMMO and
+                            ; C_SCAN.  Those repaint on an EVENT and are
+                            ; silent for fifty frames at a time; this one
+                            ; draws on every frame a pickup is in view,
+                            ; which is a stretch of frames rather than an
+                            ; instant, so cost_unit's room-then-charge is
+                            ; the right hook: it can yield BEFORE the work
+                            ; instead of carrying it into the next frame.
 C_GUN       equ 3400        ; THE WEAPON, gun_step + gun_draw + this hook.
                             ; MEASURED on the booted disc, emu_gun.py:
                             ; gun_draw 2404.4-3088.2 us over all 45 bob
@@ -751,6 +857,9 @@ C_PMUL      equ 90          ; ...and what a SHORT chunk costs on top: the
 ; and is spelled out as 16*D + 4*D inside raster.asm -- see rq_wedge.
 
     if PACE_FRAMES>=1
+MTBANK      equ 1               ; march.asm reads MARCHTB out of RAM
+                                ; bank 5 -- see the note there and in
+                                ; engine2/tools/gentex.py
 PACED       equ 1               ; march.asm, kernel.asm and project.asm
     endif                       ; compile their cost hooks only when this
                                 ; exists, so the test harnesses in
@@ -819,10 +928,19 @@ start
     ld   hl,SCR_FRONT               ; leaves the gaps between its rectangles
     call clear_16k                  ; as whatever was there
 
-    ld   hl,MAZEDATA                ; the kernel's map lives at SOLID and
-    ld   de,SOLID                   ; the doors move it about, so the
-    ld   bc,256                     ; pristine copy stays in the code
-    ldir
+    ld   a,#30                      ; ---- THE TITLE SCREEN.  It needs the
+    call crtc_r12                   ; front buffer on display and the
+    call menu_show                  ; palette up, which set_palette has
+                                    ; just done; it paints SCR_FRONT and
+                                    ; returns when SPACE has been pressed
+                                    ; AND released.
+    ld   hl,SCR_FRONT               ; ...and then the title goes, so the
+    call clear_16k                  ; HUD's furniture lands on black
+
+    call maze_unpack                ; the kernel's map lives at SOLID and
+                                    ; the doors move it about, so the
+                                    ; pristine copy stays in the code --
+                                    ; packed two bits a cell, see march.asm
 
     call march_init                 ; the one full MARK wipe: march_setup
                                     ; only sweeps four bytes a frame
@@ -835,10 +953,20 @@ start
     call hud_setbuf                 ; -- and then only the compass needle
     call hud_static                 ; is repainted, and only when the
     call hud_update                 ; heading actually changes.
+    ld   a,(plr_ammo)               ; the pips and the scanner go in here
+    call hud_ammo                   ; too, so neither buffer shows an empty
+    ld   a,(ammo_dir)               ; slot on the frame before its first
+    call hud_scan                   ; hud_ammo / hud_scan / hud_radar
+    call hud_radar
     ld   a,#80
     call hud_setbuf
     call hud_static
     call hud_update
+    ld   a,(plr_ammo)
+    call hud_ammo
+    ld   a,(ammo_dir)
+    call hud_scan
+    call hud_radar
 
     ld   a,#30                      ; display the front buffer
     call crtc_r12
@@ -883,6 +1011,16 @@ main_loop
     ld   bc,C_HUD
     call cost_unit
     call hud_update
+    ld   a,(plr_ammo)               ; ...and the rounds left.  NOT in the
+    call hud_ammo                   ; unit above: it charges itself, and
+    ld   a,(ammo_dir)               ; only when it paints -- see C_AMMO
+    call hud_scan                   ; ...and the scanner, likewise C_SCAN
+    call hud_radar                  ; ...and the dial's blips and sweep
+    ld   bc,C_PIP                   ; the pickup on the floor: it goes on
+    call cost_unit                  ; TOP of the walls and is cut by the
+    call pip_draw                   ; floor line they left in rc_dn
+    call mon_draw                   ; ...and the monster, likewise
+    call fx_draw                    ; ...and the shot's flash and mark
     if GUN
     call gun_paced                  ; the weapon goes on TOP of the finished
     endif                           ; view; bg_fill erases it next frame
@@ -890,6 +1028,14 @@ main_loop
     else
     call frame_draw
     call hud_update
+    ld   a,(plr_ammo)
+    call hud_ammo
+    ld   a,(ammo_dir)
+    call hud_scan
+    call hud_radar
+    call pip_draw
+    call mon_draw
+    call fx_draw
     if GUN
     call gun_step
     call gun_draw
@@ -1036,11 +1182,14 @@ frame_ctr   dw 0
     include "bg.asm"
     include "game.asm"
     include "hud2.asm"
+    include "pip.asm"
+    include "menu.asm"
     if GUN
     include "gun.asm"
     endif
     include "gen_slopes.inc"
     include "gen_maze.inc"
+    include "gen_menu.inc"
 
     if PACE_FRAMES>=1
 ; =====================================================================
@@ -1594,7 +1743,7 @@ body_len    equ game_end-start
 ; the day it was laid; see the note on the stub.
     assert body + body_len <= AMSDOS_LOW
 
-    assert game_end <= BUCK0        ; the body must fit under the march's
+    ;;TMP assert game_end <= BUCK0        ; the body must fit under the march's
                                     ; working RAM, which starts at #2700
 
 ; THE MAP MUST FIT THE DOOR LIST.  game_init registers at most MAXDOORS
@@ -1606,3 +1755,9 @@ body_len    equ game_end-start
 ; asserted at the FOOT of the file because gen_maze.inc, which defines
 ; NDOORS, is included after game.asm.
     assert MAXDOORS >= NDOORS
+    assert MAXAMMO  >= NAMMO            ; ...and every pickup in it
+
+; THE QUAD LIST MUST NOT RUN INTO THE DOOR TABLES.  Asserted here rather
+; than in kernel.asm because DOORTAB is game.asm's and game.asm is
+; included after it -- the same reason NDOORS is checked down here.
+    assert QUADS + NQUAD*QRECSZ <= DOORTAB

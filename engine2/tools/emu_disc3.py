@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.expanduser("~/cpcemu"))
 
 import cpc as cpcmod                                         # noqa: E402
 from cpc import CPC                                          # noqa: E402
+import bootdisc                                              # noqa: E402
 
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
@@ -43,6 +44,7 @@ def main():
     c.run_frames(150)
     c.type_text('RUN"DISC\n')
     c.run_frames(400)
+    bootdisc.start(c)   # past the title screen -- see bootdisc.py
     ok = True
     if c.mode != 0:
         print(f"FAIL: mode is {c.mode}, want 0")

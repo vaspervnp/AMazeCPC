@@ -106,15 +106,12 @@ tf_loop
     jp tf_loop
 
 copy_maze
-    ld hl,MAZEDATA
-    ld de,SOLID
-    ld bc,256
-    ldir
-    ret
+    jp maze_unpack                  ; march.asm's, and MAZEDATA is packed
 
 iters       dw 0
 done_flag   db 0
 
     include "march.asm"
     include "gen_slopes.inc"
+    include "gen_mtab.inc"    ; MARCHTB in base RAM -- see gen_march.py
     include "gen_maze.inc"

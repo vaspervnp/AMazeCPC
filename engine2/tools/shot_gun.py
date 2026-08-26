@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.expanduser("~/cpcemu"))
 
 import gunart                                                # noqa: E402
 from cpc import CPC                                          # noqa: E402
+import bootdisc                                              # noqa: E402
 
 HA, VA, H = gunart.BOB_HA, gunart.BOB_VA, gunart.H
 ROWS0 = H - gunart.BOB_CUT - VA          # rows drawn at the bottom of the
@@ -73,6 +74,7 @@ def main():
     c.run_frames(150)
     c.type_text('RUN"DISC\n')
     c.run_frames(500)
+    bootdisc.start(c)   # past the title screen -- see bootdisc.py
     assert c.mode == 0, f"not in mode 0 after boot: {c.mode}"
     c.poke(s["GUN_STEP"], 0xC9)         # RET: freeze the bob where it is put
 

@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.expanduser("~/cpcemu"))
 
 import cpc as cpcmod                                         # noqa: E402
 from cpc import CPC                                          # noqa: E402
+import bootdisc                                              # noqa: E402
 
 sys.path.insert(0, _HERE)
 import addrs                                                 # noqa: E402
@@ -57,6 +58,7 @@ def main():
     c.run_frames(150)
     c.type_text('RUN"DISC\n')
     c.run_frames(500)
+    bootdisc.start(c)   # past the title screen -- see bootdisc.py
     assert c.mode == 0, f"not in mode 0 after boot: {c.mode}"
 
     def shot(name, px, py, a, settle=30):
@@ -94,7 +96,7 @@ def main():
         c.run_frames(settle)
 
     def door_state(tag, name):
-        st = c.peek(s["DOOR_ST"])       # 2 shut .. 6 open, one step a frame
+        st = c.peek(addrs.DOOR_ST)       # 2 shut .. 6 open, one step a frame
         print(f"  {tag:42s} SOLID = {c.peek(door)}  door_st = {st}")
         c.screenshot(os.path.join(out, name))
 
@@ -110,12 +112,12 @@ def main():
     # step one CPC frame at a time and stop the moment it is part way.
     for _ in range(60):
         c.run_frames(1)
-        if 2 < c.peek(s["DOOR_ST"]) < 6:
+        if 2 < c.peek(addrs.DOOR_ST) < 6:
             break
     door_state("part way through the run", "amaze3_door_opening.png")
     c.run_frames(120)
     print(f"  after the run: SOLID = {c.peek(door)}, "
-          f"door_st = {c.peek(s['DOOR_ST'])}")
+          f"door_st = {c.peek(addrs.DOOR_ST)}")
     go(far)
     door_state("open, from the same spot as the first picture",
                "amaze3_door_open.png")

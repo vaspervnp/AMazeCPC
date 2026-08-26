@@ -34,6 +34,7 @@ import json
 import addrs
 import os
 import random
+import re
 import struct
 import subprocess
 import sys
@@ -45,6 +46,7 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.expanduser("~/cpcemu"))
 
 from cpc import CPC                                          # noqa: E402
+import bootdisc                                              # noqa: E402
 import emu_frame as ef                                       # noqa: E402
 import pacemodel as P                                        # noqa: E402
 import projmodel as pm                                       # noqa: E402
@@ -53,7 +55,47 @@ import rastermodel as rm                                     # noqa: E402
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
 SCRATCH = os.path.join(_E2, "build")
-BASE = 0x3A00                   # free RAM: #39C0-#3FEF, stack top #3FF0
+# WHERE THE BENCH HARNESS LIVES, AND IT MUST NOT BE INSIDE QUADS.
+#
+# It was #3A00, described here as "free RAM: #39C0-#3FEF".  That comment
+# was written when the kernel's output list started at #3700; QUADS is
+# #3A00 now (memmap.inc), so every blob this file assembled was sitting
+# exactly where project_all writes its first quad record.
+#
+# THE COLLISION WAS INVISIBLE BECAUSE OF A SECOND BUG.  With the table
+# bank not paged in -- see _head -- project_all rejected every face, wrote
+# ZERO quads, and never reached the harness.  The tool ran, printed a
+# `quad` column of 0 and an identical `rast` of 18822 us for state after
+# state, and looked like it was measuring something.  Page bank 4 in and
+# project_all starts producing real quads, the first of which lands on the
+# counter this file reads -- "counter unusable: 0".  Two bugs whose
+# symptoms cancelled.
+#
+# #3F00 is above QUADS (#3A00-#3DBF), above DOORTAB (#3DC0-#3DEF) and
+# above rastcol.asm's RC_COVER/RC_VARS at #3E00; _asm asserts both ends
+# rather than trusting this comment to stay true, because that is exactly
+# what the last comment here did not do.
+BASE = 0x3F00
+BASE_TOP = 0x3FC0               # ...and the CPU stack grows down from #3FF0
+
+
+def _rc_vars_end():
+    """-> the first byte above rastcol.asm's variable block.
+
+    DERIVED, not written down: the block is RC_COVER + CNPAIR*2 followed
+    by ~80 bytes of `rc_x equ RC_VARS+n`, and both the base and the
+    largest n are parsed out of the source.  A new variable there moves
+    this number on its own.
+    """
+    src = open(os.path.join(_E2, "src", "rastcol.asm")).read()
+    cover = int(re.search(r"^RC_COVER\s+equ\s+#([0-9A-Fa-f]+)", src,
+                          re.M).group(1), 16)
+    # CNPAIR is gentex.py's, emitted into gen_tex.inc
+    gen = open(os.path.join(_E2, "src", "gen_tex.inc")).read()
+    npair = int(re.search(r"^CNPAIR\s+equ\s+(\d+)", gen, re.M).group(1))
+    top = max(int(m) for m in
+              re.findall(r"^rc_\w+\s+equ\s+RC_VARS\+(\d+)", src, re.M))
+    return cover + 2 * npair + top + 2      # + the widest variable
 FTAB_BPTR = addrs.FTAB + addrs.O_BPTR   # the march's 8 bucket write
                                         # pointers.  IT WAS 0x33E0, and the
                                         # line below was already reading its
@@ -82,6 +124,7 @@ class Rig:
         self.c.run_frames(150)
         self.c.type_text('RUN"DISC\n')
         self.c.run_frames(500)
+        bootdisc.start(self.c)   # past the title screen -- see bootdisc.py
         self.solid = self.c.read_ram(addrs.SOLID, 256)
         self.ovh = 0.0
 
@@ -104,10 +147,41 @@ class Rig:
         open(src, "w").write("\n".join(lines) + "\n")
         subprocess.run(["rasm", name + ".asm", "-o", name],
                        cwd=SCRATCH, capture_output=True, check=True)
-        return open(os.path.join(SCRATCH, name + ".bin"), "rb").read()
+        blob = open(os.path.join(SCRATCH, name + ".bin"), "rb").read()
+        # ---- AND CHECK IT FITS WHERE IT IS PUT.  See BASE above: the
+        # last version of this file assembled every harness on top of the
+        # kernel's quad list and nothing said so.
+        lo = _rc_vars_end()
+        assert BASE >= lo, (
+            "harness BASE #%04X is inside rastcol.asm's RC_VARS "
+            "(ends #%04X)" % (BASE, lo))
+        assert BASE + len(blob) <= BASE_TOP, (
+            "harness `%s` is %d bytes, #%04X..#%04X, past #%04X -- the "
+            "CPU stack grows down into it from #3FF0"
+            % (name, len(blob), BASE, BASE + len(blob), BASE_TOP))
+        return blob
 
     def _head(self):
-        return ["    org #%04X" % BASE, "    di", "    ld sp,#3FF0",
+        # ---- SELECT BANK 4 FIRST, and it is not belt and braces.  Every
+        # harness this Rig builds reads the table bank at #4000 -- BOBV,
+        # LINETAB, PROJ, the lot -- and the rig arrives here by booting
+        # the disc and calling run_frames(500), which stops the CPU at an
+        # ARBITRARY point inside a 9-vsync game frame.  Most of that frame
+        # has bank 4 paged, but rastcol.asm swaps bank 5 in over the same
+        # window for the textured fill, so whether a harness saw tables or
+        # TEXTURE was a coin flip that nothing in the tool controlled.
+        #
+        # It came up tails the first time the frame's shape changed, and
+        # the failure did not look like paging at all: emu_gun.py's bob
+        # phase read BOBV out of the unused tail of the texture bank,
+        # which is zeros, so gun_step eased towards 0 every frame and 198
+        # of 200 frames "disagreed with the model".
+        #
+        # #3A00 is below #4000, so the out is outside the window it moves
+        # and cannot pull the ground out from under the code doing it.
+        return ["    org #%04X" % BASE, "    di",
+                "    ld bc,#7FC4", "    out (c),c",     # RAM config 4
+                "    ld sp,#3FF0",
                 "    xor a", "    ld (#%04X),a" % self.s["PACE_LEFT"],
                 "    ld hl,0", "    ld (#%04X),hl" % self.s["COST_ACC"],
                 # pace_wait NO LONGER returns when the budget is gone -- it

@@ -51,6 +51,7 @@ sys.path.insert(0, os.path.join(_ROOT, "tools"))
 sys.path.insert(0, os.path.expanduser("~/cpcemu"))
 
 import emu_rast as ER                                        # noqa: E402
+import emu_pacefit as PF                                     # noqa: E402
 import pacemodel as P                                        # noqa: E402
 import rastermodel as rm                                     # noqa: E402
 
@@ -84,12 +85,25 @@ def split_units(q):
 
 # =====================================================================
 #  pace_quad, exhumed.  This is main3.asm's deleted per-quad hook, VERBATIM,
-#  assembled into the running game's free RAM at #3A00 so that "before" is
-#  a measurement and not a memory.  It reads a record at HL, predicts the
+#  assembled into the running game's free RAM so that "before" is a
+#  measurement and not a memory.  It reads a record at HL, predicts the
 #  whole quad, and falls into the real cost_unit.
+#
+#  IT USED TO BE NAILED TO #3A40, WHICH IS INSIDE THE QUAD LIST.  memmap.inc
+#  puts QUADS at #3A00-#3DBF, so the blob sat 64 bytes into the very table
+#  this file fills: frames() below calls march + project_all and then benches
+#  pace_quad, and the ninth quad record project_all wrote landed on top of
+#  the routine being benched.  The org is computed now -- see build_pace_quad
+#  -- and both ends are asserted.
+#
+#  WHERE IT GOES.  addrs.py's map leaves exactly one hole below the harness:
+#  QUADS ends #3DBF, DOORTAB takes #3DC0-#3DEF, rastcol.asm's RC_COVER/RC_VARS
+#  run from #3E00 to _rc_vars_end(), and emu_pacefit's harness window starts
+#  at #3F00.  The blob is packed against the BOTTOM of that window so it ends
+#  at BASE, which puts it as far from the rastcol variables as it will go.
 # =====================================================================
 PACE_QUAD = """
-    org #3A40
+    org #%04X
 pace_quad
     ld   a,(hl)
     inc  hl
@@ -176,16 +190,39 @@ def build_pace_quad(rig, cyh):
     -- and the moment the shipped values moved to 820/22 this file was
     benching a pace_quad the disc does not contain, while calling its
     column "BEFORE".  RQ_SPLIT is 0, so "BEFORE" IS the shipping path."""
-    src = PACE_QUAD % (rig.s["MUL8X8U"], rig.s["COST_UNIT"])
-    src = ("C_QS equ %d\nC_QUAD equ %d\nCYH equ %d\n" % (P.C_QS, P.C_QUAD,
-                                                         cyh)) + src
+    tmpl = ("C_QS equ %d\nC_QUAD equ %d\nCYH equ %d\n"
+            % (P.C_QS, P.C_QUAD, cyh)) + PACE_QUAD
     d = os.path.join(_E2, "build")
-    open(os.path.join(d, "pq.asm"), "w").write(src)
-    subprocess.run(["rasm", "pq.asm", "-o", "pq"], cwd=d,
-                   capture_output=True, check=True)
-    blob = open(os.path.join(d, "pq.bin"), "rb").read()
-    rig.c.write_ram(0x3A40, blob)
-    return 0x3A40
+    # per-process, like emu_pacefit._asm: `pq.asm` was a shared name, so two
+    # of these running at once would assemble over each other's .bin.
+    name = "pq%d" % os.getpid()
+
+    def asm(org):
+        open(os.path.join(d, name + ".asm"), "w").write(
+            tmpl % (org, rig.s["MUL8X8U"], rig.s["COST_UNIT"]))
+        subprocess.run(["rasm", name + ".asm", "-o", name], cwd=d,
+                       capture_output=True, check=True)
+        return open(os.path.join(d, name + ".bin"), "rb").read()
+
+    # TWO PASSES: the address depends on the length, so size it first at a
+    # throwaway org and then assemble it where it really goes.  (Every jump
+    # inside pace_quad is a `jr`, so the bytes do not actually move -- but
+    # asserting that costs one rasm call and stops a future absolute
+    # reference from silently landing 91 bytes out.)
+    n = len(asm(PF.BASE - 0x100))
+    org = PF.BASE - n
+    blob = asm(org)
+    assert len(blob) == n, (
+        "pace_quad changed length between #%04X and #%04X: %d then %d"
+        % (PF.BASE - 0x100, org, n, len(blob)))
+    lo = PF._rc_vars_end()
+    assert org >= lo, (
+        "the exhumed pace_quad is %d bytes and would start at #%04X, "
+        "inside rastcol.asm's RC_VARS (which end #%04X) -- the gap between "
+        "them and the harness window at #%04X is only %d bytes"
+        % (n, org, lo, PF.BASE, PF.BASE - lo))
+    rig.c.write_ram(org, blob)
+    return org
 
 
 # ----------------------------------------------------------------- probes --
@@ -261,7 +298,6 @@ def main(nstates=8):
           % (up_ovh, pa_ovh))
 
     # ---- pace_quad, on the booted disc -------------------------------
-    import emu_pacefit as PF
     disc = PF.Rig()
     disc.ovh = disc.bench(None)
     dcal = disc.bench(None, nops=100)
@@ -395,7 +431,7 @@ def main(nstates=8):
           % (mismatch[0] == 0))
     print("  EVERY QUAD BOUNDED: %s   EVERY INTERVAL BOUNDED: %s"
           % (not bad, ubad == 0))
-    frames(disc, up, up_ovh, pa, pa_ovh, c, nstates)
+    frames(disc, up, up_ovh, pa, pa_ovh, c, nstates, pq)
     return 1 if (bad or ubad or mismatch[0]) else 0
 
 
@@ -404,7 +440,7 @@ def main(nstates=8):
 #  is its before/after: raster_paced on the booted disc against the same
 #  quad list drawn by the UNPACED harness plus the exhumed pace_quad.
 # =====================================================================
-def frames(disc, up, up_ovh, pa, pa_ovh, c, nstates):
+def frames(disc, up, up_ovh, pa, pa_ovh, c, nstates, pq):
     import emu_frame as ef
     import emu_pace as ep
     _grid, _msolid = ef.load()
@@ -416,7 +452,10 @@ def frames(disc, up, up_ovh, pa, pa_ovh, c, nstates):
             if ep.reachable(disc.solid, (cx << 8) | ox, (cy << 8) | oy)]
     # the worst state in the maze by name, plus a lattice sample
     states = [(0x0150, 0x0DF0, 67)] + rnd.sample(pool, nstates)
-    pq = 0x3A40
+    # `pq` is build_pace_quad's return value, threaded in rather than
+    # written down a second time -- this line was `pq = 0x3A40`, a copy of
+    # the old hardcoded org, and it is inside QUADS: the disc.once() call
+    # below refills the quad list over the top of it every state.
     print("\n=== WHOLE FRAMES: the rasteriser, before and after")
     print("%-20s %4s %6s %9s %9s %9s %8s"
           % ("state", "quad", "chunks", "BEFORE", "AFTER", "delta", "charge"))

@@ -205,6 +205,33 @@ gun_setbuf
 ;  Clobbers AF BC DE HL.
 ; ---------------------------------------------------------------------
 gun_step
+    call gu_bob
+
+    ; ---- THE RECOIL, AND IT SNAPS RATHER THAN EASES.  gu_step1 moves
+    ;      (gun_dy) ONE scanline a frame, which is what makes the bob
+    ;      read as weight -- and it is exactly wrong for a shot: at the
+    ;      five frames a second this engine runs, a kick that eases
+    ;      would take most of a second to get anywhere and read as the
+    ;      gun drifting, not firing.  So the kick assigns the top of the
+    ;      swing outright and the EASE IS THE RECOVERY, over the four
+    ;      frames after (gun_recoil) runs out.
+    ;
+    ;      It is safe to assign because 2*GUN_BOBVA is one of the 45
+    ;      offsets the geometry asserts and emu_gun.py verifies; this
+    ;      reaches a pose the bob could have reached anyway, sooner.
+    ;
+    ;      AFTER gu_bob, not before, so the ease inside it cannot pull
+    ;      the snap back down by a scanline in the same frame.
+    ld   hl,gun_recoil              ; game.asm owns it -- see fire
+    ld   a,(hl)
+    or   a
+    ret  z
+    dec  (hl)
+    ld   a,2*GUN_BOBVA
+    ld   (gun_dy),a
+    ret
+
+gu_bob
     ld   a,(plr_moving)
     or   a
     jr   z,gu_rest
