@@ -131,18 +131,51 @@ pessimistic case: from 19455, anything over **514 µs** overflows, and
 `main3.asm` states the invariant this breaks in its own words — *"every
 interval between two waits therefore holds under 19530 µs of ESTIMATE
 and so under 19530 µs of real time, inside a 19968 µs period, WITHOUT A
-TIMER"* — and it is the **same defect `cost_gate` was added to fix**,
-three paragraphs earlier in the same comment:
+TIMER"*.
 
-> *a face is charged on top of whatever the march left … 21300 µs
-> between two waits is a period and a bit — so that frame took SEVEN
-> periods. Three states in 1595 did it.*
+### The gate: built, measured, taken back out
 
-**The fix has the same shape**: a gate before the HUD block, testing
-against a threshold one worst-case block lower — `COST_THI - 10080` =
-9376 — exactly as `FACE_THI` sits one face below `COST_THI`. Not done,
-because it buys more yields and that is a pacing decision rather than a
-bug fix. It is the next thing to decide.
+It looked like the same defect `cost_gate` was added to fix. It is not,
+and finding that out cost building it.
+
+Two gates went in, each `COST_THI` less the worst run of `cost_add`s
+that followed it, exactly the way `FACE_THI` sits one face below
+`COST_THI`. Then the whole state space, per arrangement:
+
+| `HUD_GATE` | over budget, doors shut | mean waits |
+|---|---:|---:|
+| **none — what ships** | 69381 = **0.854%** | 7.176 |
+| one gate @9376 | 738216 = **9.082%** | 7.815 |
+| two gates @14806 / @14026 | 222372 = **2.736%** | 7.440 |
+
+**Three times worse** in the better arrangement, ten in the worse. And
+re-measuring the five off-pace states on the booted disc with the gates
+in returned exactly what it had without them: `[10] vsyncs`, five of
+five, unchanged.
+
+**Because these are two different failures with one symptom.** Either
+an interval *overruns* a period — one `pace_wait` spans two vsync edges
+while `pace_left` is decremented once — or the budget is *exhausted*,
+the work honestly needing more yields than `PACE_FRAMES` has, and
+`pace_wait` waits anyway without decrementing. Both end the frame one
+period late, since every wait still lands on an edge either way, and
+29535 is under two periods so an overrun cannot cost more than one.
+
+The 0.854% is the **second** kind. The worst charged frame is 169232
+against a 175104 budget — the work *fits*; the greedy packing is what
+does not. A gate is one more yield, so it trades a rare late frame for a
+common one.
+
+**What would actually move it is less packing waste, not more testing.**
+`cost_unit` yields when the next unit does not fit and throws away the
+rest of the interval, so waste scales with the size of the biggest
+units — and after `C_BG` the biggest is `C_PIP` at 8200, one hook in
+front of all three of `pip.asm`'s drawers. Splitting it three ways is
+the same move `RQ_SPLIT` is in `raster.asm`, and like `RQ_SPLIT` it
+wants measuring before believing. Not done.
+
+`pacemodel.HUD_GATE` still models all three arrangements so the table
+can be re-run; the disc is 0.
 
 **Doors in motion remains a separate problem**: 35.171%, worst frame
 259107 µs, the moving-door overlay pass drawing a second time. A player

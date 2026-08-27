@@ -68,6 +68,33 @@ C_RNEEDLE = 750      # ...and the needle put back over them (680).
                      # which is true, and the blips and the needle too,
                      # which is a player crossing six sector boundaries
                      # at once, five times a second.
+#  ---- THE HUD'S GATES: BUILT, MEASURED, AND NOT SHIPPED ---------------
+#  A gate tests without charging, so what it can guarantee is that the
+#  ungated run AFTER it cannot take the interval past a vsync period.
+#  Threshold = COST_THI - (the worst run that follows), exactly how
+#  FACE_THI is COST_THI less one worst face.
+#
+#    HUD_GATE 0   none -- WHAT THE DISC DOES
+#    HUD_GATE 1   ONE gate before the whole block, at COST_THI - 10080
+#                 = 9376.  Has to assume the whole run follows it.
+#    HUD_GATE 2   TWO gates, before the readouts and before the dial,
+#                 each covering only its own run -- 14806 and 14026
+#
+#  EXHAUSTIVE, DOORS SHUT, 8128512 states:
+#
+#      HUD_GATE   over budget            mean waits
+#        0          69381   0.854%          7.176
+#        1         738216   9.082%          7.815
+#        2         222372   2.736%          7.440
+#
+#  So the gate is a NET LOSS -- three times worse in its best
+#  arrangement, ten in its worst -- and it is kept here only so the
+#  table can be re-run.  The reason it loses is that the over-budget
+#  states are not interval overruns at all; they are budget exhaustion,
+#  and a gate that fires is one more yield.  Both failures end the frame
+#  one period late, so the gate trades a rare late frame for a common
+#  one.  main3.asm's cost_add note has the argument in full.
+HUD_GATE = 0
 N_BLIP = 8           # how many of C_BLIP the worst frame pays for, and
                      # it is a COUNT, not a cost: six pickup cells on the
                      # dial, plus hud_radar erasing the monster's old
@@ -123,6 +150,16 @@ C_JOINT = 7400       # ONE face's two course boundaries, drawn on top of it
 C_FACE_MAX = C_FACE + 3 * C_CLIP     # the headroom FACE_THI leaves
 THRESH = 0x4C * 256                  # 19456 us, COST_THI: room then charge
 FTHRESH = 0x3C * 256                 # 15360 us, FACE_THI: charge then test
+
+# ---- the HUD gates' thresholds, DERIVED, not chosen ------------------
+#  Each is COST_THI less the worst ungated run that follows it, so the
+#  interval cannot leave the gate and reach a full 19968 us period.
+HUD_RUN_A = C_AMMO + C_SCAN                          # the two readouts
+HUD_RUN_R = C_SWEEP + N_BLIP * C_BLIP + C_RNEEDLE    # ...and the dial
+HUD_RUN = HUD_RUN_A + HUD_RUN_R                      # both, ungated
+HUD_THI1 = THRESH - HUD_RUN                          # one gate covers all
+HUD_THI_A = THRESH - HUD_RUN_A                       # two gates, each its
+HUD_THI_R = THRESH - HUD_RUN_R                       # own run
 
 
 def _equ(name, default, src="main3.asm"):
@@ -447,8 +484,19 @@ def units(ncell, faces, quads, cyh):
     # ammo count is not usually a frame that moves six blips -- so this
     # is pessimistic on purpose, the same way every other C_* is.  What
     # was wrong before was the POSITION, not the total.
+    #
+    # ...AND THE GATES THAT KEEP THEM INSIDE A PERIOD.  Ungated, this run
+    # can start at COST_THI-1 = 19455 and end at 29535, which is a period
+    # and a half -- see the cost_add note in main3.asm.  HUD_GATE picks
+    # which arrangement is modelled; the disc's is the one that is 2.
+    if HUD_GATE == 1:
+        u.append((2, HUD_THI1, 0))              # one gate, low threshold
+    elif HUD_GATE == 2:
+        u.append((2, HUD_THI_A, 0))             # ...ahead of the readouts
     u.append((3, 0, C_AMMO))
     u.append((3, 0, C_SCAN))
+    if HUD_GATE == 2:
+        u.append((2, HUD_THI_R, 0))             # ...and ahead of the dial
     u.append((3, 0, C_SWEEP))
     u += [(3, 0, C_BLIP)] * N_BLIP
     u.append((3, 0, C_RNEEDLE))
@@ -514,7 +562,12 @@ def segments(u, acc=0, thresh=THRESH, tail=None, n=PACE_FRAMES):
                 acc = 0
             acc += charge
         elif after == 2:                    # THE GATE, charging nothing
-            if acc >= FTHRESH and left:
+            # ...against its OWN threshold, carried in the room field.
+            # project_all's gate uses FACE_THI, which is COST_THI less
+            # one worst face; the HUD's gates use COST_THI less the
+            # worst run of cost_adds that follows them.  Same idea, one
+            # threshold per thing being gated, so 0 means "the default".
+            if acc >= (room or FTHRESH) and left:
                 waits += 1
                 left -= 1
                 worst = max(worst, acc)

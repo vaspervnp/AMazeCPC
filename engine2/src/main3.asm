@@ -210,29 +210,57 @@
 ;  pessimistic case either: from 19455, anything over 514 us overflows,
 ;  and C_BLIP alone is 460.
 ;
-;  This is the SAME defect as the one two paragraphs up -- a charge laid
-;  on top of whatever the previous stage left, with no gate -- in a new
-;  place, and it is why pacescan reports 0.854% of doors-shut states
-;  over budget.
+;  It looks like the SAME defect as the one two paragraphs up -- a charge
+;  laid on top of whatever the previous stage left, with no gate -- and
+;  it is not, which took building the gate to find out.
 ;
-;  MEASURED ON THE BOOTED DISC, not just modelled: five of those states
-;  were fed to emu_pace's rig, a fresh boot each, and all five read
+;  A GATE WAS BUILT HERE AND MEASURED AND TAKEN BACK OUT.  Two of them,
+;  each COST_THI less the worst run of cost_adds that followed it, the
+;  way FACE_THI is COST_THI less one worst face:
 ;
-;      [10] vsyncs = 199.5 ms      against [9] = 179.7
+;      HUD_GATE  over budget, doors shut       mean waits
+;        none      69381 / 8128512  0.854%       7.176
+;        one @9376  738216          9.082%       7.815
+;        two @14592/#13824  222372  2.736%       7.440
 ;
-;  while two control states inside the budget read [9].  Five of five.
-;  The frame really does drop to 5.01 fps there.
+;  Three times worse, and ten times worse for the single gate.  The
+;  reason is that THESE ARE TWO DIFFERENT FAILURES with one symptom:
 ;
-;  The fix has the same shape as cost_gate's: a gate before the HUD
-;  block testing against a threshold one worst-case block lower,
-;  COST_THI - 10080 = 9376.  It is not in yet, because it buys more
-;  yields and that is a pacing decision, not a bug fix.
+;    an interval OVERRUNS a period -- one pace_wait spans two vsync
+;    edges, and (pace_left) is decremented once for two periods; or
 ;
-;  IT WAS INVISIBLE UNTIL THE MODEL WAS FIXED.  pacescan.py and
+;    the budget is EXHAUSTED -- the work honestly needs more yields than
+;    PACE_FRAMES has, and pace_wait waits anyway without decrementing.
+;
+;  Both end the frame one period late, because every wait still ends on
+;  an edge either way, and 29535 is under two periods so the overrun
+;  cannot cost more than one.  The 0.854% is the SECOND kind: the worst
+;  charged frame is 169232 against a 175104 budget, so the work fits and
+;  it is the greedy PACKING that does not.  A gate is an extra yield, so
+;  it trades a rare late frame for a frequent one.
+;
+;  WHAT WOULD ACTUALLY MOVE IT is less packing waste, not more testing.
+;  cost_unit yields when the next unit does not fit and throws away the
+;  rest of the interval, so the waste goes with the size of the biggest
+;  units -- and after C_BG the biggest is C_PIP at 8200, one hook in
+;  front of all three of pip.asm's drawers.  Splitting it three ways is
+;  the same move RQ_SPLIT is in raster.asm, and like RQ_SPLIT it wants
+;  measuring before believing.  Not done.
+;
+;  ALL OF IT WAS INVISIBLE UNTIL THE MODEL WAS FIXED.  pacescan.py and
 ;  pacemodel.py both charged these five at the frame HEAD, where
 ;  pace_drain wipes them, so no modelled interval ever accumulated them
 ;  and the worst interval read 19455 -- comfortably inside a period.
-;  See pacemodel.frame_head().
+;  See pacemodel.frame_head(), and HUD_GATE there, which still models
+;  all three arrangements so the table above can be re-run.
+;
+;  MEASURED ON THE BOOTED DISC throughout, not just modelled: five of the
+;  69381 were fed to emu_pace's rig, a fresh boot each, and all five read
+;
+;      [10] vsyncs = 199.5 ms      against [9] = 179.7
+;
+;  while two control states inside the budget read [9].  Five of five --
+;  before the gate, and again, unchanged, with it.
 ;
 ;  PAIRED WITH AN EXACT BUDGET.  (pace_left) starts each frame at
 ;  PACE_FRAMES; every yield spends one, and pace_drain spends whatever is
@@ -1131,6 +1159,8 @@ main_loop
     ld   bc,C_HUD
     call cost_unit
     call hud_update
+    ; ---- NO GATE HERE, AND IT WAS MEASURED, NOT ASSUMED.  See the note
+    ; on HUD_GATE beside cost_add.
     ld   a,(plr_ammo)               ; ...and the rounds left.  NOT in the
     call hud_ammo                   ; unit above: it charges itself, and
     ld   a,(ammo_dir)               ; only when it paints -- see C_AMMO
