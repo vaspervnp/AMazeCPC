@@ -68,6 +68,12 @@ C_RNEEDLE = 750      # ...and the needle put back over them (680).
                      # which is true, and the blips and the needle too,
                      # which is a player crossing six sector boundaries
                      # at once, five times a second.
+N_BLIP = 8           # how many of C_BLIP the worst frame pays for, and
+                     # it is a COUNT, not a cost: six pickup cells on the
+                     # dial, plus hud_radar erasing the monster's old
+                     # square and drawing its new one.  units() emits
+                     # this many cost_adds; the number lives here so the
+                     # scans cannot each pick their own.
 C_PIP = 8200         # pip.asm's three world drawers -- the pickup on the
                      # floor, the monster, and the shot's flash and mark.
                      # MEASURED 7902.6 us worst on the booted disc, with
@@ -417,22 +423,90 @@ def units(ncell, faces, quads, cyh):
             u += [(0, cc, cc) for cc in quad_units(q, cyh)]
             u += [(0, jc, jc) for jc in joint_units(q)]
     u.append((0, C_HUD, C_HUD))
+    # ---- THE HUD'S OWN CHARGES, AND THEY GO HERE, NOT IN THE TAIL ----
+    #
+    # main3.asm:1047-1051 calls hud_ammo, hud_scan and hud_radar between
+    # C_HUD's cost_unit and C_PIP's, and every charge they make is a
+    # cost_add -- hud2.asm:359, :436, :517, :551, :580, :592, :617.
+    #
+    # Both this file's sweep and pacescan.py used to fold all of them
+    # into the frame HEAD instead, which is the one place they can never
+    # be: pace_drain zeroes the accumulator at the end of the frame that
+    # made them.  See frame_head() for what that cost.
+    #
+    # THE WORST CASE, WHICH IS WHAT THESE ARE:
+    #   C_AMMO     hud_ammo when the round count moved
+    #   C_SCAN     hud_scan when the nearest pickup's bearing moved
+    #   C_SWEEP    the sweep and the six-way compare -- EVERY frame,
+    #              unconditionally (hud2.asm:617)
+    #   C_BLIP x8  one per blip that moved: six ammo cells, plus the
+    #              monster's erase and its redraw
+    #   C_RNEEDLE  putting the compass needle back after a blip erase
+    #              clipped it
+    # They are not all reachable on one frame -- a frame that moves the
+    # ammo count is not usually a frame that moves six blips -- so this
+    # is pessimistic on purpose, the same way every other C_* is.  What
+    # was wrong before was the POSITION, not the total.
+    u.append((3, 0, C_AMMO))
+    u.append((3, 0, C_SCAN))
+    u.append((3, 0, C_SWEEP))
+    u += [(3, 0, C_BLIP)] * N_BLIP
+    u.append((3, 0, C_RNEEDLE))
     u.append((0, C_PIP, C_PIP))     # main3.asm:pip_draw, room then charge
     if GUN and GUN_CHARGED:
         u.append((0, C_GUN, C_GUN))     # main3.asm:gun_paced, room then charge
     return u
 
 
-def segments(u, acc=0, thresh=THRESH, tail=C_TAIL, n=PACE_FRAMES):
+def frame_head(space=True):
+    """What (cost_acc) really carries into the next frame's first interval.
+
+    THERE WERE FOUR DIFFERENT ANSWERS TO THIS IN engine2/tools, and that
+    is why it is a function now.  pacescan.py said C_TAIL + C_SND +
+    C_DOORACT + C_AMMO + C_SCAN + C_SWEEP + 8*C_BLIP + C_RNEEDLE =
+    16230; this file's own sweep said 10800; emu_pace3.py and
+    guardfit.py said C_TAIL + C_DOORACT = 3950.  Three of the four are
+    wrong and the wrongest is the one `make pace` runs.
+
+    WHAT THE DISC DOES.  main3.asm calls hud_ammo, hud_scan and
+    hud_radar at :1047-1051 and pace_drain at :1060, and pace_drain
+    opens with
+
+        ld b,a / xor a / ld (pace_left),a / ld h,a / ld l,a
+        ld (cost_acc),hl
+
+    -- it ZEROES the accumulator, unconditionally, before its wait loop.
+    So every charge those three routines make through cost_add is wiped
+    at the end of the frame it was made in.  None of C_AMMO, C_SCAN,
+    C_SWEEP, C_BLIP or C_RNEEDLE can reach the next frame's head; they
+    belong in units(), positioned where main3.asm runs them, and that is
+    where they now are.
+
+    The only charge that outlives the drain is game.asm:809's
+    C_DOORACT, added after it on the frames a player taps SPACE.  On top
+    of that main_loop's head adds C_TAIL + C_SND explicitly.
+
+    WHY IT MATTERS THAT THIS IS SMALL.  16230 + C_BG 9320 = 25550, over
+    COST_THI 19456, so the model made bg_fill's cost_unit yield on the
+    first unit of every frame -- and a yield costs a wait.  The disc's
+    6150 + 9320 = 15470 does not yield at all.  The model was spending a
+    vsync period a frame that the machine never spends, which put its
+    whole wait histogram one column to the right: doors shut read 3.956%
+    of states over budget where the corrected head reads 0.054%.
+    """
+    return C_TAIL + C_SND + (C_DOORACT if space else 0)
+
+
+def segments(u, acc=0, thresh=THRESH, tail=None, n=PACE_FRAMES):
     """Greedy, exactly as cost_room / cost_unit / pace_drain do it.
 
     -> (waits taken during the work, worst interval estimate, acc carried
         into the next frame)
     """
-    acc += tail
+    acc += frame_head() if tail is None else tail
     waits, worst, left = 0, acc, n
     for after, room, charge in u:
-        if not after:                       # ROOM THEN CHARGE
+        if after == 0:                      # ROOM THEN CHARGE
             if acc + room >= thresh and left:
                 waits += 1
                 left -= 1
@@ -445,6 +519,17 @@ def segments(u, acc=0, thresh=THRESH, tail=C_TAIL, n=PACE_FRAMES):
                 left -= 1
                 worst = max(worst, acc)
                 acc = 0
+        elif after == 3:
+            # cost_add: CHARGE, NO TEST, NO WAIT.  main3.asm:1302.
+            #
+            # AND IT REALLY MUST NOT TEST.  A cost_add can leave the
+            # accumulator ABOVE the threshold -- that is the whole point
+            # of it, it hands the microseconds to whatever tests next --
+            # so modelling it as a roomed unit with room 0 would fire a
+            # wait the Z80 does not take.  The HUD makes five of these in
+            # a row; the first one that pushed past COST_THI would have
+            # invented a yield for each of the other four.
+            acc += charge
         else:                               # CHARGE THEN TEST
             acc += charge
             if acc >= FTHRESH and left:
@@ -453,8 +538,12 @@ def segments(u, acc=0, thresh=THRESH, tail=C_TAIL, n=PACE_FRAMES):
                 worst = max(worst, acc)
                 acc = 0
     worst = max(worst, acc)
-    if left:                        # pace_drain spends the rest, which
-        acc = 0                     # ends the interval
+    # pace_drain ends the frame on a vsync edge and zeroes cost_acc --
+    # UNCONDITIONALLY.  This used to be `if left:`, which carried the
+    # accumulator over on an exhausted budget; the disc does not (see
+    # the listing quoted in frame_head).  Every caller passes n=99, so
+    # the two agreed in practice, but gridpace.py takes the default.
+    acc = 0
     return waits, worst, acc
 
 
@@ -509,8 +598,7 @@ def sweep(n=3000, seed=90210):
         u = _state_units(solid, st[0], st[1], st[2], cyh)
         acc = 0
         for _ in range(3):                       # settle the carry-over
-            waits, worst, acc = segments(u, acc, n=99,
-                                         tail=C_TAIL + C_SND + C_DOORACT + C_AMMO + C_SCAN)
+            waits, worst, acc = segments(u, acc, n=99, tail=frame_head())
         hist[waits] += 1
         if worst > wmax:
             wmax, wst = worst, st
@@ -519,12 +607,30 @@ def sweep(n=3000, seed=90210):
             emax, est_ = tot, st
     print("waits the accumulator asks for (uncapped):")
     for k in sorted(hist):
-        print(f"   {k}  {hist[k]:6d}  {100.0*hist[k]/n:5.2f}%")
+        print(f"   {k}  {hist[k]:6d}  {100.0*hist[k]/n:5.2f}%"
+              f"   -> {k+1} periods"
+              + ("" if k < PACE_FRAMES else "   <-- OVER BUDGET"))
     print(f"worst interval estimate {wmax} us at {wst}  "
           f"(threshold {THRESH}, period 20000)")
     print(f"worst frame estimate    {emax} us at {est_}  "
           f"(budget {PACE_FRAMES*THRESH})")
-    return 0 if max(hist) <= PACE_FRAMES else 1
+    # N WAITS IS N+1 PERIODS, and this line used to say `<=`.
+    #
+    # A frame with w waits occupies w+1 vsync periods -- the w intervals
+    # the waits end, plus the tail from the last wait to the flip.  So
+    # the budget of PACE_FRAMES periods is spent by PACE_FRAMES-1 waits,
+    # and a state asking for PACE_FRAMES waits is already one period
+    # late.  pacescan.py has always had this right (`if w >=
+    # pm.PACE_FRAMES: over.append(...)`) and its legend prints the
+    # arithmetic out loud, `{k} waits -> {k+1} periods`.
+    #
+    # This file did not, so it returned 0 -- PASS -- on a state space
+    # pacescan calls over budget, and `make pace` runs BOTH.  The
+    # exhaustive scan's non-zero exit was the only thing reporting the
+    # failure, and the sampled replay printed a histogram whose last
+    # row was the over-budget row without saying so.  Read together
+    # they looked like a pass with a bit of headroom left.
+    return 0 if max(hist) < PACE_FRAMES else 1
 
 
 if __name__ == "__main__":

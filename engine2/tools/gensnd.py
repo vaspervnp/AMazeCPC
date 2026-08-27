@@ -43,11 +43,51 @@ R_MIXER = 7
 R_VOL_A, R_VOL_B, R_VOL_C = 8, 9, 10
 
 SILENT = 0x3F                   # tone and noise off on all three channels
+#  THE ONE ASSERT HERE THAT CAN ACTUALLY FIRE.  R7 bits 6 and 7 are the
+#  AY's port A direction and on a CPC port A IS the keyboard, so a mixer
+#  with either bit set leaves the machine unable to read a key.  The
+#  per-step check in step_bytes() looks like it guards that -- and it is
+#  UNREACHABLE: mix starts as SILENT and every line after it only CLEARS
+#  bits (&= ~0x01, &= ~0x08), so `mix & 0xC0` cannot become non-zero no
+#  matter what EFFECTS says.  The invariant does not live in the steps,
+#  it lives in this constant, so the guard belongs on this constant.
+assert not (SILENT & 0xC0), "R7 bits 6/7 would turn port A round -- and " \
+                            "port A is the keyboard"
 TONE = SILENT & ~0x01           # ...channel A tone on
 NOISE = SILENT & ~0x08          # ...channel A noise on
 BOTH = TONE & NOISE
 
 MAXVOL = 15
+
+# ---- WHAT C_SND RESTS ON, AND IT IS AN INVARIANT ABOUT THIS FILE -----
+#  main3.asm charges C_SND = 2200 us once a frame for all nine of the
+#  frame's sound ticks.  That number was measured at 1944 us worst, and
+#  the frame it was measured on is the one where SFX_SHOT's steps land
+#  four STEP CHANGES plus the stop inside a single nine-tick window.
+#
+#  A tick that sits inside a held step is a decrement and a return.  A
+#  tick that CHANGES step writes five AY registers through snd_wr, and
+#  that is the expensive one -- so what the charge really bounds is how
+#  many step changes can fall in nine consecutive ticks.
+#
+#  NOTHING CHECKED IT.  EFFECTS below is a table anybody can edit, and an
+#  effect written with five short steps would put five changes in the
+#  window and walk straight past 2200 with no tool saying a word: the
+#  disc would simply take a tenth vsync period on the frames it played.
+#  That is the exact shape of the C_CFAR defect -- a charge derived once,
+#  for one configuration, and never re-derived when the thing it
+#  described moved.
+#
+#  THE ASSERT IS ON THE COUNT, NOT ON MICROSECONDS, and that is
+#  deliberate.  Deriving the per-tick cost by counting Z80 T-states gave
+#  two different answers on two attempts (snd_wr is 48 us or 56 us
+#  depending on how the gate array's wait states are applied to OUT
+#  (C),r), and this repo does not put a number it guessed into a gate.
+#  1944 us for four changes is MEASURED; four is therefore the ceiling
+#  that measurement licenses, and a fifth change means C_SND has to be
+#  re-measured before it can be trusted -- which is what the assert says.
+PACE_TICKS = 9          # snd_tick calls in one game frame: PACE_FRAMES
+MAX_CHANGES = 4         # ...step changes allowed inside any nine of them
 
 
 def tone(hz):
@@ -143,14 +183,58 @@ def step_bytes(ticks, hz, noise, vol):
         assert 0 <= noise <= 31, noise
         n = noise
         mix &= ~0x08
+    # Belt and braces, and knowingly so: this cannot fire while mix is
+    # built by clearing bits out of SILENT (see the assert on SILENT
+    # above, which is the one that guards the invariant).  It is kept so
+    # that the day someone computes a mixer here instead of clearing
+    # one, the check is already in the right place.
     assert not (mix & 0xC0), "mixer bits 6/7 would turn the keyboard round"
     return [ticks, lo, hi, n, mix, vol]
+
+
+def worst_window(steps):
+    """-> (most step LOADS in any PACE_TICKS-long run, whether the stop
+    falls in that same window, and where the window starts).
+
+    Walks the effect's tick timeline the way snd_tick walks it: tick 0
+    loads step 0, and a step of N ticks is then held for N ticks before
+    the next one loads.
+
+    THE STOP IS COUNTED SEPARATELY, and getting that wrong is what the
+    first version of this function did.  st_stop writes two registers,
+    not five, so it is not a step load -- and the 1944 us that C_SND
+    rests on was measured on SFX_SHOT, whose worst window holds FOUR
+    loads AND the stop.  Folding the stop into the same total made the
+    ceiling look like five and rejected an effect that ships.
+    """
+    load_at, t = [], 0
+    for _ticks, _hz, _noise, _vol in steps:
+        load_at.append(t)
+        t += _ticks
+    stop_at = t if steps else None
+    worst, at, stop_in = 0, 0, False
+    for start in range(0, t + 1):
+        end = start + PACE_TICKS
+        n = sum(1 for c in load_at if start <= c < end)
+        if n > worst:
+            worst, at = n, start
+            stop_in = stop_at is not None and start <= stop_at < end
+    return worst, stop_in, at
 
 
 def build():
     out = []
     for name, steps in EFFECTS:
         rows = [step_bytes(*s) for s in steps]
+        n, stop_in, at = worst_window(steps)
+        assert n <= MAX_CHANGES, (
+            f"effect {name!r} loads {n} steps inside {PACE_TICKS} ticks "
+            f"(window from tick {at}{', with the stop' if stop_in else ''})"
+            f"; C_SND = 2200 us in main3.asm was MEASURED at "
+            f"{MAX_CHANGES} loads plus a stop -- 1944 us. A fifth load "
+            f"is about 2320 and the frame takes a tenth vsync period. "
+            f"Re-measure C_SND before raising MAX_CHANGES, or give the "
+            f"effect's early steps more ticks.")
         out.append((name, rows))
     return out
 

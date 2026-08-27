@@ -43,8 +43,11 @@ def _init(cguard, ovr=None):
     solid, _pos = pacescan.positions()
     for _n, _v in (ovr or {}).items():
         setattr(pm, _n, _v)
+    # tail was C_TAIL + C_DOORACT by hand and went 2200 us light the day
+    # sound landed.  This file FITS a constant against the head it
+    # assumes, so a light head fits a C_GUARD that is too big to be safe.
     _W.update(solid=solid, cyh=rm.cfg().CYH, pm=pm, g=cguard,
-              tail=pm.C_TAIL + pm.C_DOORACT)
+              tail=pm.frame_head())
     pm._rm = rm
 
 

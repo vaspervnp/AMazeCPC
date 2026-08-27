@@ -19,10 +19,24 @@ RASM    ?= rasm
 PYTHON  ?= python3
 BUILD   := build
 
+# EVERY FILE main3.asm INCLUDES, and it has to be every one.  This list
+# had drifted four files behind the engine: sound.asm, rastcol.asm,
+# pip.asm and menu.asm were all included by main3.asm and named by
+# nothing here.
+#
+# IT IS DOCUMENTATION, NOT A DEPENDENCY, and that is worth saying so
+# nobody trusts it for more than it does: `amaze` is .PHONY below, so
+# make runs the recipe every time and never consults these prerequisites
+# at all.  The list earns its keep by telling a reader what the disc is
+# built from -- and by being the thing you check against main3.asm's
+# include block when either one changes.  The REAL build bug was in the
+# recipe, not here; see GEN.
 SRC := engine2/src/main3.asm engine2/src/game.asm engine2/src/frame.asm \
        engine2/src/kernel.asm engine2/src/march.asm engine2/src/project.asm \
-       engine2/src/raster.asm engine2/src/bg.asm engine2/src/hud2.asm engine2/src/gun.asm \
-       engine2/src/vpcfg.inc
+       engine2/src/raster.asm engine2/src/rastcol.asm engine2/src/bg.asm \
+       engine2/src/hud2.asm engine2/src/gun.asm engine2/src/pip.asm \
+       engine2/src/menu.asm engine2/src/sound.asm \
+       engine2/src/costcol.inc engine2/src/vpcfg.inc
 
 # The ART is source too.  These files decide what is in TABLES.BIN and what
 # engine2/src/tab_equ.inc says the sprites are; a harness that reads them out
@@ -30,20 +44,52 @@ SRC := engine2/src/main3.asm engine2/src/game.asm engine2/src/frame.asm \
 # thousands of wrong bytes and no defect.  See the `gun` target below.
 ART := engine2/tools/gunart.py engine2/tools/pal.py engine2/tools/walltex.py
 
+# THE GENERATORS -- AND THIS IS WHERE THE REAL BUILD BUG WAS.  Three of
+# them ran in nobody's recipe: gen_march.py, which owns the MAZE out of
+# tools/world.py; genmenu.py, which owns the title screen's font and
+# words; and gensnd.py, which owns the AY's effect tables.  Their
+# outputs are committed .inc files, so `make` happily assembled the
+# COMMITTED copy and never asked the generator whether it still agreed.
+#
+# Editing tools/world.py to move a wall, or gensnd.py's EFFECTS to
+# retune a gunshot, therefore changed nothing on the disc -- silently,
+# with a successful build and a "done".  That is the expensive kind of
+# build bug: it does not fail, and the thing you then test is not the
+# thing you changed.
+#
+# Checked when wiring them up: all three reproduce their committed
+# output byte for byte, so no disc that has been built was wrong.  The
+# hole had simply never been stepped in.
+GEN := engine2/tools/gentab.py engine2/tools/genhud.py \
+       engine2/tools/gentex.py engine2/tools/colmodel.py \
+       engine2/tools/gen_march.py engine2/tools/genmenu.py \
+       engine2/tools/gensnd.py engine2/tools/marchmodel.py \
+       tools/world.py
+
 .PHONY: all amaze test verify rast pace gun hud enemy shots clean
 all: amaze
 
-amaze: $(SRC) $(ART) engine2/tools/gentab.py engine2/tools/genhud.py \
-       engine2/tools/gentex.py engine2/tools/colmodel.py engine2/src/disc3.bas
+amaze: $(SRC) $(ART) $(GEN) engine2/src/disc3.bas
 	@mkdir -p $(BUILD)/e3
+	@# THE MAZE FIRST.  gen_march.py turns tools/world.py's grid into
+	@# gen_maze.inc (packed two bits a cell), the per-heading constants
+	@# into gen_slopes.inc, and MARCHTAB into gen_mtab.inc.  It needs
+	@# both tool directories on the path and takes its output dir as an
+	@# argument -- see the Run: line in its docstring.
+	PYTHONPATH=tools:engine2/tools $(PYTHON) engine2/tools/gen_march.py engine2/src
 	$(PYTHON) engine2/tools/gentab.py
 	@# ...and RAM bank 5: the two wall textures, transposed and page
 	@# aligned, plus the column renderer's step table.  Bank 4 has 180
 	@# bytes free and the textures alone are 8192, which is why there is
 	@# a second bank at all.  See engine2/tools/gentex.py.
+	@# It imports genmenu directly for the title screen's blob, so the
+	@# two cannot disagree about what is in bank 5.
 	$(PYTHON) engine2/tools/gentex.py
 	@# the HUD's furniture and needle, derived from the same vpcfg.inc
 	$(PYTHON) engine2/tools/genhud.py
+	@# the title screen's font and words, and the AY's effect tables
+	$(PYTHON) engine2/tools/genmenu.py
+	$(PYTHON) engine2/tools/gensnd.py
 	cd engine2/src && $(RASM) main3.asm -I ../src \
 	    -o ../../$(BUILD)/e3/GAME3 -s -os ../../$(BUILD)/e3/game3.sym
 	mv $(BUILD)/e3/GAME3.bin $(BUILD)/e3/GAME3.BIN

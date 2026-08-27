@@ -52,12 +52,32 @@ def scan_worst(nkeep=40):
     This one is the exhaustive answer and is the one that matters; it is
     just a file, written by `pacescan.py`, so re-run that after any change
     to a C_* or to the viewport and this list follows.
+
+    THE FILE GREW A SUFFIX AND THIS DID NOT FOLLOW IT.  pacescan.py
+    sweeps three door configurations now and writes one file each --
+    pacescan_top_shut.json, _open.json, _moving.json.  This read the old
+    unsuffixed pacescan_top.json, which nothing has written since the
+    split: it was three days stale, and the sweep went on measuring a
+    worst list from a disc that no longer existed while printing it
+    under the current build's name.  Exactly the trap the COURSES note
+    in pacemodel.joint_units describes.
+
+    All three are read now.  The shut list is the map as it loads and
+    the one that matters most, but a state that packs badly with the
+    doors open is still a state a player can stand in.
     """
     import json
-    p = os.path.join(os.path.dirname(_HERE), "build", "pacescan_top.json")
-    if not os.path.exists(p):
-        return []
-    return [(px, py, a) for _c, px, py, a in json.load(open(p))][:nkeep]
+    d = os.path.join(os.path.dirname(_HERE), "build")
+    out, seen = [], set()
+    for tag in ("shut", "open", "moving"):
+        p = os.path.join(d, f"pacescan_top_{tag}.json")
+        if not os.path.exists(p):
+            continue
+        for _c, px, py, a in json.load(open(p))[:nkeep]:
+            if (px, py, a) not in seen:
+                seen.add((px, py, a))
+                out.append((px, py, a))
+    return out
 
 
 def model_worst(nkeep=60, nscan=20000, seed=4711):
@@ -85,7 +105,13 @@ def model_worst(nkeep=60, nscan=20000, seed=4711):
     rnd = random.Random(seed)
     hist = collections.Counter()
     scored = []
-    tail = pm.C_TAIL + pm.C_DOORACT      # the pessimistic frame: SPACE held
+    # The pessimistic frame: SPACE held.  This was C_TAIL + C_DOORACT
+    # written out by hand, and it stopped being the whole answer the day
+    # sound landed -- main_loop adds C_SND at the head too.  This file
+    # replays the BOOTED DISC against the model, so a head 2200 us light
+    # is a model quietly disagreeing with the machine it is grading.
+    # pacemodel.frame_head() is the single definition now.
+    tail = pm.frame_head()
     for _ in range(nscan):
         px, py = rnd.choice(pool)
         a = rnd.randrange(72)

@@ -125,8 +125,14 @@ def _init(ovr=None, doors=0):
     _W["pm"] = pm
     _W["_rm"] = rm
     pm._rm = rm
-    _W["tail"] = (pm.C_TAIL + pm.C_SND + pm.C_DOORACT + pm.C_AMMO + pm.C_SCAN
-              + pm.C_SWEEP + 8 * pm.C_BLIP + pm.C_RNEEDLE)
+    # WHAT THE HEAD CARRIES -- pacemodel owns the answer now.  This line
+    # used to add C_AMMO, C_SCAN, C_SWEEP, 8*C_BLIP and C_RNEEDLE on top,
+    # for a head of 16230 against COST_THI 19456; with C_BG's 9320 roomed
+    # on top of that, bg_fill's cost_unit yielded on the FIRST unit of
+    # every frame and the whole histogram sat one column right of the
+    # truth.  Those five are cost_adds made mid-frame and wiped by
+    # pace_drain; they are in pm.units() now, where main3.asm runs them.
+    _W["tail"] = pm.frame_head()
 
 
 def _chunk(args):

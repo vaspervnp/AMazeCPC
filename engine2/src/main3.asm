@@ -195,6 +195,45 @@
 ;  ESTIMATE and so under 19530 us of real time, inside a 19968 us period,
 ;  WITHOUT A TIMER.
 ;
+;  ...EXCEPT ACROSS THE HUD'S cost_adds, AND THAT IS AN OPEN DEFECT.
+;  The sentence above is true of everything roomed or tested.  cost_add
+;  neither rooms nor tests -- it exists so that work already done can
+;  hand its microseconds to whoever tests next -- and hud_ammo, hud_scan
+;  and hud_radar make five of them in a row between C_HUD's cost_unit
+;  and C_PIP's, with nothing in between.  cost_unit lets the accumulator
+;  reach COST_THI-1 = 19455, so that run can leave it at
+;
+;      19455 + C_AMMO + C_SCAN + C_SWEEP + 8*C_BLIP + C_RNEEDLE
+;    = 19455 + 10080 = 29535 us
+;
+;  in ONE interval, against a 19968 us period.  It does not need the
+;  pessimistic case either: from 19455, anything over 514 us overflows,
+;  and C_BLIP alone is 460.
+;
+;  This is the SAME defect as the one two paragraphs up -- a charge laid
+;  on top of whatever the previous stage left, with no gate -- in a new
+;  place, and it is why pacescan reports 0.854% of doors-shut states
+;  over budget.
+;
+;  MEASURED ON THE BOOTED DISC, not just modelled: five of those states
+;  were fed to emu_pace's rig, a fresh boot each, and all five read
+;
+;      [10] vsyncs = 199.5 ms      against [9] = 179.7
+;
+;  while two control states inside the budget read [9].  Five of five.
+;  The frame really does drop to 5.01 fps there.
+;
+;  The fix has the same shape as cost_gate's: a gate before the HUD
+;  block testing against a threshold one worst-case block lower,
+;  COST_THI - 10080 = 9376.  It is not in yet, because it buys more
+;  yields and that is a pacing decision, not a bug fix.
+;
+;  IT WAS INVISIBLE UNTIL THE MODEL WAS FIXED.  pacescan.py and
+;  pacemodel.py both charged these five at the frame HEAD, where
+;  pace_drain wipes them, so no modelled interval ever accumulated them
+;  and the worst interval read 19455 -- comfortably inside a period.
+;  See pacemodel.frame_head().
+;
 ;  PAIRED WITH AN EXACT BUDGET.  (pace_left) starts each frame at
 ;  PACE_FRAMES; every yield spends one, and pace_drain spends whatever is
 ;  left before the flip.  The frame therefore takes EXACTLY PACE_FRAMES
@@ -342,16 +381,48 @@ SCR_BACK    equ #8000
 ;      VPCOL 0   flat spans     PACE_FRAMES 6   119.81 ms   8.35 fps
 ;      VPCOL 1   textured cols  PACE_FRAMES 9   179.71 ms   5.56 fps
 ;
-;  EXHAUSTIVE over all 6967296 reachable states (pacescan.py) with the
-;  column renderer's own measured charges -- the ONE-SIDED ones, taken
-;  one upper-bound hook per column pair, see engine2/src/costcol.inc --
-;  the worst charged frame is 156501 us against the span renderer's
-;  104024, and the distribution of waits the greedy rule asks for is
+;  EXHAUSTIVE over every state a player can stand in (pacescan.py) with
+;  the column renderer's own measured charges -- the ONE-SIDED ones,
+;  taken one upper-bound hook per column pair, see costcol.inc.  N waits
+;  is N+1 PERIODS, so the budget of 9 periods is spent by 8 waits and a
+;  state asking for 9 is already one period late:
 ;
-;      5 waits 0.096%   6  47.12%   7  51.48%   8  1.310%
+;      DOORS SHUT, 8128512 states -- the map as it loads
+;        4  0.130%   5  2.461%   6  9.101%   7 57.129%   8 30.326%
+;        9  0.854%  <-- 69381 states, OVER BUDGET
+;        worst charged frame 169232 us against a budget of 175104
 ;
-;  -- so eight waits is what the budget has to be, and nine periods is
-;  what the frame takes.  Set VPCOL back to 0 and put this back to 6.
+;      DOORS OPEN, 8792064 states
+;        3  0.006%   4  1.659%   5  5.102%   6  9.956%   7 51.199%
+;        8 28.503%   9  3.456%   10  0.118%  <-- 314225, OVER BUDGET
+;        worst charged frame 190152 us -- over the budget on its own
+;
+;      DOORS MOVING, 8128512 states -- see-through AND still drawn
+;        ...35.171% over budget, worst charged frame 259107 us
+;
+;  SO THE PERIOD IS NOT LOCKED, AND THIS COMMENT USED TO SAY IT WAS.
+;  What stood here was "5 waits 0.096% / 6 47.12% / 7 51.48% / 8 1.310%"
+;  over "6967296 reachable states" and a worst frame of 156501 -- a
+;  distribution with NO over-budget bucket at all, from a scan run
+;  before the radar, the world overlay and the sound driver existed.  It
+;  was never re-run when they landed; the sound commit ran no pacing
+;  tool at all.
+;
+;  READ THE THREE NUMBERS AS THEY ARE.  Doors shut is the map as it
+;  loads and it is 0.854% -- roughly one frame in 117, which is a
+;  stutter a player can feel but not name.  Doors open is 3.574%.  Doors
+;  moving is a third of the state space and has been the known open
+;  problem for a while; a player cannot make sixteen doors move at once,
+;  so it bounds a case that does not occur rather than describing one
+;  that does.
+;
+;  AND SEE cost_add, BELOW, FOR WHY.  The HUD's five cost_adds charge on
+;  top of whatever C_HUD left, with no gate between them and the next
+;  test -- so an interval can reach 19455 + 10080 = 29535 us inside a
+;  19968 us period.  That is the same defect cost_gate was added to fix
+;  for the projector's faces, in a new place.
+;
+;  Set VPCOL back to 0 and put this back to 6.
 ;
 ;  IT WAS 10, AND THE PERIOD IT BOUGHT WAS PAYING FOR A BROKEN CHARGE
 ;  RATHER THAN FOR WORK.  rastcol.asm took its per-pair hook AFTER the
@@ -445,10 +516,26 @@ C_SND       equ 2200        ; THE SOUND DRIVER, all nine ticks of a frame.
                             ; idle or inside a held step is 31 us, and one
                             ; AY register write is 76.  A step CHANGE
                             ; writes five of them, so ~410 us.  The worst
-                            ; nine-tick window any effect here produces is
-                            ; SFX_SHOT -- steps of 1, 2, 3 and 2 ticks, so
-                            ; four changes and a stop -- at 4*410 + 180 +
-                            ; 4*31 = 1944 us.  256 of margin.
+                            ; nine-tick window holds FOUR step loads and
+                            ; the stop, at 4*410 + 180 + 4*31 = 1944 us.
+                            ; 256 of margin.
+                            ;
+                            ; TWO EFFECTS SIT ON THAT CEILING, not one.
+                            ; This said "SFX_SHOT" and named it as though
+                            ; it were unique; SFX_SHOT_STONE's steps of
+                            ; 1, 2, 2 and 3 ticks produce an identical
+                            ; window.  A reader sent to re-check one of
+                            ; the two would have re-checked half of it.
+                            ;
+                            ; AND IT IS CHECKED NOW.  gensnd.py's
+                            ; worst_window() slides a nine-tick window
+                            ; over every effect and refuses to emit a
+                            ; table where any of them loads a fifth step
+                            ; inside one -- which would be ~2320 us, over
+                            ; this charge, and would buy the frames that
+                            ; play it a tenth vsync period.  EFFECTS is a
+                            ; table anybody can edit; until that assert
+                            ; existed, nothing tied it to this number.
                             ;
                             ; IT IS SPENT INSIDE THE WAIT and still has to
                             ; be charged: wait_vsync catches the rising

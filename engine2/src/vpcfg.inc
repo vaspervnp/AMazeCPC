@@ -51,6 +51,23 @@
 ;
 ;  and on the booted disc the sweep is one bar at 119.81 ms.
 ;
+;  THAT IS THE SPAN RENDERER'S ANSWER AND THE DISC DOES NOT SHIP IT.
+;  VPCOL is 1 below, so the build is the column renderer at 40x96 with
+;  PACE_FRAMES 9 -- and that configuration does NOT read zero.  Measured
+;  the same way, exhaustively, with the HUD's charges billed where
+;  main3.asm actually makes them:
+;
+;      doors shut     69381 of 8128512  = 0.854%  need a 10th period
+;      doors open    314225 of 8792064  = 3.574%
+;      doors moving 2858875 of 8128512  = 35.171%
+;      worst charged frames  169232 / 190152 / 259107 us of 175104
+;
+;  The zero above is real, and it is about a build nobody runs.  Left
+;  here because it is the reference the width work was done against --
+;  but do not read it as a statement about the shipping disc.  See the
+;  PACE_FRAMES block in main3.asm for that, and for the cost_add gap
+;  that most of the 0.854% comes out of.
+;
 ;  TWO CONSTANTS HAD TO MOVE WITH THE WIDTH, and both were found by
 ;  MEASURING at 44 rather than assuming 40's numbers carried over:
 ;

@@ -22,26 +22,138 @@ So the budget is **175104 µs a frame**, and it is nearly spent:
 | `rastcol` — the textured column renderer | 126000–205000 | 75–80% |
 | `bg_fill` — ceiling and floor | 9320 | 5.3% |
 | the world overlay (pickup, monster, shot) | 8200 | 4.7% |
-| the tail (game step, flip, HUD events) | 8600 | 4.9% |
+| the tail carried into the next head (`C_TAIL`+`C_SND`+`C_DOORACT`) | 6150 | 3.5% |
 | march + project | 16000–24000 | 9–14% |
 
 **Two numbers to keep in front of you:**
 
-- Adding more than **1535 µs** at the head of a frame costs a whole
-  19968 µs period, not 1536 µs. The accumulator holds the 8600 µs tail,
-  `C_BG` rooms 9320 on top, and 19456 − 17920 = 1536 is what is left
-  before the first `cost_unit` yields. It is a cliff, measured.
+- The head carries **6150 µs at worst**, not the 16230 the model charges.
+  `pace_drain` ends every frame with `ld h,a / ld l,a / ld (cost_acc),hl`
+  at a = 0 — it **zeroes** the accumulator — and `hud_ammo`, `hud_scan`
+  and `hud_radar` are all called *before* it (`main3.asm:1047-1051`,
+  drain at `:1060`). So `C_AMMO`, `C_SCAN`, `C_SWEEP`, `C_BLIP` and
+  `C_RNEEDLE` can never reach the next frame. The only charge that
+  outlives the drain is `game.asm`'s `C_DOORACT`. 6150 + `C_BG` 9320 =
+  15470, **3986 under** `COST_THI` — `bg_fill` does not yield at the
+  head on any frame.
 - `hud_rect` costs **~70 µs a row** — a LINETAB lookup per scanline. A
   tall narrow rectangle is nearly all rows. That single fact has shaped
   the ammo pips (3811 µs), the monster (capped at 28 rows) and the
   radar.
 
-**The open problem.** With every door *in motion* the pessimistic sweep
-puts 33% of states over budget, worst frame 242627 µs. That is the
-moving-door overlay pass drawing a second time, and it is the one place
-the engine cannot honour its own period. A player cannot make all
-sixteen doors move at once, so it is a bound rather than a bug — but it
-is the bound that will break first when anything else is added.
+---
+
+## The open problem: the period is not currently proven
+
+`make pace` **fails**, and has been failing since before the sound
+commit. Sound is not the cause — the exhaustive sweep is byte-identical
+with `C_SND` at 2200 and at 0, because the charge lands where the first
+yield discards it.
+
+Two defects in the *tools* were hiding a third in the *engine*. The
+tools are fixed; here is what they now say, and what they exposed.
+
+### The number, exhaustively, with the model corrected
+
+| doors | over budget | worst charged frame |
+|---|---:|---:|
+| shut — the map as it loads | 69381 / 8128512 = **0.854%** | 169232 µs |
+| open | 314225 / 8792064 = **3.574%** | 190152 µs |
+| moving | 2858875 / 8128512 = **35.171%** | 259107 µs |
+
+Doors shut is about **one frame in 117**. The budget is 175104 µs, so
+the doors-open worst frame is over on its own.
+
+**And this is not model pessimism — it was checked on the machine.**
+Five of the doors-shut states the model damns were fed to `emu_pace`'s
+rig, a fresh boot each, and the period measured:
+
+```
+OVER    (0x0EB0,0x0B68,43)   [10] vsyncs = 199.5 ms   *** OFF PACE ***
+OVER    (0x0EA0,0x0E70,61)   [10] vsyncs = 199.5 ms   *** OFF PACE ***
+OVER    (0x0B90,0x0EA0, 7)   [10] vsyncs = 199.5 ms   *** OFF PACE ***
+OVER    (0x0B60,0x0B90,25)   [10] vsyncs = 199.5 ms   *** OFF PACE ***
+OVER    (0x0970,0x0B60,43)   [10] vsyncs = 199.5 ms   *** OFF PACE ***
+control (0x0350,0x0C80, 0)   [ 9] vsyncs = 179.5 ms   on pace
+control (0x0680,0x0680,36)   [ 9] vsyncs = 179.5 ms   on pace
+```
+
+Five out of five. The disc really does drop to 199.5 ms — 5.01 fps
+instead of 5.56 — on those states, and `emu_verify3` still reports the
+period LOCKED because the six views it walks are not among them.
+
+### What the tools had wrong
+
+**The two of them disagreed about what "over" means.**
+`pacescan.py:152` flags `w >= PACE_FRAMES`; `pacemodel.py` returned pass
+on `max(hist) <= PACE_FRAMES`. `pacescan`'s own legend reads
+`{k} waits -> {k+1} periods` — nine waits is **ten periods**. So
+`pacemodel` exited 0 on a state space `pacescan` called over budget, and
+its histogram's last row was the over-budget row without saying so. Read
+together they looked like a pass with headroom. Fixed: `<` not `<=`, and
+the histogram now labels the periods and marks the bucket.
+
+**Both put the HUD's `cost_add`s in the frame head.** The disc charges
+them mid-frame and then `pace_drain` zeroes the accumulator, so they can
+never reach the next head. A modelled head of 16230 forced `bg_fill`'s
+`cost_unit` to yield on the first unit of *every* frame — and a yield
+costs a wait, which put the whole histogram one column right. Fixed:
+`units()` emits them where `main3.asm:1047-1051` runs them, and
+`pacemodel.frame_head()` is now the single definition of what the head
+carries. Five tools had four different answers; `emu_pace3.py` and
+`guardfit.py` were 2200 µs light because nobody added `C_SND` to them.
+
+For the record, since the intermediate numbers are misleading if quoted
+alone: as-committed read 3.956% / 6.456% / 40.85%, and with the five
+charges deleted outright 0.054% / 1.295% / 28.55%. The truth is between
+them, and it is the table above.
+
+### What that exposed: `cost_add` can overrun a whole period
+
+This is the real finding, and it was invisible while the model kept
+those charges in the tail.
+
+`cost_add` neither rooms nor tests — that is its purpose. But
+`hud_ammo`, `hud_scan` and `hud_radar` make **five of them in a row**
+between `C_HUD`'s `cost_unit` and `C_PIP`'s, with nothing in between.
+`cost_unit` lets the accumulator reach `COST_THI - 1` = 19455, so that
+run can leave it at
+
+```
+19455 + C_AMMO 4000 + C_SCAN 650 + C_SWEEP 1000
+      + 8*C_BLIP 3680 + C_RNEEDLE 750   =  29535 µs
+```
+
+in one interval, against a **19968 µs period**. And it does not need the
+pessimistic case: from 19455, anything over **514 µs** overflows, and
+`C_BLIP` alone is 460.
+
+`main3.asm` states the invariant this breaks in its own words — *"every
+interval between two waits therefore holds under 19530 µs of ESTIMATE
+and so under 19530 µs of real time, inside a 19968 µs period, WITHOUT A
+TIMER"* — and it is the **same defect `cost_gate` was added to fix**,
+three paragraphs earlier in the same comment:
+
+> *a face is charged on top of whatever the march left … 21300 µs
+> between two waits is a period and a bit — so that frame took SEVEN
+> periods. Three states in 1595 did it.*
+
+**The fix has the same shape**: a gate before the HUD block, testing
+against a threshold one worst-case block lower — `COST_THI - 10080` =
+9376 — exactly as `FACE_THI` sits one face below `COST_THI`. Not done,
+because it buys more yields and that is a pacing decision rather than a
+bug fix. It is the next thing to decide.
+
+**Doors in motion remains a separate problem**: 35.171%, worst frame
+259107 µs, the moving-door overlay pass drawing a second time. A player
+cannot make sixteen doors move at once, so it bounds a case that does
+not occur rather than describing one that does.
+
+**And nothing ran `make pace` for the sound commit.** `emu_verify3`
+walks a path; it does not sweep the space, and it passed because it
+never stood on one of the bad states. The Makefile says why that is not
+the test: *"the states that break a period are three in a million and a
+sample does not visit them."*
 
 ---
 
@@ -60,6 +172,8 @@ is the bound that will break first when anything else is added.
   wall line the renderer leaves in `rc_dn`.
 - One monster that stands still, scaled by distance, as a test target.
 - A title screen with the keys and the credit line.
+- Sound: six AY effects, ticked at a true 50 Hz out of `wait_vsync` —
+  the shot picks stone or flesh from the same test the impact mark does.
 
 ---
 
@@ -100,10 +214,41 @@ and you need to be able to **kill it**.
 
 ### 3. Presentation
 
-- **Sound.** The CPC's AY chip is untouched. A shot, a door, a hit, a
-  footstep. This is the single biggest perceived-quality win per byte on
-  an 8-bit machine, and it costs almost no frame time — the AY is
-  written and forgotten.
+- ~~**Sound.**~~ **Done** — `sound.asm`, `gensnd.py`. Six effects, 2200 µs
+  charged a frame for nine ticks, measured at 1944 worst. What is *not*
+  done: the envelopes were written on paper and verified only by reading
+  the AY registers back, because the emulator has no audio. Whether a
+  shot sounds like a shot is still an open question, and answering it
+  needs a real machine or an emulator that makes noise. Still missing:
+  a footstep, and anything for taking damage.
+
+  **It is also not wired into the build, and that is a live defect.**
+  `grep gensnd Makefile` returns nothing, and `$(SRC)` lists neither
+  `sound.asm` nor `rastcol.asm`, `pip.asm` or `menu.asm`. Editing the
+  driver does not rebuild `GAME3.BIN`; editing `EFFECTS` does not
+  regenerate `gen_snd.inc`, which is committed and therefore frozen.
+  Three consequences, all bad: a change can be made and tested against
+  a stale disc; the generator's asserts never run; and the disc in
+  `build/` is not reproducible from source. Fix before touching sound
+  again.
+
+  **And `gensnd.py`'s one safety assert is unreachable.** `step_bytes`
+  sets `mix = SILENT` (#3F, bits 6 and 7 already clear) and thereafter
+  only ever clears more bits (`&= ~0x01`, `&= ~0x08`), so
+  `assert not (mix & 0xC0)` at `gensnd.py:146` cannot fire. The
+  invariant it guards is the one that would leave the machine unable to
+  read a key — so the guard on it is currently worth zero lines. It
+  needs to be an assert on a value that could actually differ, or the
+  comment claiming it is checked needs to go.
+
+  **The bound is not checked either.** `C_SND = 2200` rests on "no
+  effect produces more than four step changes plus a stop inside a
+  nine-tick window" (4 changes + stop = 1944 µs, 5 = 2323 and it
+  breaks). Nothing asserts it. `SFX_SHOT` [1,2,3,2] *and*
+  `SFX_SHOT_STONE` [1,2,2,3] both sit on that ceiling — the comment in
+  `main3.asm` names only the first. A window slide in `gensnd.build()`
+  reading 2200 out of `main3.asm` with `pacemodel`'s `_equ` trick would
+  turn the claim into a checked number.
 - **Death and victory screens.** `menu.asm` generalised to take a
   different word list. Small.
 - **A real monster sprite.** It is a coloured box. `enemyart.py` exists
@@ -223,8 +368,24 @@ legal map is.
 
 ## Order I would build it in
 
-1. **Sound.** Biggest perceived gain, almost no frame cost, independent
-   of everything else.
+0. **Fix the pacing tools, before any feature.** In this order, because
+   each makes the next mean something:
+   a. `pacemodel.py:527` — `<=` to `<`. It grades a fail as a pass.
+   b. Wire the build: `gensnd.py` into the `amaze` recipe, and
+      `sound.asm` / `rastcol.asm` / `pip.asm` / `menu.asm` /
+      `gen_*.inc` into `$(SRC)`.
+   c. Move the HUD's `cost_add`s out of both models' `tail=` and into
+      `units()` where the disc runs them.
+   d. Re-run `make pace` and write the *real* over-budget count into
+      `main3.asm:345-354`, `:274-279` and `vpcfg.inc:49-50` — which
+      today quote a distribution with no over-budget bucket at all,
+      and a worst frame of 156501 against a measured 159152.
+   e. `gensnd.build()` — assert the nine-tick window that `C_SND`
+      rests on.
+
+   Only then is "the period is locked" a statement about the disc
+   rather than about a model that disagrees with it.
+1. ~~**Sound.**~~ Done, `ae0c6d0` — with the caveats above.
 2. **Monster hit points, death, and simple pursuit.** Closes the game
    loop — the thing that makes it a game rather than a demo.
 3. **The editor**, once there is a reason to draw a second level.
@@ -232,6 +393,10 @@ legal map is.
    something.
 5. **The cheap world blitter**, when the monster count wants it.
 6. **The moving-door pass**, when the period has to hold under fire.
+7. **`emu_snd.py`** — hook `snd_wr` by address, run `snd_tick` N times
+   after each `snd_play(i)`, assert the write stream equals
+   `gensnd.EFFECTS`. The one thing that would catch a step order, a
+   duration off by one, or an effect that never reaches `st_stop`.
 
 Byte-exact models for the world overlay belong beside whichever of these
 touches it, not as a separate task — this repo's whole history says that
