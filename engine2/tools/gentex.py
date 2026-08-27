@@ -40,6 +40,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _E2 = os.path.dirname(_HERE)
 sys.path.insert(0, _HERE)
 
+import genmenu
 import marchmodel as M
 import colmodel
 import walltex                                            # noqa: E402
@@ -132,6 +133,16 @@ def build():
         for v in (rgtx, rgty, fwdx, fwdy, dli, dlj, dri, drj):
             blob += bytes((v & 0xFF, (v >> 8) & 0xFF))
 
+    # ---- AND THE TITLE SCREEN'S FONT AND WORDS -----------------------
+    #  568 bytes read ONCE, at startup, before a pixel of the game is
+    #  drawn.  Same argument as MARCHTAB above: the code segment's
+    #  ceiling assert has fired thirteen times and this is data, not
+    #  code.  menu.asm pages the bank in, copies the block down to the
+    #  RAM the march has not claimed yet, and pages back -- see there.
+    global A_MENU
+    A_MENU = BANK_BASE + len(blob)
+    blob += genmenu.blob()[0]
+
     assert len(blob) <= BANK_SIZE, (
         f"bank 5 overflows: {len(blob)} > {BANK_SIZE}")
     return bytes(blob), c
@@ -149,6 +160,8 @@ TEXWALL     equ #{wall:04X}          ; 16 pages of 256, transposed + x4
 TEXDOOR     equ #{door:04X}
 CTABT       equ #{ctab:04X}          ; 4 bytes per j: step.w, idx0.w
 RTHRESH     equ #{rthr:04X}          ; 2 bytes per face width w
+MENUTB      equ #{menu:04X}          ; the title screen's font and words
+                                    ; -- see genmenu.blob()
 MARCHTB     equ #{mtab:04X}          ; the march's 72 x 8 per-heading words
                                     ; -- see gentex.py for why they are
                                     ; here and not in the code segment
@@ -182,7 +195,7 @@ def write_inc(path, blob):
     open(path, "w").write(INC.format(
         ramcfg=RAMCFG, ramcfg_c="        ; OUT (&7Fxx),this pages bank 5",
         wall=A_WALL, door=A_DOOR, ctab=A_CTAB, rthr=A_RTHR,
-        mtab=A_MTAB,
+        mtab=A_MTAB, menu=A_MENU,
         texbw=colmodel.TEX_BW, texh=colmodel.TEX_H, idxn=colmodel.IDX_N,
         jmax=colmodel.JMAX, chmax=colmodel.HMAX_Q4,
         cidxn=colmodel.CIDX_N, npair=c.VP_BW // 2,

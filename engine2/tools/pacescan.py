@@ -125,7 +125,7 @@ def _init(ovr=None, doors=0):
     _W["pm"] = pm
     _W["_rm"] = rm
     pm._rm = rm
-    _W["tail"] = (pm.C_TAIL + pm.C_DOORACT + pm.C_AMMO + pm.C_SCAN
+    _W["tail"] = (pm.C_TAIL + pm.C_SND + pm.C_DOORACT + pm.C_AMMO + pm.C_SCAN
               + pm.C_SWEEP + 8 * pm.C_BLIP + pm.C_RNEEDLE)
 
 

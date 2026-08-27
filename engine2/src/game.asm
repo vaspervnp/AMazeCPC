@@ -365,9 +365,19 @@ fire
     ld   hl,plr_ammo
     ld   a,(hl)
     or   a
-    ret  z
+    jr   nz,fi_have
+    ld   a,SFX_CLICK                ; EMPTY IS A SOUND, not silence.  A
+    jp   snd_play                   ; trigger that does nothing and says
+fi_have                             ; nothing reads as a dropped key
     dec  (hl)
     call fx_fire                    ; ...and work out what it hit
+    ld   a,(fx_pen)                 ; ...which also picks the SOUND: the
+    cp   FX_BLOOD                   ; ear and the eye should agree about
+    ld   a,SFX_SHOT_STONE           ; whether that was a wall or a body
+    jr   nz,fs_snd
+    ld   a,SFX_SHOT_FLESH
+fs_snd
+    call snd_play
     ld   a,RECOIL_N                 ; THE RECOIL IS THE FEEDBACK.  The pip
     ld   (gun_recoil),a             ; going out in the HUD is 8 pixels in
     ret                             ; the corner of the screen and the shot
@@ -535,6 +545,8 @@ as_take
     ld   (hl),AMMO_GONE
     ld   a,AMMO_MAX
     ld   (plr_ammo),a
+    ld   a,SFX_PICKUP
+    call snd_play
     call as_slot                    ; ...and its blip goes out with it, so
     ld   (hl),AMMO_NODIR            ; the dial does not show a pickup that
     ld   a,AMMO_NODIR               ; is already in the magazine
@@ -1263,7 +1275,8 @@ da_have
     cp   DOOR_OPEN
     jr   z,da_shut
     ld   (hl),DOOR_OPEN
-    ret
+    ld   a,SFX_DOOR                 ; the run takes six frames, and the
+    jp   snd_play                   ; sound is a second of it rising
 ;  A door refuses to shut while the player's COLLISION BOX overlaps its
 ;  cell -- not merely while the player's CENTRE is in it.  This is the
 ;  same 2x2 block that move_apply/coll_free test, so a position a door
@@ -1303,7 +1316,8 @@ ds_col
 ds_go
     pop  hl                         ; the box is clear of the door cell
     ld   (hl),DOOR_SHUT
-    ret
+    ld   a,SFX_DOOR                 ; shutting is the same machinery and
+    jp   snd_play                   ; the same second of movement
 ds_wedge
     pop  hl                         ; it overlaps: refuse, or we wedge
     ret

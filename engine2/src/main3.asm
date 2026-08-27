@@ -434,6 +434,28 @@ FACE_THI    equ #3C         ; 15360 us -- the CHARGE-THEN-TEST threshold
                             ; C_FACE_MAX = 19530 us -- still inside a
                             ; 19968 us period, with 438 us to spare, and
                             ; with the waste gone.
+C_SND       equ 2200        ; THE SOUND DRIVER, all nine ticks of a frame.
+                            ; sound.asm hangs snd_tick on wait_vsync --
+                            ; the one routine every vsync wait in the
+                            ; frame goes through -- so it runs
+                            ; PACE_FRAMES times a frame and the charge is
+                            ; for the whole run, once, at the head.
+                            ;
+                            ; MEASURED on the booted disc: a tick that is
+                            ; idle or inside a held step is 31 us, and one
+                            ; AY register write is 76.  A step CHANGE
+                            ; writes five of them, so ~410 us.  The worst
+                            ; nine-tick window any effect here produces is
+                            ; SFX_SHOT -- steps of 1, 2, 3 and 2 ticks, so
+                            ; four changes and a stop -- at 4*410 + 180 +
+                            ; 4*31 = 1944 us.  256 of margin.
+                            ;
+                            ; IT IS SPENT INSIDE THE WAIT and still has to
+                            ; be charged: wait_vsync catches the rising
+                            ; edge and THEN ticks, so the microseconds
+                            ; come out of the interval that follows the
+                            ; edge, which is exactly the interval the
+                            ; accumulator is budgeting.
 C_TAIL      equ 1950        ; THE TAIL: everything between pace_drain and
                             ; the next frame's first cost_unit -- flip,
                             ; game_step, and the head of main_loop.  It is
@@ -788,6 +810,15 @@ C_JOINT     equ 7400
 ; ---------------------------------------------------------------------
     include "costcol.inc"
 
+; THE GENERATED EQU FILES, UP HERE WITH THE REST OF THEM.  gen_menu.inc
+; and gen_snd.inc carry no data any more -- the title screen's font went
+; to RAM bank 5 and the sound tables are named by register number -- so
+; they are equs, and equs have to be in scope where the code that uses
+; them is ASSEMBLED, not merely somewhere in the file.  menu.asm sizes an
+; assert with MN_BLOB and gen_snd.inc names the AY registers sound.asm
+; writes; both are parsed long before the includes at the foot.
+    include "gen_menu.inc"
+
 C_QUAD      equ 780         ; THE WHOLE-QUAD CHARGE, used when raster.asm's
 C_QS        equ 22          ; RQ_SPLIT is 0 -- see pace_quad at the foot of
 C_QW        equ 128         ; this file, and the note on RQ_SPLIT in
@@ -921,6 +952,8 @@ start
                                     ; and set_palette below reads a table
                                     ; out of the bank.
     ld   sp,STACKTOP
+    call snd_init                   ; the AY comes up in an unknown
+                                    ; state; silence it before the menu
     call set_palette
 
     ld   hl,SCR_BACK                ; both buffers black first: hud_static
@@ -991,7 +1024,7 @@ main_loop
     ; fresh: five waits, spent by cost_room/cost_unit as the work asks
     ; for them and by pace_drain at the end.
     ld   hl,(cost_acc)
-    ld   de,C_TAIL
+    ld   de,C_TAIL+C_SND            ; ...and the frame's nine sound ticks
     add  hl,de
     ld   (cost_acc),hl
     ld   a,PACE_FRAMES
@@ -1121,7 +1154,18 @@ wv_lo
     in   a,(c)
     rra
     jr   nc,wv_lo                   ; then catch the next rising edge
-    ret
+
+    ; ---- AND THIS IS THE SOUND DRIVER'S CLOCK.  The engine runs with
+    ;      interrupts off, so there is no 300 Hz tick to hang a player
+    ;      on, and the game frame is nine vsyncs -- far too coarse for a
+    ;      gunshot.  Every vsync wait in the frame comes through here,
+    ;      so one CALL is a true 50 Hz driver.  It is charged: see
+    ;      C_SND, which is PACE_FRAMES ticks a frame.
+    ;
+    ;      AFTER the edge, not before: the wait's job is to find the
+    ;      edge, and work in front of the poll would push the search
+    ;      into the pulse it is looking for.
+    jp   snd_tick
 
 
 
@@ -1184,12 +1228,13 @@ frame_ctr   dw 0
     include "hud2.asm"
     include "pip.asm"
     include "menu.asm"
+    include "sound.asm"
     if GUN
     include "gun.asm"
     endif
     include "gen_slopes.inc"
     include "gen_maze.inc"
-    include "gen_menu.inc"
+    include "gen_snd.inc"
 
     if PACE_FRAMES>=1
 ; =====================================================================
@@ -1743,7 +1788,7 @@ body_len    equ game_end-start
 ; the day it was laid; see the note on the stub.
     assert body + body_len <= AMSDOS_LOW
 
-    ;;TMP assert game_end <= BUCK0        ; the body must fit under the march's
+    assert game_end <= BUCK0        ; the body must fit under the march's
                                     ; working RAM, which starts at #2700
 
 ; THE MAP MUST FIT THE DOOR LIST.  game_init registers at most MAXDOORS

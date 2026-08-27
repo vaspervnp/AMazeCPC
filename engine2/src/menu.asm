@@ -35,7 +35,36 @@ MN_KBIT     equ 7           ; game.asm reads -- see scan_keys.
 ; ---------------------------------------------------------------------
 ;  menu_show -- IN nothing.  Clobbers everything.
 ; ---------------------------------------------------------------------
+; WHERE THE BLOCK IS COPIED TO, and why it is safe.  main3.asm calls
+; menu_show BEFORE maze_unpack, march_init and game_init, so SOLID,
+; MARK and the quad list are all still uninitialised -- 960 bytes of RAM
+; that nothing has a claim on yet and everything overwrites the moment
+; the game starts.  The menu borrows the front of it and never touches
+; it again.
+MENUBUF     equ SOLID
+    assert MN_BLOB <= QUADS+NQUAD*QRECSZ-MENUBUF
+
+MNPENS      equ MENUBUF+MN_O_PENS
+MNFONT      equ MENUBUF+MN_O_FONT
+MNTEXT      equ MENUBUF+MN_O_TEXT
+
 menu_show
+    ; ---- FETCH IT OUT OF BANK 5 FIRST.  The font, the colour tables and
+    ;      the words are 568 bytes that are read once and never again, so
+    ;      they live in the renderer's table bank rather than in a code
+    ;      segment that has hit its ceiling thirteen times.  Bank 5 goes
+    ;      over &4000 for exactly one LDIR -- and LINETAB, which the blit
+    ;      below needs, is in bank 4 underneath it, which is why this is
+    ;      a copy and not a read in place.
+    ld   bc,#7F00+TEXCFG
+    out  (c),c
+    ld   hl,MENUTB
+    ld   de,MENUBUF
+    ld   bc,MN_BLOB
+    ldir
+    ld   bc,#7FC4
+    out  (c),c
+
     ld   hl,SCR_FRONT               ; the picture goes in the buffer that
     call clear_16k                  ; is on display, and only that one
 

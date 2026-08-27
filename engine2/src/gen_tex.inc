@@ -10,6 +10,8 @@ TEXWALL     equ #4000          ; 16 pages of 256, transposed + x4
 TEXDOOR     equ #5000
 CTABT       equ #6000          ; 4 bytes per j: step.w, idx0.w
 RTHRESH     equ #7810          ; 2 bytes per face width w
+MENUTB      equ #7CEA          ; the title screen's font and words
+                                    ; -- see genmenu.blob()
 MARCHTB     equ #786A          ; the march's 72 x 8 per-heading words
                                     ; -- see gentex.py for why they are
                                     ; here and not in the code segment
@@ -34,4 +36,4 @@ CFARIDX     equ 156              ; ...and the offset in it.  rc_far
                                     ; dominant colour is not in every
                                     ; column, and column 0 is the wall's
                                     ; left edge, which does not have it.
-TEXEND      equ #7CEA
+TEXEND      equ #7F22

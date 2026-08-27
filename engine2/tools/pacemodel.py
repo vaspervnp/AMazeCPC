@@ -53,6 +53,10 @@ C_SCAN = 650         # hud_scan when the ammo scanner's lit bearing
                      # sweeps below carry it on every frame, which is a
                      # player spinning fast enough to cross a sector
                      # boundary five times a second.
+C_SND = 2200         # sound.asm's nine ticks a frame, hung on
+                     # wait_vsync.  MEASURED 1944 us worst -- the SHOT
+                     # effect, four step changes and a stop inside one
+                     # nine-tick window.  See main3.asm.
 C_SWEEP = 1000       # hud_radar's sweep and blip compare, every frame.
                      # MEASURED 916.0 us.
 C_BLIP = 460         # ...one blip that moved (MEASURED 431).  There
@@ -143,7 +147,7 @@ GUN_CHARGED = _equ("GUN_CHARGED", 1)
 # wrong in the same way.  A model that keeps its own copy of a constant
 # cannot catch that; one that reads the disc's can only be wrong if the
 # disc is.
-for _n in ("C_TAIL", "C_DOORACT", "C_AMMO", "C_SCAN", "C_PIP", "C_SWEEP", "C_BLIP", "C_RNEEDLE", "C_DANIM", "C_BG", "C_MSETUP", "C_CELL",
+for _n in ("C_TAIL", "C_DOORACT", "C_AMMO", "C_SCAN", "C_PIP", "C_SND", "C_SWEEP", "C_BLIP", "C_RNEEDLE", "C_DANIM", "C_BG", "C_MSETUP", "C_CELL",
            "C_FACE",
            "C_REJ", "C_CLIP", "C_HUD", "C_GUN",
            "C_QSET", "C_BLINE", "C_WPAIR", "C_CHUNK", "C_PMUL", "C_WSTEP",
@@ -506,7 +510,7 @@ def sweep(n=3000, seed=90210):
         acc = 0
         for _ in range(3):                       # settle the carry-over
             waits, worst, acc = segments(u, acc, n=99,
-                                         tail=C_TAIL + C_DOORACT + C_AMMO + C_SCAN)
+                                         tail=C_TAIL + C_SND + C_DOORACT + C_AMMO + C_SCAN)
         hist[waits] += 1
         if worst > wmax:
             wmax, wst = worst, st
