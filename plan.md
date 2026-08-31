@@ -57,9 +57,15 @@ tools are fixed; here is what they now say, and what they exposed.
 
 | doors | over budget | worst charged frame |
 |---|---:|---:|
-| shut — the map as it loads | 69381 / 8128512 = **0.854%** | 169232 µs |
-| open | 314225 / 8792064 = **3.574%** | 190152 µs |
-| moving | 2858875 / 8128512 = **35.171%** | 259107 µs |
+| shut — the map as it loads | 143730 / 8128512 = **1.768%** | 169232 µs |
+| open | 437302 / 8792064 = **4.974%** | 190152 µs |
+| moving | 3081362 / 8128512 = **37.908%** | 259107 µs |
+
+These doubled when `C_TAIL` was re-fitted (see below). They read 0.854%
+/ 3.574% / 35.171% while the frame head was under-charged by 1623 µs —
+an under-charge does not make the disc faster, it makes the *model*
+optimistic, so every pacing number taken between `017e8ef` and the
+re-fit was too kind.
 
 Doors shut is about **one frame in 117**. The budget is 175104 µs, so
 the doors-open worst frame is over on its own.
@@ -81,6 +87,40 @@ control (0x0680,0x0680,36)   [ 9] vsyncs = 179.5 ms   on pace
 Five out of five. The disc really does drop to 199.5 ms — 5.01 fps
 instead of 5.56 — on those states, and `emu_verify3` still reports the
 period LOCKED because the six views it walks are not among them.
+
+### The one that hid all the others: `make pace` stopped at line 16
+
+`make` halts on the first command that exits non-zero. `pacescan.py` was
+the *first* line of the `pace` recipe, and it has been exiting 1 since
+some point after `37ef9f2`. Everything below it — `emu_pacefit`,
+**`emu_holes`**, `emu_atomic`, `emu_pace3`, `emu_pace` — silently stopped
+running. **The noisier the pacing got, the less of it ran.**
+
+`emu_holes.py` is the tool that benches the frame TAIL. Sixteen commits
+after it last ran, `017e8ef` moved `ammo_scan`, `mon_scan` and
+`fire_edge` inside `game_step`. Measured the day the gate was reopened:
+
+```
+flip                                62.7 µs
+main_loop head                     168.5 µs
+game_step, worst over 200 states  3342.2 µs
+                                  --------
+tail                              3573.4 µs   against C_TAIL 1950
+```
+
+**1623 µs under, in the head of the frame.** `emu_holes` printed
+`EVERY CONSTANT A ONE-SIDED UPPER BOUND: False`, which is the sentence
+the whole pacing argument rests on being True.
+
+It is a self-sustaining failure: a state goes over budget → `pacescan`
+exits 1 → the bench that would catch an under-charge never runs → a
+constant drifts under the truth → the model says frames fit while the
+disc drops periods → more states go over budget. The mechanism that
+would catch the problem was disabled *by* the problem.
+
+Fixed both ends: `C_TAIL` is 3700 (3573.4 + 126.6, the margin `C_HUD`
+carries), and the `pace` recipe is a loop that runs every tool, collects
+the exit codes and fails at the end.
 
 ### What the tools had wrong
 

@@ -128,50 +128,83 @@ rast: amaze
 # the frame PERIOD, sampled on the booted disc over 1400 reachable states,
 # plus the walking speed that follows from it, plus the offline replay of
 # the cost accumulator over the whole state space
+# EVERY TOOL RUNS, AND THE TARGET STILL FAILS IF ANY OF THEM DOES.
+#
+# It used to be a plain recipe, and make stops at the first command that
+# exits non-zero -- so the moment pacescan.py started reporting states
+# over budget, on the FIRST line, everything below it silently stopped
+# running.  emu_pacefit, emu_holes, emu_atomic, emu_pace3 and emu_pace
+# had not executed since 37ef9f2.
+#
+# THAT IS NOT A TIDINESS PROBLEM.  emu_holes.py is the tool that benches
+# the TAIL, and 017e8ef added ammo_scan, mon_scan and fire_edge to
+# game_step sixteen commits after C_TAIL was last fitted.  Measured the
+# day the gate was reopened: the tail costs 3573.4 us against C_TAIL's
+# 1950 -- 1623 us UNDER, in the head of the frame, in the direction that
+# makes the model say a frame fits while the disc drops a period.  The
+# failing scan was hiding the tool that would have caught it, and the
+# louder the pacing got the less of it ran.
+#
+# So: collect the exit codes, print a summary, and fail at the end.
 pace: amaze
-	@# THE WHOLE STATE SPACE, not a sample.  pacescan.py replays the
-	@# accumulator's own rule for all 4055040 states a player can stand
-	@# in -- 56320 positions on the 24/256 movement lattice that pass
-	@# game.asm's collision box, times 72 headings -- and fails if ANY
-	@# of them asks for more vsync waits than PACE_FRAMES has.  It is a
-	@# minute on sixteen cores.  The sampled replay below stays because
-	@# it prints the distribution; this is what decides the question,
-	@# because the states that break a period are three in a million and
-	@# a sample does not visit them.
-	@# ...it also leaves the 40 most expensive states there ARE in
-	@# engine2/build/pacescan_top.json, which is what emu_pacefit.py
-	@# below benches.  Benched at the worst 40 a SAMPLE could find, the
-	@# same disc reads a worst frame of 90.63 ms; benched at the worst 40
-	@# that exist, 98.28.
-	$(PYTHON) engine2/tools/pacescan.py
-	$(PYTHON) engine2/tools/pacemodel.py 3000
-	@# ...and the constants themselves, benched on the booted disc at
-	@# those states, each unit checked ON ITS OWN.  A frame total that
-	@# over-predicts hides a unit that under-charges: C_BG sat 616 us
-	@# under the truth at 44x96 behind a frame total that read "never
-	@# under", because the march and the projector covered for it.
-	$(PYTHON) engine2/tools/emu_pacefit.py 40 worst
-	@# ...and the two units emu_pacefit.py does NOT bench in the shape the
-	@# frame runs them: march_setup on the frame the generation counter
-	@# wraps, and the TAIL -- flip + game_step + the head of main_loop --
-	@# with keys actually HELD and the player pinned so the bench cannot
-	@# walk off the state it is measuring.  Both were under-charged.
-	$(PYTHON) engine2/tools/emu_holes.py 60
-	@# ...and the RASTERISER's own units, which are per CHUNK of scanlines
-	@# now and not per quad: emu_atomic.py times raster_quad up to the k'th
-	@# hook, differences it into the intervals themselves, and checks every
-	@# one of them is charged for.  It also reports the largest atomic unit
-	@# before and after the mid-quad yield, which is what sets the period.
-	$(PYTHON) engine2/tools/emu_atomic.py 6
-	@# ...and the PERIOD on the booted disc.  emu_pace3.py measures the
-	@# states the offline replay NAMES as the worst packers as well as a
-	@# uniform sample, because a uniform sample cannot find a defect that
-	@# lives on three states in a million: built at PACE_FRAMES 5, the
-	@# 300 sampled states all read on-pace while 55 of the 60 named ones
-	@# sat a whole period late.
-	$(PYTHON) engine2/tools/emu_pace3.py 900 150 90 60000
-	$(PYTHON) engine2/tools/emu_pace.py 600
-	$(PYTHON) engine2/tools/emu_pace.py walk
+	@rc=0; \
+	for t in "pacescan.py" "pacemodel.py 3000" "emu_pacefit.py 40 worst" \
+	         "emu_holes.py 60" "emu_atomic.py 6" \
+	         "emu_pace3.py 900 150 90 60000" "emu_pace.py 600" \
+	         "emu_pace.py walk"; do \
+	    echo "=== engine2/tools/$$t"; \
+	    $(PYTHON) engine2/tools/$$t || { rc=1; echo "*** FAILED: $$t"; }; \
+	done; \
+	echo; echo "=== make pace: $$([ $$rc = 0 ] && echo ALL PASS || \
+	    echo 'ONE OR MORE FAILED -- see the *** lines above')"; \
+	exit $$rc
+
+# WHAT EACH TOOL IN `pace` IS FOR.  These were the recipe until the loop
+# above replaced them; the reasoning is worth keeping, the duplication is
+# not, so they are comments now and the loop is the only thing that runs.
+# THE WHOLE STATE SPACE, not a sample.  pacescan.py replays the
+# accumulator's own rule for all 4055040 states a player can stand
+# in -- 56320 positions on the 24/256 movement lattice that pass
+# game.asm's collision box, times 72 headings -- and fails if ANY
+# of them asks for more vsync waits than PACE_FRAMES has.  It is a
+# minute on sixteen cores.  The sampled replay below stays because
+# it prints the distribution; this is what decides the question,
+# because the states that break a period are three in a million and
+# a sample does not visit them.
+# ...it also leaves the 40 most expensive states there ARE in
+# engine2/build/pacescan_top.json, which is what emu_pacefit.py
+# below benches.  Benched at the worst 40 a SAMPLE could find, the
+# same disc reads a worst frame of 90.63 ms; benched at the worst 40
+# that exist, 98.28.
+#   -> pacescan.py
+#   -> pacemodel.py 3000
+# ...and the constants themselves, benched on the booted disc at
+# those states, each unit checked ON ITS OWN.  A frame total that
+# over-predicts hides a unit that under-charges: C_BG sat 616 us
+# under the truth at 44x96 behind a frame total that read "never
+# under", because the march and the projector covered for it.
+#   -> emu_pacefit.py 40 worst
+# ...and the two units emu_pacefit.py does NOT bench in the shape the
+# frame runs them: march_setup on the frame the generation counter
+# wraps, and the TAIL -- flip + game_step + the head of main_loop --
+# with keys actually HELD and the player pinned so the bench cannot
+# walk off the state it is measuring.  Both were under-charged.
+#   -> emu_holes.py 60
+# ...and the RASTERISER's own units, which are per CHUNK of scanlines
+# now and not per quad: emu_atomic.py times raster_quad up to the k'th
+# hook, differences it into the intervals themselves, and checks every
+# one of them is charged for.  It also reports the largest atomic unit
+# before and after the mid-quad yield, which is what sets the period.
+#   -> emu_atomic.py 6
+# ...and the PERIOD on the booted disc.  emu_pace3.py measures the
+# states the offline replay NAMES as the worst packers as well as a
+# uniform sample, because a uniform sample cannot find a defect that
+# lives on three states in a million: built at PACE_FRAMES 5, the
+# 300 sampled states all read on-pace while 55 of the 60 named ones
+# sat a whole period late.
+#   -> emu_pace3.py 900 150 90 60000
+#   -> emu_pace.py 600
+#   -> emu_pace.py walk
 
 # the weapon: the blit verified byte for byte at every bob offset on the
 # booted disc, then measured, then photographed at rest and at the bob

@@ -57,10 +57,15 @@
 ;  the same way, exhaustively, with the HUD's charges billed where
 ;  main3.asm actually makes them:
 ;
-;      doors shut     69381 of 8128512  = 0.854%  need a 10th period
-;      doors open    314225 of 8792064  = 3.574%
-;      doors moving 2858875 of 8128512  = 35.171%
+;      doors shut    143730 of 8128512  = 1.768%  need a 10th period
+;      doors open    437302 of 8792064  = 4.974%
+;      doors moving 3081362 of 8128512  = 37.908%
 ;      worst charged frames  169232 / 190152 / 259107 us of 175104
+;
+;  (0.854 / 3.574 / 35.171 until C_TAIL was re-fitted from 1950 to 3700
+;   against a measured 3573.4 -- the model had been under-charging the
+;   frame head by 1623 us and every pacing number was that much too
+;   kind.)
 ;
 ;  The zero above is real, and it is about a build nobody runs.  Left
 ;  here because it is the reference the width work was done against --

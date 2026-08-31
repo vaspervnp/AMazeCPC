@@ -416,17 +416,25 @@ SCR_BACK    equ #8000
 ;  state asking for 9 is already one period late:
 ;
 ;      DOORS SHUT, 8128512 states -- the map as it loads
-;        4  0.130%   5  2.461%   6  9.101%   7 57.129%   8 30.326%
-;        9  0.854%  <-- 69381 states, OVER BUDGET
+;        4  0.033%   5  2.277%   6  7.750%   7 47.861%   8 40.311%
+;        9  1.768%  <-- 143730 states, OVER BUDGET
 ;        worst charged frame 169232 us against a budget of 175104
 ;
 ;      DOORS OPEN, 8792064 states
-;        3  0.006%   4  1.659%   5  5.102%   6  9.956%   7 51.199%
-;        8 28.503%   9  3.456%   10  0.118%  <-- 314225, OVER BUDGET
+;        ...4.974% over budget -- 437302 states
 ;        worst charged frame 190152 us -- over the budget on its own
 ;
 ;      DOORS MOVING, 8128512 states -- see-through AND still drawn
-;        ...35.171% over budget, worst charged frame 259107 us
+;        ...37.908% over budget, worst charged frame 259107 us
+;
+;  THOSE NUMBERS DOUBLED THE DAY C_TAIL WAS RE-FITTED, and the old ones
+;  are worth keeping visible because of WHY they were wrong: shut read
+;  0.854%, open 3.574%, moving 35.171% while the tail was charged 1950
+;  against a real 3573.4.  An under-charge in the head does not make the
+;  disc faster, it makes the MODEL optimistic -- so every reassuring
+;  pacing number taken between 017e8ef and the re-fit was too low.  See
+;  C_TAIL below for how a constant went sixteen commits without being
+;  re-measured.
 ;
 ;  SO THE PERIOD IS NOT LOCKED, AND THIS COMMENT USED TO SAY IT WAS.
 ;  What stood here was "5 waits 0.096% / 6 47.12% / 7 51.48% / 8 1.310%"
@@ -571,35 +579,54 @@ C_SND       equ 2200        ; THE SOUND DRIVER, all nine ticks of a frame.
                             ; come out of the interval that follows the
                             ; edge, which is exactly the interval the
                             ; accumulator is budgeting.
-C_TAIL      equ 1950        ; THE TAIL: everything between pace_drain and
+C_TAIL      equ 3700        ; THE TAIL: everything between pace_drain and
                             ; the next frame's first cost_unit -- flip,
                             ; game_step, and the head of main_loop.  It is
                             ; added to (cost_acc) at the TOP of the frame,
                             ; because that is where the work it charges
                             ; for has just been done.
                             ;
-                            ; 1050 WAS UNDER THE TRUTH.  It was fitted to
-                            ; a game_step benched with NO KEYS HELD (656
-                            ; us), and a game_step that turns and walks
-                            ; costs half as much again: MEASURED on the
-                            ; booted disc, engine2/tools/emu_holes.py,
-                            ; pinning the player so the bench cannot walk
-                            ; off the state it is measuring and holding
-                            ; real keys so scan_keys sees them --
+                            ; IT HAS BEEN UNDER THE TRUTH TWICE, and the
+                            ; second time it was under by 1623 us.
                             ;
-                            ;   flip                          62.5 us
-                            ;   main_loop head (3 setbufs,
-                            ;     frame_ctr, the accumulator) 123.0 us
-                            ;   game_step, still             661.3 us
-                            ;   game_step, walking + turning  worst
-                            ;     over the sampled lattice   1120.4 us
+                            ; 1050 was fitted to a game_step benched with
+                            ; NO KEYS HELD (656 us), against 1305.9 real.
+                            ; 1950 replaced it, fitted at 1845.2.
                             ;
-                            ; -- a tail of 1305.9 us against a constant of
-                            ; 1050.  Never seen to spill, but the whole
-                            ; pacing argument is that every constant is a
-                            ; one-sided upper bound, so it is one now.
+                            ; Then 017e8ef put ammo_scan, mon_scan and
+                            ; fire_edge INSIDE game_step -- six pickups
+                            ; walked with as_l1 + as_sector + as_band +
+                            ; as_slot each, the monster likewise, and the
+                            ; fire edge on top -- and this constant did
+                            ; not move.  MEASURED now, emu_holes.py over
+                            ; 200 states, player pinned and real keys
+                            ; held:
+                            ;
+                            ;   flip                           62.7 us
+                            ;   main_loop head (setbufs,
+                            ;     frame_ctr, the accumulator)  168.5 us
+                            ;   game_step, worst               3342.2 us
+                            ;   ------------------------------------
+                            ;   tail                           3573.4 us
+                            ;
+                            ; against 1950.  An under-charge HERE is the
+                            ; worst place for one: it is in the head, so
+                            ; the model reports a frame that fits while
+                            ; the disc spends the microseconds anyway and
+                            ; drops a period.  3700 is the measurement
+                            ; plus 126.6, the same margin C_HUD carries.
+                            ;
+                            ; WHY IT WENT SIXTEEN COMMITS UNSEEN: the
+                            ; tool that benches this is emu_holes.py, and
+                            ; it was line 29 of a `pace` recipe that
+                            ; stopped at line 16, because pacescan.py had
+                            ; started exiting 1.  make halts on the first
+                            ; failure, so the noisier the pacing got the
+                            ; less of it ran.  The recipe is a loop now
+                            ; and every tool runs; see the Makefile.
+                            ;
                             ; The SPACE branch is NOT in here: see
-                            ; C_DOORACT.
+                            ; C_DOORACT, benched at 1901.8 against 2000.
 C_DANIM     equ 1300        ; door_shrink -- ONE pass over the finished
                             ; quad list, scaling the half heights of the
                             ; door faces so a door's six-frame run is
