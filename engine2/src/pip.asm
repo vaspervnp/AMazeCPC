@@ -286,6 +286,32 @@ pip_draw
 ;  on the next, and that is the case the per-pair cut exists for.
 ; ---------------------------------------------------------------------
 box_draw
+    ; ---- "IT DID NOT DRAW" HAS TO BE SAYABLE, AND IT WAS NOT.
+    ;      There are five ret paths below -- the near plane, proj_pt's
+    ;      overflow, and the two viewport edges -- and not one of them
+    ;      wrote bx_bot, so a rejected box left the LAST box's foot
+    ;      sitting there.  mon_draw copies bx_bot into mon_bot the
+    ;      instant box_draw returns, and fx_fire reads mon_bot to decide
+    ;      whether a shot hit flesh or stone.
+    ;
+    ;      So: turn your back on the monster and shoot a wall, and the
+    ;      wall bled.  main3.asm calls pip_draw BEFORE mon_draw, so what
+    ;      mon_bot actually held was the PICKUP's foot row.
+    ;
+    ;      MEASURED on the booted disc, player four cells east of the
+    ;      monster, sweeping all 72 headings: mon_bot was non-zero on
+    ;      72 of 72, and fx_pen read FX_BLOOD on 24 of them -- in three
+    ;      disjoint arcs, including headings pointing away.  Poisoning
+    ;      bx_bot with #AA and running one frame put #AA straight into
+    ;      mon_bot, which is the whole bug in one byte.
+    ;
+    ;      Zeroing it here rather than in mon_draw because the contract
+    ;      belongs to the drawer: every caller now gets 0 for "nothing
+    ;      drawn", and bx_pair only ever runs on the success path, so
+    ;      nothing downstream can see the zero.
+    xor  a
+    ld   (bx_bot),a
+
     ; ---- the box's centre, in the march's own view space ------------
     ;      mv_x0 / mv_z0 are the view coordinates of the PLAYER'S OWN
     ;      CELL CORNER and mv_sxi.. are the per-cell steps, so stepping
@@ -307,12 +333,35 @@ box_draw
     ;      player's shoulder into a bright block at the dead centre of
     ;      the horizon.  The face path rejects at project.asm:182 and so
     ;      does this.
-    ld   de,ZNEAR_Q10
+    ;
+    ;      AND IT HAS TO BE A SIGNED COMPARE, WHICH THIS WAS NOT.  It
+    ;      read
+    ;
+    ;          ld de,ZNEAR_Q10 / or a / sbc hl,de / ret c
+    ;
+    ;      and `ret c` after SBC HL,DE tests the UNSIGNED borrow.  zv is
+    ;      signed: something behind the player has zv negative, which as
+    ;      an unsigned 16-bit number is enormous, so it does not borrow,
+    ;      so it was NOT rejected -- it went on to proj_pt and got drawn.
+    ;      The line above claiming this matches project.asm:182 was the
+    ;      tell: that one negates the constant, adds, and tests the SIGN
+    ;      bit (`ld a,h / and b / ret m`).  This did something else.
+    ;
+    ;      MEASURED, player four cells east of the monster, all 72
+    ;      headings swept on the booted disc: fx_pen read FX_BLOOD in
+    ;      THREE disjoint arcs -- 31..40, which is the monster, and
+    ;      2..8 and 68..70, which are due east, facing directly away
+    ;      from it.  Turn your back and shoot a wall, and the wall bled.
+    ;
+    ;      ADD HL,DE does not set S or Z on a Z80 -- only H, N and C --
+    ;      which is why the sign has to be tested through A.
+    ld   de,-ZNEAR_Q10
     push hl
+    add  hl,de                      ; zv - ZNEAR
+    ld   a,h
+    pop  hl                         ; ...and zv back, flags untouched
     or   a
-    sbc  hl,de
-    pop  hl
-    ret  c
+    ret  m                          ; negative: at or behind the near plane
     ex   de,hl                      ; DE = zv
     ld   hl,(pip_xv)
     call proj_pt                    ; -> HL = xs Q12.4, DE = hh Q12.4
