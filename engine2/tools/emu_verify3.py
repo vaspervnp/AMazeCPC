@@ -191,6 +191,29 @@ HUD_HPX, HUD_HPY = _gh("HUD_HPX"), _gh("HUD_HPY")
 HUD_HPW, HUD_HPSEG = _gh("HUD_HPW"), _gh("HUD_HPSEG")
 HUD_HPPEN = _gh("HUD_HPPEN")
 
+# ---- THE SCORE DIGIT'S PLACE ON THE WIN SCREEN, and the font rows that
+#  must land there.  genmenu.py owns the layout and the nibble->bytes
+#  mapping, so both are IMPORTED rather than restated: a screen that
+#  moves takes its test with it.
+import genmenu as _GMENU                                    # noqa: E402
+MN_GH, MN_O_FONT = _GMENU.GH, _GMENU.blob()[1]["FONT"]
+P_TEXT = _GMENU.PENS.index(_GMENU.P_TEXT)
+
+
+def gm_nib(nib, pen):
+    return _GMENU.nib_bytes(nib, _GMENU.PENS[pen])
+
+
+_win = [(r, c, t) for r, _p, c, t in _GMENU.WIN if _GMENU.SCORE_CH in t][0]
+SCORE_WIN_X = (_GMENU.place(_win[1], _win[2])
+               + _win[2].index(_GMENU.SCORE_CH) * _GMENU.PITCH)
+SCORE_WIN_Y = _win[0] * _GMENU.LINE
+
+# ...and the score's "0" glyph, which game.asm INCs from.
+_GN = open(os.path.join(_E2, "src", "gen_menu.inc")).read().split("\n")
+MN_G0 = [int(l.split()[2]) for l in _GN
+         if l.split()[:2] == ["MN_G0", "equ"]][0]
+
 # pip.asm's scratch is `equ`, and rasm emits no symbol for an equ, so
 # these are computed the way the source computes them.  The asserts in
 # pip.asm are what keep the two bases where they are.
@@ -686,12 +709,32 @@ def main():
           f"{n // 3} places checked"
           + (f"; WRONG at {len(bad)}: {bad[:4]}" if bad else ""))
 
-    # (c) AND IT GOES DARK when the map has been stripped.
+    # (c) AND WITH THE MAP STRIPPED IT POINTS AT THE WAY OUT.
+    #
+    #  THIS CHECK USED TO ASSERT THE PAD WENT DARK, and that was the
+    #  behaviour until the exit existed: the reward for clearing the maze
+    #  was to lose the only instrument that says where anything is, with
+    #  one cell of 256 left to find.  game.asm's as_none now scans
+    #  EXIT_CELL instead, through the same as_pack the pickups use.
+    #
+    #  Checked by GEOMETRY and not by "it is not #FF": stand three cells
+    #  due west of the exit facing east and the bearing must be 0 -- dead
+    #  ahead -- and the band must be the near one.  A pad that pointed
+    #  anywhere at all would pass the weaker test.
     for i in range(NAMMO):
         c.poke(g.s["AMMO_ST"] + i, 0xFF)
-    g.place(START[0] * 256 + 128, START[1] * 256 + 128, 0)
-    check(c.peek(adir) == 0xFF, "with every pickup taken the pad goes dark",
-          f"ammo_dir = #{c.peek(adir):02X}")
+    ex, ey = _gm("EXIT_X"), _gm("EXIT_Y")
+    g.place((ex - 3) * 256 + 128, ey * 256 + 128, 0)
+    d = c.peek(adir)
+    check(d != 0xFF and (d & 7) == 0 and (d >> 4) == 0,
+          "with every pickup taken the pad points at the EXIT",
+          f"three cells west of the exit ({ex},{ey}) facing east: "
+          f"ammo_dir = #{d:02X} -> band {d >> 4}, bearing {d & 7} "
+          f"(0 = dead ahead)")
+
+    # ...and it goes dark only when the map has no exit either, which is
+    # EXIT_CELL #FF -- a case this map cannot produce, so it is asserted
+    # in the generator (gen_march.emit_exit) rather than measured here.
 
     # =================================================================
     print("\n10 THE MONSTER (it walks at you, and three rounds kill it)")
@@ -885,7 +928,94 @@ def main():
     del g2
 
     # =================================================================
-    print("\n12 FRAME PERIOD (measured, one gap at a time, five samples a"
+    print("\n12 THE EXIT AND THE SCORE (the level can now be WON)")
+    scr, adir2 = g.s["SCR_G"], g.s["AMMO_DIR"]
+    ex, ey = _gm("EXIT_X"), _gm("EXIT_Y")
+
+    # ---- (a) THE SCORE IS A GLYPH INDEX, so the check is that it walks
+    #      the DIGITS and never leaves them.  MN_G0 is CHARSET's '0'.
+    g3 = Game()
+    base = g3.c.peek(scr)
+    check(base == MN_G0, "a life starts at score zero",
+          f"scr_g = {base}, MN_G0 = {MN_G0} ('0')")
+    for _ in range(MON_HPMAX):          # the opening kills the monster
+        g3.c.key_down(ord('z'))
+        g3.c.run_frames(PACE_N + 5)
+        g3.c.key_up(ord('z'))
+        g3.c.run_frames(PACE_N + 5)
+    check(g3.c.peek(g3.s["MONCELL"]) == 0xFF
+          and g3.c.peek(scr) == MN_G0 + 1,
+          "killing the monster scores one",
+          f"scr_g {base} -> {g3.c.peek(scr)}")
+
+    tab = g3.c.read_ram(g3.s["AMMOTAB"], NAMMO)
+    for b in tab:                       # ...and every pickup scores one
+        g3.place((b & 15) * 256 + 128, (b >> 4) * 256 + 128, 0)
+        for _ in range(3):              # let ammo_scan see the cell
+            f0 = g3.frames()
+            for _ in range(60):
+                g3.c.run_frames(1)
+                if g3.frames() != f0:
+                    break
+    got = g3.c.peek(scr) - MN_G0
+    check(got == NAMMO + 1,
+          "...and so does every pickup, and the count stays a DIGIT",
+          f"score {got} of {NAMMO} pickups + 1 monster; "
+          f"scr_g {g3.c.peek(scr)} <= MN_G0+9 = {MN_G0 + 9}")
+
+    # ---- (b) THE EXIT ENDS THE LEVEL.  Walked onto, not teleported onto:
+    #      the win test is in game_step and a teleport re-enters main_loop,
+    #      so walking is the case a player actually produces.
+    g3.place((ex - 1) * 256 + 128, ey * 256 + 128, 0)
+    f0 = g3.frames()
+    g3.c.run_frames(2 * PACE_N)
+    check(g3.frames() != f0, "one cell short of the exit, the game runs",
+          f"{(g3.frames() - f0) & 0xFFFF} game frames")
+    g3.c.key_down(cpcmod.KEY_UP)
+    g3.c.run_frames(40 * PACE_N)
+    g3.c.key_up(cpcmod.KEY_UP)
+    x, y, _ = g3.player()
+    f0 = g3.frames()
+    g3.c.run_frames(4 * PACE_N)
+    check((x >> 8, y >> 8) == (ex, ey) and g3.frames() == f0,
+          "walking onto it stops the frame loop -- the win screen is up",
+          f"player at ({x>>8},{y>>8}), exit ({ex},{ey}), "
+          f"{(g3.frames() - f0) & 0xFFFF} game frames in {4*PACE_N} CPC")
+
+    # ---- ...AND THE SCORE IS ON THE SCREEN, byte for byte against the
+    #      FONT.  Checking (scr_g) only proves the game counted; this
+    #      proves menu.asm's mn_char substitution actually drew the right
+    #      glyph.  The font is readable because the win screen IS the
+    #      blob: menu.asm LDIRs it down over SOLID, so MENUBUF+MN_O_FONT
+    #      holds the same rows the blitter just used.
+    got = g3.c.peek(scr)
+    font = g3.c.read_ram(SOLID + MN_O_FONT + got * MN_GH, MN_GH)
+    want = [gm_nib(n, P_TEXT) for n in font]     # two mode-0 bytes a row
+    seen = []
+    for r in range(MN_GH):
+        yy = SCORE_WIN_Y + r
+        addr = 0xC000 + (yy & 7) * 0x800 + (yy >> 3) * 80 + SCORE_WIN_X
+        seen.append(list(g3.c.read_ram(addr, 2)))
+    check(seen == want and any(any(b) for b in seen),
+          "...with the score DRAWN on it, byte for byte against the font",
+          f"glyph {got} ('{got - MN_G0}') at ({SCORE_WIN_X},{SCORE_WIN_Y}): "
+          f"screen {seen} vs font {want}")
+
+    # ---- (c) ...AND SPACE STARTS A NEW LIFE, score included.
+    g3.c.key_down(cpcmod.KEY_SPACE)
+    g3.c.run_frames(PACE_N + 5)
+    g3.c.key_up(cpcmod.KEY_SPACE)
+    g3.c.run_frames(12 * PACE_N)
+    f0 = g3.frames()
+    g3.c.run_frames(4 * PACE_N)
+    check(g3.c.peek(scr) == MN_G0 and g3.frames() != f0,
+          "SPACE resets the score and the world runs again",
+          f"scr_g {g3.c.peek(scr)}, "
+          f"{(g3.frames() - f0) & 0xFFFF} game frames")
+    del g3
+
+    # =================================================================
+    print("\n13 FRAME PERIOD (measured, one gap at a time, five samples a"
           " vsync)")
     print("       The old four-chunk pad gave 80 ms 79% / 100 ms 20% /"
           " 120 ms 1% / 140 ms\n"

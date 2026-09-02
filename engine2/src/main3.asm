@@ -600,7 +600,7 @@ C_SND       equ 2200        ; THE SOUND DRIVER, all nine ticks of a frame.
                             ; come out of the interval that follows the
                             ; edge, which is exactly the interval the
                             ; accumulator is budgeting.
-C_TAIL      equ 3900        ; THE TAIL: everything between pace_drain and
+C_TAIL      equ 4000        ; THE TAIL: everything between pace_drain and
                             ; the next frame's first cost_unit -- flip,
                             ; game_step, and the head of main_loop.  It is
                             ; added to (cost_acc) at the TOP of the frame,
@@ -646,8 +646,23 @@ C_TAIL      equ 3900        ; THE TAIL: everything between pace_drain and
                             ; 3700: FIFTY-THREE MICROSECONDS UNDER, and
                             ; emu_holes.py printed `ONE-SIDED UPPER
                             ; BOUND: False` the first time it was run
-                            ; after the change.  3900 clears 3753.6 by
+                            ; after the change.  3900 cleared 3753.6 by
                             ; 146.4.
+                            ;
+                            ; AND THEN THE EXIT TEST WENT IN.  game_step
+                            ; gained six instructions for the win
+                            ; condition and lost ten to as_pworld (the
+                            ; monster's blip and the exit's bearing are
+                            ; the same nine instructions now), and the
+                            ; worst went 3522.4 -> 3568.2, tail 3813.2.
+                            ; 3900 was STILL a bound -- margin +86.8 --
+                            ; but 86.8 is thinner than the 126.8 C_HUD
+                            ; carries and the 144.7 C_HP does, and this
+                            ; is the one constant in the file whose thin
+                            ; margin has cost sixteen commits before.
+                            ; 4000 puts it back at +186.8.  It is 100 us
+                            ; a frame out of 194560 and the head still
+                            ; clears bg_fill's yield by 1936.
                             ;
                             ; THE BENCH HAD TO BE TAUGHT THE NEW BRANCH.
                             ; mon_move returns after two instructions on
@@ -1337,8 +1352,13 @@ main_loop
     endif
     call flip
     call game_step
-    or   a
-    jp   nz,quit                    ; ESC
+    ; ---- THREE WAYS OUT OF ONE BYTE.  game_step returns 0 keep playing,
+    ;      1 ESC, 2 the exit cell.  DEC A makes ESC the ZERO and the win
+    ;      the only POSITIVE -- 0 goes to #FF, which is negative -- so the
+    ;      third case costs one JP and no new flag byte anywhere.
+    dec  a
+    jp   z,quit                     ; ESC
+    jp   p,player_won               ; the exit
 
     ; ---- AND THE OTHER WAY TO STOP PLAYING.  game_step's return value
     ;      is the ESC key and nothing else; death is a separate byte
@@ -1350,9 +1370,13 @@ main_loop
     or   a
     jp   nz,main_loop
 
-player_died
-    ld   hl,menu_dead
-    ld   (nl_screen),hl
+player_won
+    ld   hl,menu_win                ; the ONLY difference between winning
+    jr   pd_set                     ; and dying is which word list gets
+player_died                         ; painted: both destroy the map (see
+    ld   hl,menu_dead               ; MENUBUF) and both therefore restart
+pd_set                              ; the world, which is what "the level
+    ld   (nl_screen),hl             ; ends" means when there is one level
     jp   new_game                   ; which resets SP, repaints, and calls
                                     ; game_init -> ammo_arm, where the
                                     ; player gets his hit points back
@@ -2073,6 +2097,22 @@ body_len    equ game_end-start
 
     assert game_end <= BUCK0        ; the body must fit under the march's
                                     ; working RAM, which starts at #2700
+
+; THE SCORE IS A GLYPH INDEX AND `inc (hl)` IS THE WHOLE OF IT.
+;
+;  menu.asm keeps (scr_g) as an index into CHARSET starting at MN_G0 =
+;  '0', and game.asm INCs it once a pickup and once for the monster, so
+;  the count is never converted to a character because it never was a
+;  number.  That is the cheapest score this machine can have -- and it
+;  works only while the count stays inside the ten digits.  CHARSET is
+;  sorted, so '9' is MN_G0+9 and MN_G0+10 is 'A': a SEVENTH pickup would
+;  silently score the player a letter.
+;
+;  IT IS ASSERTED HERE AND NOT BESIDE scr_g because NAMMO comes from
+;  gen_maze.inc, which main3.asm includes AFTER menu.asm -- rasm
+;  evaluates an assert where it stands, the same trap PLR_HPMAX's assert
+;  documents at the foot of hud2.asm.
+    assert NAMMO + 1 <= 9           ; ...the +1 is the monster
 
 ; THE MAP MUST FIT THE DOOR LIST.  game_init registers at most MAXDOORS
 ; doors and SILENTLY drops the rest, and a dropped door is shut for ever

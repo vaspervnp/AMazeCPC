@@ -331,6 +331,11 @@ never saw this and why its results stand. Fixed by doing the same.
 - **Player health, and death.** 5 hit points on a bar in the bottom-left
   slot; at 0 a death screen, and SPACE rebuilds the world for a new life.
   The map points you at the monster on the first frame (`START_A`).
+- **A way out, and a score.** One cell — the map's `'X'` — ends the level
+  when you walk onto it. The ammo scanner points at it once every pickup
+  is taken, so the maze sequences itself: clear it, then leave. The score
+  is 0–7 (six pickups and the monster) and is spelled on the death and
+  win screens.
 - A title screen with the keys and the credit line.
 - Sound: nine AY effects, ticked at a true 50 Hz out of `wait_vsync` —
   the shot picks stone or flesh from the same test the impact mark does.
@@ -412,8 +417,9 @@ Ordered by what unlocks the most, with the honest cost of each.
   but four monsters at 8200 µs of overlay is where the frame budget
   says stop. **Budget first, then count.**
 - **And it is still one monster, so the game is one fight long.** Kill
-  it and the maze is empty: six pickups, twelve doors and nothing to
-  spend a round on. That is the honest state of it.
+  it, take the six pickups, walk to the exit: that is the whole game,
+  and it is about ninety seconds. What it now has is a beginning, a
+  middle and an end.
 
 ### 2. A reason to be in the maze
 
@@ -592,12 +598,8 @@ legal map is.
    `PACE_FRAMES` 10 underneath it to pay for the pursuit.
 3. ~~**Player health and death.**~~ **Done** — the bite, the bar, the
    death screen, and a `START_A` that makes the opening survivable.
-4. **An exit, and a score — the loop still has no END.** You can be
-   killed and you can kill; you cannot win. An exit door that ends the
-   level is trivial in the map format and needs a "level complete"
-   screen, which `menu.asm` now takes as one more word list. A score
-   line is the same blitter pointed at the HUD, and there are four empty
-   readout slots left.
+4. ~~**An exit, and a score.**~~ **Done.** The loop closes: you can now
+   win. See below for what it cost and what it does not do.
 5. **The editor**, once there is a reason to draw a second level.
 6. **The cheap world blitter**, when the monster count wants it.
 7. **The moving-door pass** — 19.261% and the one configuration the

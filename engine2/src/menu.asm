@@ -48,6 +48,7 @@ MNPENS      equ MENUBUF+MN_O_PENS
 MNFONT      equ MENUBUF+MN_O_FONT
 MNTEXT      equ MENUBUF+MN_O_TEXT
 MNDEAD      equ MENUBUF+MN_O_DEAD
+MNWIN       equ MENUBUF+MN_O_WIN
 
 ; ---------------------------------------------------------------------
 ;  TWO SCREENS, ONE BLITTER.  genmenu.py emits the words as a list of
@@ -63,6 +64,9 @@ MNDEAD      equ MENUBUF+MN_O_DEAD
 ;              That is not a limitation being worked around, it is why
 ;              the death screen restarts rather than continues.
 ; ---------------------------------------------------------------------
+menu_win
+    ld   hl,MNWIN
+    jr   mn_at
 menu_dead
     ld   hl,MNDEAD
     jr   mn_at
@@ -119,6 +123,13 @@ mn_next
     add  hl,de                      ; HL -> the glyph indices
 mn_char
     ld   a,(hl)                     ; ---- one glyph
+    cp   MN_GSCORE                  ; ...or THE SCORE, a hole genmenu.py
+    jr   nz,mn_nsc                  ; left at 255 -- one past every real
+    ld   a,(scr_g)                  ; glyph index, so it costs no font.
+mn_nsc                              ; NOT `mn_g0`: rasm's labels are CASE
+                                    ; INSENSITIVE and MN_G0 is the equ
+                                    ; beside it -- the same trap MON_HPMAX
+                                    ; and mon_hp document in game.asm
     push hl
     call mn_glyph
     pop  hl
@@ -224,3 +235,11 @@ mn_row      db 0
 mn_gp       dw 0
 mn_pen      dw 0
 mn_list     dw MNTEXT           ; which word list to paint -- see mn_at
+
+; THE SCORE, AND IT IS A GLYPH INDEX AND NOT A NUMBER.  game.asm INCs it
+; -- once a pickup, once for the monster -- and mn_char draws it, so the
+; conversion from a count to a character is done by STARTING the count at
+; MN_G0 and never doing it at all.  CHARSET is sorted, so '0'..'9' are
+; contiguous and an INC is legal; genmenu.py emits MN_G0 so the two
+; cannot drift.
+scr_g       db MN_G0

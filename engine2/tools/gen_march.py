@@ -158,6 +158,24 @@ def emit_ammo(f, cells):
                 + "   ; " + " ".join("%d,%d" % c for c in cells) + "\n")
 
 
+def emit_exit(f, cell):
+    """The way out, as a MAZEDATA cell index -- an EQU, not a byte.
+
+    NOTHING WRITES IT, which is the whole difference from MONCELL: the
+    exit does not move and cannot be consumed, so game.asm compares the
+    player's cell against a constant and the test is `ld c,n` rather
+    than a load.  #FF is "this layout has no exit", and it is safe by
+    construction: #FF decodes to (15, 15), the corner of the outer wall,
+    a cell no player can stand in -- so the test is simply never true.
+    """
+    n = "#FF" if cell is None else "%d" % (cell[1] * 16 + cell[0])
+    where = "" if cell is None else "   ; %d,%d" % cell
+    f.write("\nEXIT_CELL   equ %s%s   ; walk onto this and the level ends\n"
+            % (n, where))
+    f.write("EXIT_X      equ %d\nEXIT_Y      equ %d\n"
+            % ((15, 15) if cell is None else cell))
+
+
 def main(outdir):
     grid, sx, sy = world.load_maze()
     solid = M.solid_from_grid(grid)
@@ -170,6 +188,7 @@ def main(outdir):
         emit_maze(f, solid, sx, sy, mon)
         emit_ammo(f, world.ammo_cells(grid, sx, sy))
         emit_monster(f, mon)
+        emit_exit(f, world.exit_cell(grid, sx, sy))
     print("wrote gen_slopes.inc, gen_mtab.inc, gen_maze.inc to", outdir)
 
 

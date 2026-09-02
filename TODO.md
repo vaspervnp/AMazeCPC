@@ -9,6 +9,13 @@ interval, measured. The rooms are 4x4 and every door in the map opens.
 states over budget. Doors open is 0.199%; doors in motion is 19.261% and
 is the one configuration this engine still cannot claim.
 
+**And it is a game now**: a monster that hunts and hurts you, health, a
+death screen, an exit that ends the level and a score. **The BODY is the
+binding constraint from here on** — `game_end` is 22 bytes under `BUCK0`
+and RAM bank 5 has 51 free. The next feature has to pay for itself, and
+`rc_dlift`'s `align 256` in `rastcol.asm` leaves 173 bytes of pure
+padding at #1853 that a read-only table could be moved into for nothing.
+
 `plan.md` is the current document; this file is the renderer's own
 handoff and §1 below describes a blocker that is now closed. Read
 `engine2/src/costcol.inc` and the header of `engine2/src/rastcol.asm`
@@ -33,6 +40,7 @@ first; every number here is written down next to the code it constrains.
 | `pacescan.py` (doors MOVING) | 1,565,642 of 8,128,512 = **19.261%** — the open problem |
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
 | `monmodel.py` | **PASS** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs |
+| the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |
 | `emu_verify3.py` | **ALL CHECKS PASS**, period `[10]` on all six named views |
 
 The span renderer is still the fallback and still locks: set

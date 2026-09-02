@@ -178,11 +178,33 @@ MENU = [
 DEAD = [
     (7,  P_TITLE, None, "YOU ARE DEAD"),
     (11, P_TEXT,  None, "THE MONSTER GOT YOU"),
+    (14, P_TEXT,  None, "SCORE @"),
     (17, P_GO,    None, "PRESS SPACE TO TRY AGAIN"),
     (23, P_FOOT,  None, "REVIVE8BIT - 2026 - VASPER"),
 ]
 
-SCREENS = [("TEXT", MENU), ("DEAD", DEAD)]
+#  ---- AND THE ONE FOR REACHING THE EXIT -----------------------------
+WIN = [
+    (7,  P_TITLE, None, "YOU ESCAPED"),
+    (11, P_TEXT,  None, "SCORE @"),
+    (17, P_GO,    None, "PRESS SPACE TO PLAY AGAIN"),
+]
+
+SCREENS = [("TEXT", MENU), ("DEAD", DEAD), ("WIN", WIN)]
+
+#  ---- THE SCORE DIGIT -----------------------------------------------
+#  '@' IS NOT A GLYPH, it is a hole in the string.  A character the font
+#  cannot spell is emitted as index MN_GSCORE and menu.asm's mn_char
+#  substitutes (scr_g) -- a GLYPH INDEX the game keeps, not a number --
+#  when it reads that value.  So the score's row, column and pen are
+#  chosen here with the rest of the layout and cost the Z80 two
+#  instructions.
+#
+#  IT COSTS NO FONT.  MN_GSCORE is 255, one past every real index, so it
+#  needs no blank glyph and shifts no index.  The substitution happens
+#  BEFORE mn_glyph is called, so nothing ever looks 255 up.
+SCORE_CH = '@'
+MN_GSCORE = 255
 
 
 def place(col, text):
@@ -200,8 +222,13 @@ def build():
     for _name, lines in SCREENS:
         for _row, _pen, col, text in lines:
             for ch in text:
-                assert ch in GLYPHS, f"no glyph for {ch!r} in {text!r}"
+                assert ch in GLYPHS or ch == SCORE_CH, \
+                    f"no glyph for {ch!r} in {text!r}"
             assert place(col, text) + len(text) * PITCH <= SCR_W, text
+    # THE TITLE MUST NOT CARRY A SCORE.  It is painted before the first
+    # game_init, so (scr_g) is whatever the last life left there.
+    assert not any(SCORE_CH in t for _r, _p, _c, t in MENU), \
+        "the title screen has a score marker in it"
     # THE TWO COLUMNS MUST NOT MEET.  A key name that outgrows KEY_MAX
     # would otherwise be overprinted by its own description, which is
     # what 'ARROWS' and 'MOVE AND TURN' did when the column was a number
@@ -236,9 +263,9 @@ def unused():
     the letters this one happens not to spell with.  238 bytes buys the
     whole of it.
     """
-    return [c for c in CHARSET
-            if c != ' ' and not any(c in t for _n, ls in SCREENS
-                                    for _r, _p, _c, t in ls)]
+    spelt = set("".join(t for _n, ls in SCREENS for _r, _p, _c, t in ls))
+    spelt |= set("0123456789")       # the score digit spells with all of them
+    return [c for c in CHARSET if c != ' ' and c not in spelt]
 
 
 def blob():
@@ -274,7 +301,8 @@ def blob():
         for row, pen, col, text in lines:
             out += bytes((row * LINE, place(col, text), PENS.index(pen),
                           len(text)))
-            out += bytes(CHARSET.index(c) for c in text)
+            out += bytes(MN_GSCORE if c == SCORE_CH else CHARSET.index(c)
+                         for c in text)
         out += bytes(4)                 # a length of 0 ends the list
 
     return bytes(out), off
@@ -299,6 +327,10 @@ def write_inc(path):
          f"MN_O_FONT    equ {off['FONT']}",
          f"MN_O_TEXT    equ {off['TEXT']}",
          f"MN_O_DEAD    equ {off['DEAD']}",
+         f"MN_O_WIN     equ {off['WIN']}",
+         "",
+         f"MN_GSCORE    equ {MN_GSCORE}   ; mn_char swaps this for (scr_g)",
+         f"MN_G0        equ {CHARSET.index('0')}   ; ...and 0 is this glyph",
          ""]
     open(path, "w").write("\n".join(L) + "\n")
 

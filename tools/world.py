@@ -82,7 +82,7 @@ def wall_pen(f, side, door=False):
 # and a key of 8 would write into the page above the last bucket.
 MAZE_SRC = [
     "################",
-    "#....#....#....#",
+    "#....#....#..X.#",
     "#....#....#....#",
     "#....+....+....#",
     "#....#....#....#",
@@ -141,6 +141,13 @@ AMMO_CELLS = [(2, 2), (8, 3), (13, 2),
 #  view the moment they turn round.  It is a test target for the shot's
 #  impact effect, not a game character.
 MONSTER_CELL = (1, 12)
+
+# ---- THE WAY OUT ---------------------------------------------------
+#  'X' in the grid above, a plain FLOOR cell in SOLID: the exit is a
+#  CELL LIST of one, exactly like the monster and the pickups, and for
+#  the same reason -- SOLID's alphabet is the march's four codes and
+#  there is no fifth.
+EXIT_CHAR = 'X'
 
 FLOOR, WALL, DOOR = 0, 1, 2
 
@@ -210,6 +217,21 @@ def monster_cell(grid, sx, sy):
     assert (x, y) != (sx, sy), "monster on the player's start cell"
     assert (x, y) not in AMMO_CELLS, "monster standing on a pickup"
     return MONSTER_CELL
+
+
+def exit_cell(grid, sx, sy):
+    """-> (x, y) for the way out, or None for a layout without one."""
+    found = [(x, y) for y, row in enumerate(_ACTIVE)
+             for x, ch in enumerate(row) if ch == EXIT_CHAR]
+    if _ACTIVE is not MAZE_SRC:
+        return None
+    assert len(found) == 1, f"maze needs exactly one {EXIT_CHAR!r}: {found}"
+    x, y = found[0]
+    assert grid[y][x] == FLOOR, f"exit {(x, y)} is not floor"
+    assert (x, y) != (sx, sy), "exit on the player's start cell"
+    assert (x, y) not in AMMO_CELLS, "exit on a pickup"
+    assert (x, y) != MONSTER_CELL, "exit under the monster"
+    return x, y
 
 
 def ammo_cells(grid, sx, sy):

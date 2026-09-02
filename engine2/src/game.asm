@@ -329,6 +329,9 @@ ammo_arm
     ld   (mon_blip),a
     ld   a,PLR_HPMAX                   ; ...and the player back on his feet
     ld   (plr_hp),a
+    ld   a,MN_G0                    ; ...and the score back to nothing.  A
+    ld   (scr_g),a                  ; LIFE is what it counts, so it resets
+                                    ; where the pickups and the monster do
 
     ld   a,AMMO_MAX
     ld   (plr_ammo),a
@@ -548,6 +551,12 @@ as_done
     ld   hl,ammo_blip
     add  hl,bc
     ld   a,(hl)
+as_pack                             ; IN A = (band << 4) | WORLD sector.
+                                    ; A LABEL AND NOT A ROUTINE -- the
+                                    ; path above falls straight into it,
+                                    ; so the exit's bearing below reaches
+                                    ; the nose-relative arithmetic for the
+                                    ; price of one jp and no duplication.
     ld   e,a
     and  7                          ; E keeps the band, A the sector
     ld   c,a
@@ -570,9 +579,50 @@ as_gotp
     ld   (ammo_dir),a
     ret
 
+; ---- NOTHING LEFT TO PICK UP MEANS THE PAD POINTS AT THE WAY OUT.
+;
+;  THE EXIT WOULD OTHERWISE BE UNFINDABLE, and that is not a small thing:
+;  the map is 16x16, the exit is ONE cell, and it sits diagonally
+;  opposite the start.  Before this the pad simply went DARK when the
+;  last pickup was taken -- so the reward for clearing the maze was to
+;  lose the only instrument that tells you where anything is.
+;
+;  It costs almost nothing because ammo_scan already does all of it: the
+;  L1 walk, the eight-sector bearing, the distance band and the
+;  nose-relative subtraction are the SAME code, reached at as_pack.  So
+;  the exit is not a second scanner, it is the first one asked about a
+;  different cell.
+;
+;  AND IT SEQUENCES THE GAME.  Pickups first, then the way out -- the pad
+;  says which, and the player never has to be told.
 as_none
-    ld   (ammo_dir),a               ; A is AMMO_NODIR already -- it is what
-    ret                             ; the compare above just matched
+    ld   a,EXIT_CELL                ; #FF = this layout has no exit, and
+    inc  a                          ; gen_march.py emits that for the
+    jr   z,as_dark                  ; Mode 2 map
+    ld   c,EXIT_CELL
+    call as_pworld
+    jp   as_pack
+as_dark
+    ld   a,AMMO_NODIR               ; ...and only then does the pad go out
+    ld   (ammo_dir),a
+    ret
+
+; --- IN C = a cell index.  OUT A = (band << 4) | WORLD SECTOR, which is
+;     what the radar draws and what as_pack turns nose-relative.
+;     Clobbers AF BC DE HL.
+;
+;     EXTRACTED FROM mon_scan, which now calls it: the monster's blip and
+;     the exit's bearing are the same nine instructions, and the second
+;     copy of them was the whole cost of pointing at the exit.
+as_pworld
+    call as_l1                      ; A = L1, as_tdx / as_tdy = the signed
+    ld   (as_cur),a                 ; offsets it went through
+    call as_sector
+    ld   c,a
+    ld   a,(as_cur)
+    call as_band
+    or   c
+    ret
 
 ; --- COLLECTING IT IS THE SAME WALK.  A pickup at L1 zero is the one
 ;     the player is standing on, so ammo_pick's separate pass over the
@@ -584,6 +634,8 @@ as_take
     pop  hl
     dec  hl                         ; back to the entry just read
     ld   (hl),AMMO_GONE
+    ld   hl,scr_g                   ; ...and THE SCORE, which is one INC
+    inc  (hl)                       ; because it is kept as a glyph index
     ld   a,AMMO_MAX
     ld   (plr_ammo),a
     ld   a,SFX_PICKUP
@@ -612,14 +664,8 @@ mon_scan
     cp   #FF
     jr   z,ms_none
     ld   c,a
-    call as_l1                      ; A = L1, as_tdx / as_tdy = the signed
-    ld   (as_cur),a                 ; offsets it went through
-    call as_sector
-    ld   c,a
-    ld   a,(as_cur)
-    call as_band
-    or   c
-ms_none
+    call as_pworld                  ; the same nine instructions the exit's
+ms_none                             ; bearing wants -- see there
     ld   (mon_blip),a               ; ...or A = #FF from the compare above
     ret
 
@@ -660,6 +706,8 @@ mon_hit
     ld   a,#FF
     ld   (MONCELL),a                ; off the map, for everything that
     ld   (mon_blip),a               ; reads either byte
+    ld   hl,scr_g                   ; ...and it is worth the same point a
+    inc  (hl)                       ; pickup is
     ld   a,SFX_MONDIE
     ret
 
@@ -1068,6 +1116,24 @@ gs_walked
 gs_nospace
 
     call doors_step
+
+    ; ---- THE WAY OUT.  EXIT_CELL is an equ gen_march.py emits from the
+    ;      map's 'X', and as_l1 already answers "how far is the player
+    ;      from that cell" for the pickups and the monster -- so the whole
+    ;      of the win condition is a cell index and a zero test.  Six
+    ;      instructions, and NOT a fifth code in SOLID: the march reads
+    ;      SOLID four times a cell in its hot loop and its alphabet is
+    ;      full.  A map with no exit emits #FF = (15,15), outer wall,
+    ;      unstandable, so the test is simply never true.
+    ld   a,(plr_x+1)                ; plr_x is 8.8: the high byte IS the
+    cp   EXIT_X                     ; cell, the same read as_l1 makes
+    jr   nz,gs_noexit
+    ld   a,(plr_y+1)
+    cp   EXIT_Y
+    jr   nz,gs_noexit
+    ld   a,2                        ; ...and 2 is WON.  1 is ESC, 0 is
+    ret                             ; keep playing -- see the ret below
+gs_noexit
 
     ld   hl,KEYS                    ; snapshot for the next frame's edges
     ld   de,PREVKEYS

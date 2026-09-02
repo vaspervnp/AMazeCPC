@@ -20,3 +20,7 @@ AMMOTAB
 
 MONSTART    equ 193   ; 1,12   ; where the map puts the monster
 MONCELL     db  MONSTART   ; ...and where it is NOW, y*16+x
+
+EXIT_CELL   equ 29   ; 13,1   ; walk onto this and the level ends
+EXIT_X      equ 13
+EXIT_Y      equ 1
