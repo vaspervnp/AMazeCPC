@@ -412,12 +412,24 @@ def joint_cost(q, cyh=None):
     return J_BASE + J_PAIR * pairs + J_WIDE * abs(bhi - blo)
 
 
-def units(ncell, faces, quads, cyh):
+def units(ncell, faces, quads, cyh, dlift=0):
     """The frame's work, in the order the Z80 charges it.
 
     ncell  cells the flood popped                (march.asm, m_visited)
     faces  [(emitted, nclip)] per candidate face, in projection order
     quads  the quad records raster_paced will draw, in order
+    dlift  HOW FAR A RUNNING DOOR HAS RISEN, 0..255, as game.asm's
+           door_lift hands it to rc_dlift.  0 is "no door is running",
+           which is nearly every frame.
+
+    THIS ARGUMENT DID NOT EXIST AND THE DEFAULT WAS THE BUG.  colmodel
+    has implemented the lift since the animation landed -- slide(),
+    pair_walk(..., dlift) -- and this file never passed it, so every
+    moving-door sweep charged a FULL-HEIGHT door face for all six frames
+    of a run in which the disc raises the bottom edge by DLIFT = 42, 85,
+    128, 170, 213 of 256.  A door one cell away is the biggest quad the
+    engine can draw, so that over-charge is the whole of the
+    moving-door figure this project has quoted as its open problem.
 
     -> [(room, charge)], what cost_room / cost_add are given.
     """
@@ -458,6 +470,7 @@ def units(ncell, faces, quads, cyh):
         u += [(0, cc, cc) for cc in
               _cm.charge(quads, _rm.cfg(), C_CFRAME, C_CFACE, C_CSKIP,
                          C_COLS, C_CBAND, C_COLR, C_CEDGE, C_CSTEP,
+                         dlift=dlift,
                          c_cfar=C_CFAR, c_cfarp=C_CFARP,
                          c_cfars=C_CFARS, c_cfarend=C_CFAREND)]
     else:
@@ -608,7 +621,7 @@ def segments(u, acc=0, thresh=THRESH, tail=None, n=PACE_FRAMES):
 
 
 # ------------------------------------------------------------- the sweep --
-def _state_units(solid, px, py, a, cyh):
+def _state_units(solid, px, py, a, cyh, dlift=0):
     import marchmodel as mm
     import projmodel as pm
     nclip = [0]
@@ -629,7 +642,7 @@ def _state_units(solid, px, py, a, cyh):
             faces.append((q is not None, nclip[0]))
             if q is not None:
                 quads.append(q + (door, k))
-        return units(r["visited"], faces, quads, cyh)
+        return units(r["visited"], faces, quads, cyh, dlift)
     finally:
         pm.lerp = real
 

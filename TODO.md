@@ -6,15 +6,25 @@ interval, measured. The rooms are 4x4 and every door in the map opens.
 
 **The period is locked for the map as it loads.** `PACE_FRAMES` is 10 —
 199.7 ms, 5.01 fps — and `pacescan.py` puts **0 of 8128512** doors-shut
-states over budget. Doors open is 0.199%; doors in motion is 19.261% and
-is the one configuration this engine still cannot claim.
+states over budget. Doors open is 0.199%.
 
 **And it is a game now**: a monster that hunts and hurts you, health, a
-death screen, an exit that ends the level and a score. **The BODY is the
-binding constraint from here on** — `game_end` is 22 bytes under `BUCK0`
-and RAM bank 5 has 51 free. The next feature has to pay for itself, and
-`rc_dlift`'s `align 256` in `rastcol.asm` leaves 173 bytes of pure
-padding at #1853 that a read-only table could be moved into for nothing.
+death screen, an exit that ends the level and a score.
+
+**THE ONE THING THAT IS MEASURABLY BROKEN** is the frame period while a
+door is opening: **12 vsyncs instead of 10, for the whole five-frame
+run, on 8 of 8 doors measured on the disc.** `rc_charge` never reads
+`rc_dlift`, so a door being drawn shorter every frame is charged at full
+height — and `cost_unit` yields on the charge, not on the work. This was
+dismissed in three files for a long time as "a case that does not occur";
+it occurs every time a player opens a door. See plan.md, "Doors in
+motion: the case that DOES occur".
+
+**The BODY is the binding constraint from here on** — `game_end` is 22
+bytes under `BUCK0` and RAM bank 5 has 51 free. The next feature has to
+pay for itself, and `rc_dlift`'s `align 256` in `rastcol.asm` leaves 173
+bytes of pure padding at #1853 that a read-only table could move into
+for nothing.
 
 `plan.md` is the current document; this file is the renderer's own
 handoff and §1 below describes a blocker that is now closed. Read
@@ -37,7 +47,8 @@ first; every number here is written down next to the code it constrains.
 | `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
 | `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 over budget |
 | `pacescan.py` (doors OPEN) | 17,530 of 8,792,064 = **0.199%**, worst frame 191852 of 194560 |
-| `pacescan.py` (doors MOVING) | 1,565,642 of 8,128,512 = **19.261%** — the open problem |
+| `pacescan.py` (ONE door moving) | 1,125,604 of 8,128,512 = **13.85%** — reachable, and the open problem |
+| the disc, while a door runs | **[12, 12, 12, 12, 12]** vsyncs against 10 — 8 of 8 doors |
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
 | `monmodel.py` | **PASS** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs |
 | the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |

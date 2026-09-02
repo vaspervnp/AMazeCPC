@@ -74,11 +74,75 @@ hook in front of all three of `pip.asm`'s drawers. Splitting it three
 ways is the same move `RQ_SPLIT` is in `raster.asm`, and like `RQ_SPLIT`
 it wants measuring before believing. Not done.
 
-**Doors in motion is halved but not solved** — 19.261%, worst frame
-260807, the moving-door overlay pass drawing a second time. A player
-cannot make sixteen doors move at once, so it bounds a case that does not
-occur rather than describing one that does; it is still the one
-configuration this engine cannot claim.
+### Doors in motion: the case that DOES occur
+
+For a long time three files dismissed the 19.261% as a bound on twelve
+simultaneously-moving doors — "a case that does not occur". The
+dismissal was right about the arithmetic and **wrong about the
+conclusion**, and the way to find that out was to measure the case that
+does occur.
+
+`door_act` toggles the *nearest* door and a run is six frames; the rooms
+are 4×4 on a five-cell pitch, so reaching a second door takes 53 frames.
+**At most one door is ever in motion.** `pacescan.py` now sweeps that:
+
+| doors | over budget | worst charged frame |
+|---|---:|---:|
+| one moving, rest shut | 1125604 / 8128512 = **13.85%** | 258792 µs |
+| one moving, rest open | 1186129 / 8792064 = **13.49%** | 262553 µs |
+| all twelve moving | 19.261% | 260807 µs |
+
+One door is nearly as expensive as twelve, because only the doors inside
+the flood's radius matter and the nearest one is the one you are looking
+at. **So the problem is not pessimism. It is real and it is reachable.**
+
+**And on the disc it is not 13% of anything — it is every door, every
+time.** Stand in front of each of eight doors, press SPACE, and measure:
+
+```
+( 5, 3) shut [10]   running [12, 12, 12, 12, 12, 10, 10]
+(10, 3) shut [10]   running [12, 12, 12, 12, 12, 10, 10]
+( 2, 5) shut [10]   running [12, 12, 12, 12, 12, 10, 10]
+      ...8 of 8 identical...
+```
+
+Twelve vsyncs for the whole five-frame run: **239.6 ms against 199.7, a
+20% stutter every time a door opens.**
+
+### Where it comes from: `rc_charge` does not know about the lift
+
+`door_lift` writes `rc_dlift`, and `rc_column` raises the bottom edge of
+every door face by that fraction — 42, 85, 128, 170, 213 of 256 across
+the run — so the door **shrinks** as it rises. `rc_charge` never reads
+`rc_dlift`: `grep` finds it zero times in the routine. A door one cell
+away is the biggest quad the engine can draw, and it is charged at
+**full height for all six frames**.
+
+Measured on one worst state, same position, same heading:
+
+```
+door shut     144632 µs    7 cells   4 faces
+door open     168871 µs   20 cells   7 faces
+door MOVING   258792 µs   20 cells   8 faces   <- +87611 for one face
+```
+
+The moving door pays the open door's whole flood *and* a full-screen
+face on top of it. And `cost_unit` yields on the **charge**, so a loose
+charge spends real vsync periods: the frame is budgeted for work it does
+not do.
+
+**`pacemodel` had the same hole**, which is why the model and the disc
+agreed and nobody caught it: `colmodel.charge` has taken a `dlift`
+argument since the animation landed, and `pacemodel` never passed it —
+it defaults to 0. It is threaded through now, so a fix can be measured.
+
+**What is NOT yet measured** is how much of the two lost periods the
+over-charge accounts for, as against real work. `emu_rcol atomic` is the
+tool for that. The fix — make `rc_charge` subtract the lifted rows,
+behind a `rc_dlift == 0` early-out so the common frame pays three
+instructions — has to keep the one-sided property `atomic` proves, and
+`colmodel.charge` has to mirror it, or the model and the disc diverge
+again.
 
 ---
 
@@ -602,8 +666,11 @@ legal map is.
    win. See below for what it cost and what it does not do.
 5. **The editor**, once there is a reason to draw a second level.
 6. **The cheap world blitter**, when the monster count wants it.
-7. **The moving-door pass** — 19.261% and the one configuration the
-   engine still cannot claim.
+7. **The moving-door pass** — and it is now the ONLY measurably broken
+   thing in the game: 12 vsyncs instead of 10 for the whole of every
+   door's run, on the disc, on 8 of 8 doors. `rc_charge` does not read
+   `rc_dlift`. See "Doors in motion: the case that DOES occur" above for
+   the measurement and the shape of the fix.
 8. **`emu_snd.py`** — hook `snd_wr` by address, run `snd_tick` N times
    after each `snd_play(i)`, assert the write stream equals
    `gensnd.EFFECTS`. The one thing that would catch a step order, a

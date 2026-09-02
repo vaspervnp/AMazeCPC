@@ -56,9 +56,41 @@ def coll_free(solid, px, py):
 
 DOORMOV = 3                     # a door part way open (march.asm)
 
+#  ---- AND WHY THERE IS A "ONE MOVING" AT ALL --------------------------
+#  ALL MOVING puts every door in the map part way open at once, and the
+#  game CANNOT PRODUCE THAT STATE.  game.asm's door_act toggles the
+#  NEAREST door on the SPACE press edge, and a door runs DOOR_OPEN -
+#  DOOR_SHUT = 6 game frames; the rooms are 4x4 on a five-cell pitch, so
+#  the next door is at least five cells away and reaching it takes 53
+#  frames at STEP/256 a frame, 27 with SHIFT.  A second door cannot be
+#  started while the first is still running.  door_lift says the same
+#  thing in its own words -- "door_act starts one door at a time, so in
+#  play there is exactly one door mid-run" -- and then charges one lift
+#  fraction for every door face on that assumption.
+#
+#  So ALL MOVING is a BOUND ON AN UNREACHABLE CONFIGURATION, and its
+#  19.261% has been quoted in four files as "the one configuration this
+#  engine cannot claim".  Nobody had measured the configuration the
+#  engine actually reaches.  These two do:
+#
+#    ONE MOVING, REST SHUT    the early game, before a door is opened
+#    ONE MOVING, REST OPEN    the HEAVIEST state a player can stand in --
+#                             every doorway already walked through, so
+#                             the flood pours through all of them, AND
+#                             one door still drawn as a face on top
+#
+#  The moving door is the one NEAREST THE PLAYER, which is exactly the
+#  one door_act would have toggled; six frames of run move the player
+#  0.56 cells, so it stays the nearest one for the whole of it.
+ONEMOV_SHUT = "onemov_shut"
+ONEMOV_OPEN = "onemov_open"
+
 CONFIGS = ((0, "ALL SHUT -- the map as it loads"),
            (None, "ALL OPEN -- the flood sees through every doorway"),
-           (DOORMOV, "ALL MOVING -- see-through AND still drawn"))
+           (ONEMOV_SHUT, "ONE MOVING, REST SHUT -- reachable, early game"),
+           (ONEMOV_OPEN, "ONE MOVING, REST OPEN -- the HEAVIEST reachable"),
+           (DOORMOV, "ALL MOVING -- a bound on a state the game cannot "
+                     "reach; see the note above CONFIGS"))
 
 
 def open_doors(solid, code=0):
@@ -84,7 +116,19 @@ def positions(doors=0):
     import emu_frame as ef
     import emu_pace as ep
     _grid, solid = ef.load()
-    if doors != 0:
+    if doors in (ONEMOV_SHUT, ONEMOV_OPEN):
+        # The BASE map: shut or open.  Which single door is moving is a
+        # per-POSITION choice, made in _chunk.
+        #
+        # THE STANDABLE SET IS THE BASE MAP'S, and for ONE MOVING, REST
+        # OPEN that is very slightly GENEROUS: the one door that is mid-
+        # run reads DOORMOV, which is non-zero, so coll_free would keep
+        # the player out of that doorway -- and this set lets him stand
+        # in it.  Twelve cells of 122112 positions, and the error is in
+        # the SAFE direction: it sweeps states the player cannot reach,
+        # so it can only over-count the over-budget ones, never miss one.
+        solid = solid if doors == ONEMOV_SHUT else open_doors(solid, 0)
+    elif doors != 0:
         solid = open_doors(solid, 0 if doors is None else doors)
     offs = ep.lattice_offsets()
     out = []
@@ -134,17 +178,56 @@ def _init(ovr=None, doors=0):
     # pace_drain; they are in pm.units() now, where main3.asm runs them.
     _W["tail"] = pm.frame_head()
 
+    # ---- ONE MOVING: a SOLID variant per door, chosen per position.
+    #  Twelve copies of 256 bytes, built once; _chunk picks the one whose
+    #  door is nearest the player.  Copying a map per state would be 8.1
+    #  million allocations and the same answer.
+    _W["onemov"] = None
+    if doors in (ONEMOV_SHUT, ONEMOV_OPEN):
+        base = solid if doors == ONEMOV_SHUT else open_doors(solid, 0)
+        # The DOOR CELLS come from the map, not from the base -- an OPEN
+        # door reads 0 and is indistinguishable from floor once opened,
+        # so the shut map is the only place the door list survives.
+        import emu_frame as ef
+        _g, shutmap = ef.load()
+        cells = [i for i, v in enumerate(shutmap) if v == DOOR_SHUT]
+        vs = []
+        for c in cells:
+            s = bytearray(base)
+            s[c] = DOORMOV
+            vs.append(bytes(s))
+        _W["onemov"] = (cells, vs)
+
+
+def _nearest_door(cells, px, py):
+    """-> the index of the door cell nearest the player, by L1 in CELLS.
+
+    That is the one door_act would have toggled (game.asm picks the
+    nearest), so it is the only one that can be mid-run.
+    """
+    cx, cy = px >> 8, py >> 8
+    best, bi = 999, 0
+    for i, c in enumerate(cells):
+        d = abs((c & 15) - cx) + abs((c >> 4) - cy)
+        if d < best:
+            best, bi = d, i
+    return bi
+
 
 def _chunk(args):
     lo, hi, pos = args
     pm, solid, cyh, tail = _W["pm"], _W["solid"], _W["cyh"], _W["tail"]
+    onemov = _W.get("onemov")
     hist = collections.Counter()
     over, top = [], []
     worst = None
     for i in range(lo, hi):
         px, py = pos[i]
+        st = solid
+        if onemov is not None:
+            st = onemov[1][_nearest_door(onemov[0], px, py)]
         for a in range(72):
-            u = pm._state_units(solid, px, py, a, cyh)
+            u = pm._state_units(st, px, py, a, cyh)
             acc = 0
             for _ in range(3):              # settle the carry-over
                 w, _wo, acc = pm.segments(u, acc, tail=tail, n=99)
@@ -302,6 +385,8 @@ def _main_one(jobs=None, doors=0):
               open(os.path.join(os.path.dirname(_HERE), "build",
                                 "pacescan_top_%s.json"
                                 % {0: "shut", None: "open",
+                                   ONEMOV_SHUT: "onemov_shut",
+                                   ONEMOV_OPEN: "onemov_open",
                                    DOORMOV: "moving"}[doors]), "w"))
     over.sort(reverse=True)
     print(f"\n{len(over)} states of {tot} would take "

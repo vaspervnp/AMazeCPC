@@ -476,11 +476,49 @@ SCR_BACK    equ #8000
 ;  under-charge in the head does not make the disc faster, it makes the
 ;  MODEL optimistic.
 ;
-;  DOORS IN MOTION REMAINS THE OPEN PROBLEM, halved but not solved: the
-;  moving-door pass draws a door a second time and 19% of that state
-;  space is over.  A player cannot make sixteen doors move at once, so it
-;  bounds a case that does not occur rather than describing one that
-;  does -- but it is the one configuration this file cannot yet claim.
+;  DOORS IN MOTION IS THE OPEN PROBLEM, AND THIS COMMENT USED TO EXCUSE
+;  IT.  What stood here was "a player cannot make sixteen doors move at
+;  once, so it bounds a case that does not occur rather than describing
+;  one that does".  The arithmetic was right and the conclusion was
+;  wrong, and finding that out took measuring the case that DOES occur.
+;
+;  door_act toggles the NEAREST door and a run is six frames; the rooms
+;  are 4x4 on a five-cell pitch, so reaching a second door takes 53
+;  frames.  At most ONE door is ever in motion -- which door_lift already
+;  says in its own words.  pacescan.py sweeps that now:
+;
+;      one moving, rest shut   1125604 of 8128512 = 13.85%
+;      one moving, rest open   1186129 of 8792064 = 13.49%
+;      all twelve moving                            19.261%
+;
+;  One door is nearly as dear as twelve, because only the doors inside
+;  the flood's radius matter and the nearest is the one you are facing.
+;
+;  AND ON THE DISC IT IS EVERY DOOR, EVERY TIME.  Stand in front of each
+;  of eight doors, press SPACE, and measure the run:
+;
+;      shut [10]    running [12, 12, 12, 12, 12, 10, 10]      8 of 8
+;
+;  239.6 ms against 199.7 for the whole of the run -- a 20% stutter on
+;  every door the player opens.
+;
+;  WHERE IT COMES FROM: rc_charge DOES NOT READ rc_dlift.  door_lift
+;  writes the fraction the door has risen (DLIFT = 42, 85, 128, 170, 213
+;  of 256) and rc_column raises the face's bottom edge by it -- so the
+;  door SHRINKS as it goes up, and is CHARGED at full height for all six
+;  frames.  A door one cell away is the biggest quad this engine draws.
+;  MEASURED on one worst state: shut 144632, open 168871, MOVING 258792
+;  -- the moving frame pays the open door's whole flood AND a full-screen
+;  face on top.  cost_unit yields on the CHARGE, so the looseness costs
+;  real vsync periods.
+;
+;  pacemodel.py had the same hole and that is why nobody caught it: it
+;  never passed dlift to colmodel.charge, which has taken the argument
+;  since the animation landed.  Threaded through now, so a fix can be
+;  measured.  What is NOT yet measured is how much of the two lost
+;  periods is the over-charge and how much is real work; emu_rcol's
+;  `atomic` is the tool, and any fix has to keep the one-sided property
+;  it proves.
 ;
 ;  AND SEE cost_add, BELOW, FOR THE REST.  The HUD's five cost_adds
 ;  charge on top of whatever C_HUD left, with no gate between them and
