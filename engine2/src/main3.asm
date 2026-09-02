@@ -234,10 +234,15 @@
 ;
 ;  Both end the frame one period late, because every wait still ends on
 ;  an edge either way, and 29535 is under two periods so the overrun
-;  cannot cost more than one.  The 0.854% is the SECOND kind: the worst
-;  charged frame is 169232 against a 175104 budget, so the work fits and
-;  it is the greedy PACKING that does not.  A gate is an extra yield, so
-;  it trades a rare late frame for a frequent one.
+;  cannot cost more than one.  The 0.854% was the SECOND kind: the worst
+;  charged frame is 169232 against what was then a 175104 budget, so the
+;  work fit and it was the greedy PACKING that did not.  A gate is an
+;  extra yield, so it trades a rare late frame for a frequent one.
+;
+;  AND KNOWING WHICH KIND IT WAS IS WHAT FIXED IT.  A budget failure is
+;  answered with budget: PACE_FRAMES went to 10, the same 169232 now sits
+;  against 194560, and the doors-shut over-budget count is ZERO out of
+;  8128512.  The gate would have made that worse in both configurations.
 ;
 ;  WHAT WOULD ACTUALLY MOVE IT is less packing waste, not more testing.
 ;  cost_unit yields when the next unit does not fit and throws away the
@@ -260,7 +265,10 @@
 ;      [10] vsyncs = 199.5 ms      against [9] = 179.7
 ;
 ;  while two control states inside the budget read [9].  Five of five --
-;  before the gate, and again, unchanged, with it.
+;  before the gate, and again, unchanged, with it.  A FRESH BOOT EACH
+;  WAS NOT SUPERSTITION: emu_pace's teleport stub lives at #39C0, inside
+;  march.asm's FTAB, and was written once, so the second place() in a
+;  boot jumped into a table of L1 distances.  See emu_pace.Rig._stub.
 ;
 ;  PAIRED WITH AN EXACT BUDGET.  (pace_left) starts each frame at
 ;  PACE_FRAMES; every yield spends one, and pace_drain spends whatever is
@@ -407,69 +415,82 @@ SCR_BACK    equ #8000
 ;  no way round it:
 ;
 ;      VPCOL 0   flat spans     PACE_FRAMES 6   119.81 ms   8.35 fps
-;      VPCOL 1   textured cols  PACE_FRAMES 9   179.71 ms   5.56 fps
+;      VPCOL 1   textured cols  PACE_FRAMES 10  199.68 ms   5.01 fps
 ;
 ;  EXHAUSTIVE over every state a player can stand in (pacescan.py) with
 ;  the column renderer's own measured charges -- the ONE-SIDED ones,
 ;  taken one upper-bound hook per column pair, see costcol.inc.  N waits
-;  is N+1 PERIODS, so the budget of 9 periods is spent by 8 waits and a
-;  state asking for 9 is already one period late:
+;  is N+1 PERIODS, so the budget of 10 periods is spent by 9 waits and a
+;  state asking for 10 is already one period late:
 ;
 ;      DOORS SHUT, 8128512 states -- the map as it loads
 ;        4  0.033%   5  2.277%   6  7.750%   7 47.861%   8 40.311%
-;        9  1.768%  <-- 143730 states, OVER BUDGET
-;        worst charged frame 169232 us against a budget of 175104
+;        9  1.768%   <-- the last bucket that FITS
+;        OVER BUDGET: 0.  Not "few".  ZERO, out of eight million.
+;        worst charged frame 169232 us against a budget of 194560
 ;
 ;      DOORS OPEN, 8792064 states
-;        ...4.974% over budget -- 437302 states
-;        worst charged frame 190152 us -- over the budget on its own
+;        ...17530 over budget = 0.199%, one frame in 500
+;        worst charged frame 190152 us -- INSIDE the budget, so what is
+;        left is packing waste and not work; see the cost_add note
 ;
 ;      DOORS MOVING, 8128512 states -- see-through AND still drawn
-;        ...37.908% over budget, worst charged frame 259107 us
+;        ...19.26% over budget, worst charged frame 259107 us
 ;
-;  THOSE NUMBERS DOUBLED THE DAY C_TAIL WAS RE-FITTED, and the old ones
-;  are worth keeping visible because of WHY they were wrong: shut read
-;  0.854%, open 3.574%, moving 35.171% while the tail was charged 1950
-;  against a real 3573.4.  An under-charge in the head does not make the
-;  disc faster, it makes the MODEL optimistic -- so every reassuring
-;  pacing number taken between 017e8ef and the re-fit was too low.  See
-;  C_TAIL below for how a constant went sixteen commits without being
-;  re-measured.
+;  THE PERIOD IS LOCKED FOR THE MAP AS IT LOADS, AND THAT SENTENCE HAS
+;  BEEN WITHDRAWN TWICE BEFORE, so here is exactly what it now rests on:
+;  every one of the 8128512 states, replayed against constants
+;  emu_holes.py reports as one-sided upper bounds on the same build.  Not
+;  a sample.  Not a walked path.
 ;
-;  SO THE PERIOD IS NOT LOCKED, AND THIS COMMENT USED TO SAY IT WAS.
-;  What stood here was "5 waits 0.096% / 6 47.12% / 7 51.48% / 8 1.310%"
-;  over "6967296 reachable states" and a worst frame of 156501 -- a
-;  distribution with NO over-budget bucket at all, from a scan run
-;  before the radar, the world overlay and the sound driver existed.  It
-;  was never re-run when they landed; the sound commit ran no pacing
-;  tool at all.
+;  WHAT 9 -> 10 COST AND WHAT IT BOUGHT.  It cost 20 ms a frame: 5.56 fps
+;  becomes 5.01, and the walking speed drops with it because a step is
+;  per FRAME and not per second.  It bought the whole shut distribution
+;  moving one column left of the cliff --
 ;
-;  READ THE THREE NUMBERS AS THEY ARE.  Doors shut is the map as it
-;  loads and it is 0.854% -- roughly one frame in 117, which is a
-;  stutter a player can feel but not name.  Doors open is 3.574%.  Doors
-;  moving is a third of the state space and has been the known open
-;  problem for a while; a player cannot make sixteen doors move at once,
-;  so it bounds a case that does not occur rather than describing one
-;  that does.
+;      PACE_FRAMES 9      shut 1.768%   open 4.974%   moving 37.908%
+;      PACE_FRAMES 10     shut 0.000%   open 0.199%   moving 19.261%
 ;
-;  AND SEE cost_add, BELOW, FOR WHY.  The HUD's five cost_adds charge on
-;  top of whatever C_HUD left, with no gate between them and the next
-;  test -- so an interval can reach 19455 + 10080 = 29535 us inside a
-;  19968 us period.  That is the same defect cost_gate was added to fix
-;  for the projector's faces, in a new place.
+;  -- and it bought the HEADROOM the monster's pursuit was then spent
+;  out of.  C_TAIL went 3700 -> 3900 the same day for mon_move, and at
+;  PACE_FRAMES 9 that alone would have put states back over.
 ;
-;  Set VPCOL back to 0 and put this back to 6.
-;
-;  IT WAS 10, AND THE PERIOD IT BOUGHT WAS PAYING FOR A BROKEN CHARGE
-;  RATHER THAN FOR WORK.  rastcol.asm took its per-pair hook AFTER the
-;  pair's own setup, so room-then-charge billed that setup to the
-;  PREVIOUS hook -- often a 60 us edge run -- and the disc read
+;  IT WAS 10 ONCE BEFORE AND THE PERIOD IT BOUGHT WAS PAYING FOR A
+;  BROKEN CHARGE RATHER THAN FOR WORK.  rastcol.asm took its per-pair
+;  hook AFTER the pair's own setup, so room-then-charge billed that setup
+;  to the PREVIOUS hook -- often a 60 us edge run -- and the disc read
 ;  [10, 11, 13] vsyncs against a budget of 10 while an offline replay of
 ;  the same charge reported it fitting.  One hook per pair, taken first
 ;  and charging an upper bound, is what closed it; nothing in the
-;  renderer got faster.
+;  renderer got faster.  THIS 10 IS NOT THAT 10: the charge is honest
+;  now, and the number of states it fails to cover is zero rather than
+;  unmeasured.
+;
+;  AND THE FIGURES BEFORE THIS ARE ALL SUSPECT, deliberately kept:
+;  "5 waits 0.096% / 6 47.12% / 7 51.48% / 8 1.310%" over "6967296
+;  reachable states" stood here through the radar, the world overlay and
+;  the sound driver -- a distribution with no over-budget bucket at all,
+;  never re-run when any of them landed.  And at PACE_FRAMES 9 the first
+;  honest re-run read 0.854% / 3.574% / 35.171% while C_TAIL was 1623 us
+;  under the truth; correcting the tail DOUBLED all three.  An
+;  under-charge in the head does not make the disc faster, it makes the
+;  MODEL optimistic.
+;
+;  DOORS IN MOTION REMAINS THE OPEN PROBLEM, halved but not solved: the
+;  moving-door pass draws a door a second time and 19% of that state
+;  space is over.  A player cannot make sixteen doors move at once, so it
+;  bounds a case that does not occur rather than describing one that
+;  does -- but it is the one configuration this file cannot yet claim.
+;
+;  AND SEE cost_add, BELOW, FOR THE REST.  The HUD's five cost_adds
+;  charge on top of whatever C_HUD left, with no gate between them and
+;  the next test -- so an interval can reach 19455 + 10080 = 29535 us
+;  inside a 19968 us period.  A gate was built for it and MEASURED THREE
+;  TIMES WORSE; the note there says why.
+;
+;  Set VPCOL back to 0 and put this back to 6.
 ; ---------------------------------------------------------------------
-PACE_FRAMES equ 9
+PACE_FRAMES equ 10
 
 ;  IT IS ONE UNCONDITIONAL LINE AND THE ASSERT IS WHY.  Writing it as
 ;  `if VPCOL / 8 / else / 6 / endif` assembles perfectly and breaks the
@@ -480,7 +501,7 @@ PACE_FRAMES equ 9
 ;  hardcoded addresses engine2/tools/addrs.py exists to remove.  So there
 ;  is one line, and an assert that fires the moment it disagrees with the
 ;  renderer it is paired with.
-    assert (VPCOL == 0 && PACE_FRAMES == 6) || (VPCOL == 1 && PACE_FRAMES == 9)
+    assert (VPCOL == 0 && PACE_FRAMES == 6) || (VPCOL == 1 && PACE_FRAMES == 10)
 
 ; ---------------------------------------------------------------------
 ;  GUN -- draw the first-person weapon (engine2/src/gun.asm).  0 builds
@@ -579,15 +600,20 @@ C_SND       equ 2200        ; THE SOUND DRIVER, all nine ticks of a frame.
                             ; come out of the interval that follows the
                             ; edge, which is exactly the interval the
                             ; accumulator is budgeting.
-C_TAIL      equ 3700        ; THE TAIL: everything between pace_drain and
+C_TAIL      equ 3900        ; THE TAIL: everything between pace_drain and
                             ; the next frame's first cost_unit -- flip,
                             ; game_step, and the head of main_loop.  It is
                             ; added to (cost_acc) at the TOP of the frame,
                             ; because that is where the work it charges
                             ; for has just been done.
                             ;
-                            ; IT HAS BEEN UNDER THE TRUTH TWICE, and the
-                            ; second time it was under by 1623 us.
+                            ; IT HAS BEEN UNDER THE TRUTH THREE TIMES.
+                            ; The second time it was under by 1623 us and
+                            ; nobody noticed for sixteen commits; the
+                            ; third time it was under by 53.6 and the
+                            ; bench said so the same hour, because the
+                            ; recipe runs it again now.  THAT is the
+                            ; difference the Makefile fix bought.
                             ;
                             ; 1050 was fitted to a game_step benched with
                             ; NO KEYS HELD (656 us), against 1305.9 real.
@@ -609,7 +635,37 @@ C_TAIL      equ 3700        ; THE TAIL: everything between pace_drain and
                             ;   ------------------------------------
                             ;   tail                           3573.4 us
                             ;
-                            ; against 1950.  An under-charge HERE is the
+                            ; against 1950.
+                            ; ------------------------------------------
+                            ; AND THEN THE MONSTER STARTED WALKING.
+                            ; mon_move is inside game_step, so it is
+                            ; inside this constant, and it took the worst
+                            ; game_step from 3342.2 to 3522.4 -- +180.2
+                            ; for as_l1, two mm_dirs and up to two SOLID
+                            ; reads.  Tail 3753.6 against a C_TAIL of
+                            ; 3700: FIFTY-THREE MICROSECONDS UNDER, and
+                            ; emu_holes.py printed `ONE-SIDED UPPER
+                            ; BOUND: False` the first time it was run
+                            ; after the change.  3900 clears 3753.6 by
+                            ; 146.4.
+                            ;
+                            ; THE BENCH HAD TO BE TAUGHT THE NEW BRANCH.
+                            ; mon_move returns after two instructions on
+                            ; five frames in six, so a loop that let
+                            ; (mon_tick) run would have measured a MEAN
+                            ; and reported the tail as unchanged.
+                            ; emu_holes forces the tick to 1 and restores
+                            ; MONCELL, exactly the way it forces
+                            ; (hud_cur) for C_HUD.  It also presses the
+                            ; FIRE key now, which nothing ever had:
+                            ; `fire` runs inside game_step and was
+                            ; charged NOWHERE.  MEASURED at 3019.4 worst,
+                            ; under the 3522.4 a still frame already
+                            ; costs, so it needs no charge of its own --
+                            ; but that is a measurement, not a guess, and
+                            ; it was not one before.
+                            ; ------------------------------------------
+                            ; An under-charge HERE is the
                             ; worst place for one: it is in the head, so
                             ; the model reports a frame that fits while
                             ; the disc spends the microseconds anyway and

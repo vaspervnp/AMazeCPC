@@ -39,6 +39,11 @@ DSK = os.path.join(_ROOT, "build", "amaze.dsk")
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
 SOLID = addrs.SOLID
 VSYNC_MS = 19.968                       # 312 lines x 64 us
+# HOW OFTEN THE PERIOD IS SAMPLED, and the resolution every tolerance
+# below is derived from.  One number, because a tolerance written as a
+# literal goes stale the moment the period moves -- which is what `0.6`
+# did when PACE_FRAMES went to 10.
+SAMPLE_US = 250
 
 # main3.asm's PACE_FRAMES, read from the source so this file cannot drift
 # from the disc it is measuring.
@@ -139,8 +144,25 @@ class Rig:
         self.c.run_frames(500)
         bootdisc.start(self.c)   # past the title screen -- see bootdisc.py
         self.solid = self.c.read_ram(SOLID, 256)
-        # DI / LD SP,#3FF0 / JP main_loop, in the free RAM at #39C0.  See
-        # place() for why teleporting the player needs it.
+        self._stub()
+
+    # ---- DI / LD SP,#3FF0 / JP main_loop.  See place() for what it is for.
+    #
+    #  IT IS WRITTEN BEFORE EVERY JUMP, AND IT USED TO BE WRITTEN ONCE.
+    #  #39C0 is not free RAM, which is what the comment here claimed: it is
+    #  inside march.asm's FTAB, `equ #3900`, 256 bytes of L1 tables and
+    #  bucket write pointers that the march refills EVERY FRAME.  So the
+    #  stub survived until the flood happened to reach that far and then
+    #  set_pc jumped into whatever the march had left there.
+    #
+    #  MEASURED: the FIRST place() works and the SECOND hangs the machine
+    #  -- frame_ctr stops advancing, 0 game frames in 30 CPC frames, on
+    #  every state tried.  emu_verify3.py has always rewritten the bytes
+    #  each time and that is exactly why it never saw this.
+    #
+    #  Seven bytes a teleport is nothing, and it is correct whoever
+    #  overwrites the address in between.
+    def _stub(self):
         self.c.write_ram(0x39C0, bytes([0xF3, 0x31, 0xF0, 0x3F, 0xC3])
                          + struct.pack("<H", self.s["MAIN_LOOP"]))
 
@@ -167,7 +189,7 @@ class Rig:
         any run here needs."""
         return self.c.peek(self.s["FRAME_CTR"])
 
-    def place(self, px, py, a, settle=14):
+    def place(self, px, py, a, settle=None):
         """Teleport the player and RESTART the main loop.
 
         Writing (plr_x) while the game is running is not safe and the
@@ -180,14 +202,36 @@ class Rig:
         teleports ended with the Z80 executing the back buffer.  A real
         player never teleports, so this is the harness's problem and the
         harness fixes it -- jump to the stub above, which resets SP and
-        re-enters main_loop, and no frame ever sees a torn position."""
+        re-enters main_loop, and no frame ever sees a torn position.
+
+        SETTLE IS IN GAME FRAMES NOW, AND IT USED TO BE 14 CPC FRAMES.
+        The jump ABANDONS a frame in flight, so (cost_acc) still holds
+        whatever that frame had accumulated and the restarted frame adds
+        C_TAIL + C_SND on top of it.  A frame that starts with a full
+        accumulator yields early and can honestly need one extra period
+        -- once, at the teleport, for a state that is nowhere near its
+        budget the rest of the time.
+
+        14 CPC frames is 1.4 game frames at PACE_FRAMES 10.  The constant
+        never moved when the period did.  MEASURED: `emu_pace.py 600`
+        reported 3 frames of 4800 at 11 vsyncs and named three states;
+        each of those three, on a FRESH BOOT, reads [10] over 12 frames,
+        and pacescan's replay puts all three at 7-8 waits against a
+        9-wait budget.  The 11s were the harness looking at its own
+        teleport.
+
+        3 * PACE_N is three whole game frames, so nothing sampled is the
+        first frame after the jump."""
+        if settle is None:
+            settle = 3 * PACE_N
         self.c.write_ram(self.s["PLR_X"], struct.pack("<H", px))
         self.c.write_ram(self.s["PLR_Y"], struct.pack("<H", py))
         self.c.poke(self.s["PLR_A"], a)
+        self._stub()                    # the march may have eaten it
         self.c.set_pc(0x39C0)
         self.c.run_frames(settle)
 
-    def periods(self, nframes=8, step=250):
+    def periods(self, nframes=8, step=SAMPLE_US):
         """-> [RAW MILLISECONDS] between successive (frame_ctr) increments.
 
         250 us a sample, eighty times per vsync, and the answer is NOT
@@ -212,7 +256,7 @@ class Rig:
                 at, last = i, n
         return out
 
-    def periods_r12(self, nframes=6, step=250):
+    def periods_r12(self, nframes=6, step=SAMPLE_US):
         """The same period off the CRTC R12 flip register -- a SECOND,
         independent observable, so a claim about the cadence does not rest
         on one variable in RAM."""
@@ -309,7 +353,18 @@ def sweep(n=1400, seed=8191, nwalk=90):
             hist[round(p, 1)] += 1
         grid = all(abs(p / VSYNC_MS - round(p / VSYNC_MS)) < 0.06
                    for p in per)
-        same = max(per) - min(per) < 0.6
+        # ...INTERNALLY CONSTANT, TO THE SAMPLER'S OWN RESOLUTION.  This
+        # was `< 0.6` ms, a constant chosen when the period was ~120 ms
+        # and never re-derived.  An interval is measured as a whole number
+        # of 250 us samples at each end, so two readings of the SAME
+        # period can differ by nearly two samples; MEASURED, a locked
+        # 199.68 ms frame reads 199.2 .. 200.0, a spread of 0.8, and 0.6
+        # flagged 27 states of 600 as MIXED that were every one of them
+        # [10] vsyncs.  Deriving the tolerance from `step` instead of
+        # writing a number down means it cannot go stale again -- and it
+        # is still far tighter than a whole vsync, which is what `grid`
+        # and `onpace` below actually test against.
+        same = max(per) - min(per) < 4.0 * SAMPLE_US / 1000.0
         # ...AND ON THE RIGHT MULTIPLE.  A state that spends every frame
         # at 7 vsyncs is on the grid and is internally constant, so the
         # two tests above both pass it -- and that is exactly the shape of
@@ -363,9 +418,30 @@ def sweep(n=1400, seed=8191, nwalk=90):
     return 0 if locked else 1
 
 
+MINRUN = 3                      # cells a straight run must have to count
+
+
 def corridors(g):
     """Two long straight runs of different view cost, as
-    (name, start px, start py, heading, axis, sign)."""
+    (name, start px, start py, heading, axis, sign).
+
+    MINRUN WAS 4 AND THE MAP OUTGREW IT.  The map is nine 4x4 rooms, so
+    the longest straight run bounded by a wall is x = 1..4 -- three cells
+    BEYOND the start, not four.  This returned an empty list and walk()
+    then did `runs[0]`:
+
+        IndexError: list index out of range
+
+    That is not a pacing failure, it is this file asserting nothing about
+    a map it cannot describe, and CRASHING rather than saying so.  It had
+    been doing it since the rooms became 4x4; `make pace` stopped at
+    pacescan long before it reached here, which is the same reason
+    emu_holes.py went sixteen commits without running.
+
+    3 is the honest floor for the measurement -- three cells of walking
+    is still cells per second -- and walk() now says how many runs it
+    found rather than indexing blind.
+    """
     solid = g.solid
 
     def openp(x, y):
@@ -378,7 +454,7 @@ def corridors(g):
             n = 0
             while openp(x + n + 1, y):
                 n += 1
-            if n >= 4 and not openp(x - 1, y):
+            if n >= MINRUN and not openp(x - 1, y):
                 out.append((f"east from ({x},{y}), {n} cells",
                             (x << 8) | 128, (y << 8) | 128, 0, "x", n))
     for x in range(16):
@@ -388,7 +464,7 @@ def corridors(g):
             n = 0
             while openp(x, y + n + 1):
                 n += 1
-            if n >= 4 and not openp(x, y - 1):
+            if n >= MINRUN and not openp(x, y - 1):
                 out.append((f"south from ({x},{y}), {n} cells",
                             (x << 8) | 128, (y << 8) | 128, 18, "y", n))
     return out

@@ -17,4 +17,5 @@ NAMMO   equ 6
 AMMOTAB
     db 34,56,45,131,124,215   ; 2,2 8,3 13,2 3,8 12,7 7,13
 
-MONCELL     db 193   ; 1,12   ; the monster's cell, y*16+x
+MONSTART    equ 193   ; 1,12   ; where the map puts the monster
+MONCELL     db  MONSTART   ; ...and where it is NOW, y*16+x

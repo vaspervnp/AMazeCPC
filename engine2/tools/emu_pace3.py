@@ -180,9 +180,20 @@ def sweep(nrandom=900, nworst=60, nwalk=90, nscan=20000, seed=8191):
             for p in per:
                 hist[round(p, 1)] += 1
                 ch[round(p / VSYNC_MS)] += 1
+            # THE SPREAD TOLERANCE IS THE SAMPLER'S, NOT A LITERAL.  This
+            # was `< 0.6` ms, the second copy of a constant chosen when
+            # the period was ~120 ms.  An interval is counted in whole
+            # SAMPLE_US samples at each end, so two readings of the same
+            # period differ by up to two of them; at 250 us a locked
+            # 199.68 ms frame reads 199.2 .. 200.0, a spread of 0.8.
+            #
+            # MEASURED, this file, before the fix: "10 vsyncs 100.000%"
+            # of 10184 game frames on the line above, and `LOCKED: False`
+            # with 41 states named on the line below -- every one of them
+            # [10] vsyncs.  The output contradicted itself.
             ok = (all(abs(p / VSYNC_MS - round(p / VSYNC_MS)) < 0.06
                       for p in per)
-                  and max(per) - min(per) < 0.6
+                  and max(per) - min(per) < 4.0 * ep.SAMPLE_US / 1000.0
                   and all(round(p / VSYNC_MS) == ep.PACE_N for p in per))
             if not ok:
                 nbad += 1

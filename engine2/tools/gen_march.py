@@ -92,16 +92,24 @@ def emit_maze(f, solid, sx, sy):
 
 
 def emit_monster(f, cell):
-    """Where the one standing monster is, as a MAZEDATA cell index.
+    """Where the one monster STARTS, as a MAZEDATA cell index.
 
-    ONE, AND IT DOES NOTHING.  It exists so the shot's impact effect has
-    something to hit that is not a wall -- blood against stone chips --
-    and so the world-space box drawer has a target of a known size to be
-    checked against.  #FF puts none on the map.
+    TWO SYMBOLS FOR ONE NUMBER, AND THAT IS THE POINT.  MONCELL is a
+    BYTE and it MOVES: game.asm's mon_move writes a new cell into it
+    every MON_RATE frames, and mon_hit writes #FF when the thing dies.
+    MONSTART is an equ -- the map's own value, which nothing can
+    overwrite -- so game_init can put the monster back where the map
+    put it.  Without it a restart would resurrect the monster wherever
+    it happened to be standing when it was shot, which for a dead one
+    is nowhere at all.
+
+    #FF in either puts no monster on the map.
     """
-    f.write("\nMONCELL     db %s   ; the monster's cell, y*16+x\n"
-            % ("#FF" if cell is None else "%d   ; %d,%d"
-               % (cell[1] * 16 + cell[0], cell[0], cell[1])))
+    n = "#FF" if cell is None else "%d" % (cell[1] * 16 + cell[0])
+    where = "" if cell is None else "   ; %d,%d" % cell
+    f.write("\nMONSTART    equ %s%s   ; where the map puts the monster\n"
+            % (n, where))
+    f.write("MONCELL     db  MONSTART   ; ...and where it is NOW, y*16+x\n")
 
 
 def emit_ammo(f, cells):

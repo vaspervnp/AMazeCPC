@@ -60,6 +60,18 @@ from emu_pacefit import BASE, BASE_TOP, _rc_vars_end          # noqa: E402
 
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
+
+# ---- THE FIRE KEY, AND WHY IT IS Z AND NOT CTRL.  game.asm's fire_edge
+#  takes either, but the emulator's key_down() maps ASCII to the matrix
+#  and reaches no modifier at all -- see the note in fire_edge.  Z is the
+#  one of the two a harness can press.
+KEY_FIRE = ord('z')
+
+# Read out of game.asm, not copied: `fire` and `mon_hit` are benched
+# below and both have an early-out that a stale constant would leave the
+# bench sitting on.
+AMMO_MAX = P._equ("AMMO_MAX", 6, "game.asm")
+MON_HPMAX = P._equ("MON_HPMAX", 3, "game.asm")
 SCRATCH = os.path.join(_E2, "build")
 
 
@@ -165,8 +177,12 @@ class Rig:
                 "    ld (#%04X),a" % self.s["PLR_A"]]
 
     def keys(self, *ks):
+        # Z IS IN THIS LIST BECAUSE IT IS A GAME KEY.  game.asm's
+        # fire_edge reads row 8 bit 7 as well as CTRL, so a bench that
+        # never presses it never measures `fire` -- and `fire` runs
+        # inside game_step, which is what C_TAIL bounds.
         for k in (cpcmod.KEY_UP, cpcmod.KEY_DOWN, cpcmod.KEY_LEFT,
-                  cpcmod.KEY_RIGHT, cpcmod.KEY_SPACE):
+                  cpcmod.KEY_RIGHT, cpcmod.KEY_SPACE, KEY_FIRE):
             self.c.key_up(k)
         for k in ks:
             self.c.key_down(k)
@@ -250,13 +266,45 @@ def main(nstates=24):
     # game_step, at pinned states, over the key combinations a player can
     # actually hold.  Turning and walking are the expensive branches and
     # they compose, so the worst is a turn AND a walk.
-    combos = [("still", ())]
+    combos = [("still", ()), ("FIRE", (KEY_FIRE,))]
     for wn, wk in (("U", cpcmod.KEY_UP), ("D", cpcmod.KEY_DOWN)):
         for tn, tk in (("", None), ("+L", cpcmod.KEY_LEFT),
                        ("+R", cpcmod.KEY_RIGHT)):
             ks = (wk,) + ((tk,) if tk else ())
             combos.append((wn + tn, ks))
+            combos.append((wn + tn + "+FIRE", ks + (KEY_FIRE,)))
             combos.append((wn + tn + "+SPC", ks + (cpcmod.KEY_SPACE,)))
+    # ---- AND THE MONSTER'S FRAME IS FORCED, the same way (hud_cur) is
+    # forced below.  game.asm's mon_move returns after two instructions on
+    # five frames in six and walks a cell on the sixth -- as_l1, two
+    # mm_dirs and up to two SOLID reads.  A bench that let the counter run
+    # would sample the cheap branch five times out of six and report a
+    # MEAN, and C_TAIL is not a mean, it is a bound.  (mon_tick) at 1
+    # makes every call take the expensive path.
+    #
+    # MONCELL is restored too: mon_move WRITES it, so 250 ms of bench loop
+    # would otherwise walk the monster onto the player, where mon_move
+    # returns early at L1 < 2 and the measurement collapses to the cheap
+    # branch again -- silently, and in the safe-looking direction.
+    pre_mon = ["    ld a,1", "    ld (#%04X),a" % s["MON_TICK"],
+               "    ld a,%d" % rig.c.peek(s["MONCELL"]),
+               "    ld (#%04X),a" % s["MONCELL"]]
+
+    # ---- AND THE SAME FOR THE TRIGGER.  `fire` is an edge, an ammo
+    # count and a monster that can die, so three things have to be put
+    # back before every call or the loop measures the CHEAP branch:
+    # PREVKEYS, else there is one edge in 250 ms of bench and the rest
+    # are no-ops; plr_ammo, else the magazine empties in six calls and
+    # every call after that is SFX_CLICK and a ret; mon_hp, else the
+    # third round kills the monster, MONCELL goes #FF, and fx_fire can
+    # never read FX_BLOOD again.  All three fail SILENTLY and all three
+    # fail LOW.
+    pre_fire = ["    ld hl,#%04X" % (s["PREVKEYS"] + 8), "    ld (hl),#FF",
+                "    ld a,%d" % AMMO_MAX,
+                "    ld (#%04X),a" % s["PLR_AMMO"],
+                "    ld a,%d" % MON_HPMAX,
+                "    ld (#%04X),a" % s["MON_HP"]]
+
     worst = {}
     for name, ks in combos:
         rig.keys(*ks)
@@ -267,6 +315,7 @@ def main(nstates=24):
                        "    ld (hl),#FF"]
         else:
             pre_spc = []
+        pre_spc = pre_spc + pre_mon + (pre_fire if KEY_FIRE in ks else [])
         w, warg = 0.0, None
         for (px, py, a) in states:
             v = rig.bench(s["GAME_STEP"], pre=rig.pin(px, py, a) + pre_spc,

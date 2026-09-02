@@ -9,33 +9,32 @@ design.
 
 ## The constraint everything else answers to
 
-The disc runs at **9 vsyncs a frame — 179.7 ms, 5.56 fps** — and that
-period is *locked*: `main3.asm` carries a cost accumulator, every unit of
-work is charged an upper bound before it runs, and `pace_drain` spends
-whatever is left. `emu_verify3.py` measures the real period on the booted
-machine and fails if any frame is not exactly 9.
+The disc runs at **10 vsyncs a frame — 199.7 ms, 5.01 fps** — and for the
+map as it loads that period is now *locked over the whole state space*,
+not over a walked path. `main3.asm` carries a cost accumulator, every
+unit of work is charged an upper bound before it runs, and `pace_drain`
+spends whatever is left.
 
-So the budget is **175104 µs a frame**, and it is nearly spent:
+So the budget is **194560 µs a frame**:
 
 | where it goes | µs | share |
 |---|---:|---:|
-| `rastcol` — the textured column renderer | 126000–205000 | 75–80% |
-| `bg_fill` — ceiling and floor | 9320 | 5.3% |
-| the world overlay (pickup, monster, shot) | 8200 | 4.7% |
-| the tail carried into the next head (`C_TAIL`+`C_SND`+`C_DOORACT`) | 6150 | 3.5% |
-| march + project | 16000–24000 | 9–14% |
+| `rastcol` — the textured column renderer | 126000–205000 | 65–75% |
+| `bg_fill` — ceiling and floor | 9320 | 4.8% |
+| the world overlay (pickup, monster, shot) | 8200 | 4.2% |
+| the tail carried into the next head (`C_TAIL`+`C_SND`+`C_DOORACT`) | 8100 | 4.2% |
+| march + project | 16000–24000 | 8–12% |
 
 **Two numbers to keep in front of you:**
 
-- The head carries **6150 µs at worst**, not the 16230 the model charges.
-  `pace_drain` ends every frame with `ld h,a / ld l,a / ld (cost_acc),hl`
-  at a = 0 — it **zeroes** the accumulator — and `hud_ammo`, `hud_scan`
-  and `hud_radar` are all called *before* it (`main3.asm:1047-1051`,
-  drain at `:1060`). So `C_AMMO`, `C_SCAN`, `C_SWEEP`, `C_BLIP` and
-  `C_RNEEDLE` can never reach the next frame. The only charge that
-  outlives the drain is `game.asm`'s `C_DOORACT`. 6150 + `C_BG` 9320 =
-  15470, **3986 under** `COST_THI` — `bg_fill` does not yield at the
-  head on any frame.
+- The head carries **8100 µs at worst**, not the 16430 the model once
+  charged. `pace_drain` ends every frame with `ld h,a / ld l,a /
+  ld (cost_acc),hl` at a = 0 — it **zeroes** the accumulator — and
+  `hud_ammo`, `hud_scan` and `hud_radar` are all called *before* it. So
+  `C_AMMO`, `C_SCAN`, `C_SWEEP`, `C_BLIP` and `C_RNEEDLE` can never
+  reach the next frame. The only charge that outlives the drain is
+  `game.asm`'s `C_DOORACT`. 8100 + `C_BG` 9320 = 17420, **2036 under**
+  `COST_THI` — `bg_fill` does not yield at the head on any frame.
 - `hud_rect` costs **~70 µs a row** — a LINETAB lookup per scanline. A
   tall narrow rectangle is nearly all rows. That single fact has shaped
   the ammo pips (3811 µs), the monster (capped at 28 rows) and the
@@ -43,36 +42,51 @@ So the budget is **175104 µs a frame**, and it is nearly spent:
 
 ---
 
-## The open problem: the period is not currently proven
+## The period, and what 9 → 10 bought
 
-`make pace` **fails**, and has been failing since before the sound
-commit. Sound is not the cause — the exhaustive sweep is byte-identical
-with `C_SND` at 2200 and at 0, because the charge lands where the first
-yield discards it.
+`pacescan.py` replays the accumulator over **every** state a player can
+stand in — 112896 positions that pass `game.asm`'s own collision box,
+times 72 headings — in each of the three door configurations.
 
-Two defects in the *tools* were hiding a third in the *engine*. The
-tools are fixed; here is what they now say, and what they exposed.
+| doors | at `PACE_FRAMES` 9 | at 10 | worst charged frame |
+|---|---:|---:|---:|
+| shut — the map as it loads | 1.768% | **0.000%** | 169232 µs |
+| open | 4.974% | **0.199%** | 190152 µs |
+| moving | 37.908% | 19.261% | 259107 µs |
 
-### The number, exhaustively, with the model corrected
+Zero out of 8128512. That is the sentence this project has had to
+withdraw twice, and this is the first time it rests on an exhaustive
+sweep against constants `emu_holes.py` calls one-sided upper bounds on
+the same build.
 
-| doors | over budget | worst charged frame |
-|---|---:|---:|
-| shut — the map as it loads | 143730 / 8128512 = **1.768%** | 169232 µs |
-| open | 437302 / 8792064 = **4.974%** | 190152 µs |
-| moving | 3081362 / 8128512 = **37.908%** | 259107 µs |
+The cost was 20 ms a frame — 5.56 fps becomes 5.01, and walking slows
+with it, because a step is per *frame*. What it bought, besides the
+zero, is the headroom the monster's pursuit was then spent out of:
+`C_TAIL` went 3700 → 3900 for `mon_move` the same day, and at
+`PACE_FRAMES` 9 that alone would have put states back over.
 
-These doubled when `C_TAIL` was re-fitted (see below). They read 0.854%
-/ 3.574% / 35.171% while the frame head was under-charged by 1623 µs —
-an under-charge does not make the disc faster, it makes the *model*
-optimistic, so every pacing number taken between `017e8ef` and the
-re-fit was too kind.
+**Doors open is still 0.199%** — one frame in 500 — and its worst frame,
+190152, is *inside* the 194560 budget. So what remains is greedy-packing
+waste, not work that does not fit. `cost_unit` yields when the next unit
+does not fit and throws the rest of the interval away, so waste scales
+with the biggest units; after `C_BG` the biggest is `C_PIP` at 8200, one
+hook in front of all three of `pip.asm`'s drawers. Splitting it three
+ways is the same move `RQ_SPLIT` is in `raster.asm`, and like `RQ_SPLIT`
+it wants measuring before believing. Not done.
 
-Doors shut is about **one frame in 117**. The budget is 175104 µs, so
-the doors-open worst frame is over on its own.
+**Doors in motion is halved but not solved** — 19.261%, worst frame
+259107, the moving-door overlay pass drawing a second time. A player
+cannot make sixteen doors move at once, so it bounds a case that does not
+occur rather than describing one that does; it is still the one
+configuration this engine cannot claim.
 
-**And this is not model pessimism — it was checked on the machine.**
-Five of the doors-shut states the model damns were fed to `emu_pace`'s
-rig, a fresh boot each, and the period measured:
+---
+
+## How the pacing tools came to be trusted
+
+At `PACE_FRAMES` 9 the disc really did drop periods, and it was checked
+on the machine rather than argued from the model. Five of the doors-shut
+states the model damned were fed to `emu_pace`'s rig, a fresh boot each:
 
 ```
 OVER    (0x0EB0,0x0B68,43)   [10] vsyncs = 199.5 ms   *** OFF PACE ***
@@ -84,9 +98,13 @@ control (0x0350,0x0C80, 0)   [ 9] vsyncs = 179.5 ms   on pace
 control (0x0680,0x0680,36)   [ 9] vsyncs = 179.5 ms   on pace
 ```
 
-Five out of five. The disc really does drop to 199.5 ms — 5.01 fps
-instead of 5.56 — on those states, and `emu_verify3` still reports the
-period LOCKED because the six views it walks are not among them.
+Five out of five, and `emu_verify3` still reported the period LOCKED
+because the six views it walks were not among them. **That is what
+`PACE_FRAMES` 10 is for**: those states now fit, and so does every other
+one with the doors shut.
+
+Three defects in the *tools* were hiding a fourth in the *engine*, and
+none of it was findable while the first one was live.
 
 ### The one that hid all the others: `make pace` stopped at line 16
 
@@ -201,32 +219,95 @@ the work honestly needing more yields than `PACE_FRAMES` has, and
 period late, since every wait still lands on an edge either way, and
 29535 is under two periods so an overrun cannot cost more than one.
 
-The 0.854% is the **second** kind. The worst charged frame is 169232
-against a 175104 budget — the work *fits*; the greedy packing is what
-does not. A gate is one more yield, so it trades a rare late frame for a
-common one.
-
-**What would actually move it is less packing waste, not more testing.**
-`cost_unit` yields when the next unit does not fit and throws away the
-rest of the interval, so waste scales with the size of the biggest
-units — and after `C_BG` the biggest is `C_PIP` at 8200, one hook in
-front of all three of `pip.asm`'s drawers. Splitting it three ways is
-the same move `RQ_SPLIT` is in `raster.asm`, and like `RQ_SPLIT` it
-wants measuring before believing. Not done.
+Both were the **second** kind. The worst charged frame fits inside the
+budget in every configuration but doors-moving — the work *fits*; the
+greedy packing is what does not. A gate is one more yield, so it trades a
+rare late frame for a common one. **Giving the frame a tenth period was
+the fix, because the failure was a budget, not an overrun.**
 
 `pacemodel.HUD_GATE` still models all three arrangements so the table
 can be re-run; the disc is 0.
-
-**Doors in motion remains a separate problem**: 35.171%, worst frame
-259107 µs, the moving-door overlay pass drawing a second time. A player
-cannot make sixteen doors move at once, so it bounds a case that does
-not occur rather than describing one that does.
 
 **And nothing ran `make pace` for the sound commit.** `emu_verify3`
 walks a path; it does not sweep the space, and it passed because it
 never stood on one of the bad states. The Makefile says why that is not
 the test: *"the states that break a period are three in a million and a
 sample does not visit them."*
+
+### And the one the fixed tools then found: you walked west facing south
+
+`emu_pace.py walk` crashed — `runs[0]`, IndexError — because
+`corridors()` wants straight runs of ≥4 open cells and the map is nine
+4×4 rooms, so the longest is 3. Lowering it to 3 made the tool run, and
+the third corridor then measured **0.000 cells walked** along its own
+axis.
+
+That is not a tool bug. `corridors()` asks for heading 18 believing it is
+south. Measured on the disc, poking `plr_a` and reading `mv_dx`/`mv_dy`:
+
+```
+ a    wanted      got
+18     90.0 deg   180.0      <-- due WEST
+24    120.0       150.3
+30    150.0       119.7
+```
+
+Quadrants 0, 2 and 3 are exact. `step_vector` folds one quarter of
+`STEPTAB` four ways, and the **quadrant 1 fold produced `(-cos t, sin t)`
+where it wanted `(-sin t, cos t)`** — the `ex de,hl` dance after the swap
+swapped it back. `sv_store` reads only D and E, so the whole HL detour
+was moving a value that was already in place.
+
+**And the renderer was right the whole time.** `gen_march.py` writes
+`MARCHTB` for all 72 headings out of Python's own cos/sin, with no
+folding; `MARCHTB[18]`'s forward vector is `(0, 1024)` — due south. So on
+**eighteen of the seventy-two headings the player looked south and walked
+west.**
+
+Nothing caught it because nothing tested quadrant 1: `emu_verify3`
+checked heading 0 and heading 63, the walk test walks east, and the
+pacing sweeps index the view by heading (correct table) and the movement
+by position (no heading at all). `emu_verify3` now sweeps all 72 against
+5a.
+
+### Where `make pace` stands now
+
+| tool | |
+|---|---|
+| `pacescan.py` | **exits 1 by design** — doors open 0.199%, doors moving 19.261% |
+| `pacemodel.py 3000` | PASS |
+| `emu_pacefit.py 40 worst` | PASS — every unit a one-sided upper bound |
+| `emu_holes.py 60` | PASS — `EVERY CONSTANT A ONE-SIDED UPPER BOUND: True` |
+| `emu_atomic.py 6` | **FAILS TO BUILD, and not from anything here** |
+| `emu_pace3.py` | `LOCKED: True`, 10184 frames |
+| `emu_pace.py 600` | `LOCKED: True`, 4800 frames, 39 named bad states |
+| `emu_pace.py walk` | `spread 1.0000x` — all three corridors at 0.4695 cells/s |
+
+**`emu_atomic` is a pre-existing breakage.** It assembles
+`engine2/test/tst_rast.asm`, which references `RASTER_QUAD`,
+`RASTER_FRAME`, `RC_BUF` and `RC_EBUF` — symbols the raster restructure
+removed. Nothing in this work touches `raster.asm` or `engine2/test/`.
+It is the *span* renderer's harness and `VPCOL` is 1, so it guards the
+fallback rather than the disc — but it has been unbuildable for a long
+time and only became visible once the recipe stopped halting at line 16.
+
+### And a fourth, in the rig every pacing tool boots on
+
+`emu_pace.Rig.place()` teleports the player by writing a six-byte stub —
+`DI / LD SP,#3FF0 / JP main_loop` — at **#39C0** and jumping to it. That
+address is not free RAM: `march.asm` has `FTAB equ #3900`, 256 bytes of
+L1 tables refilled **every frame**. The stub was written once, at boot.
+
+```
+stub bytes at #39C0 after a few frames of play:
+   03020100010203   expected  f331f03fc3b000
+```
+
+That is an L1 distance ramp sitting where the code should be. Measured:
+the *first* `place()` works and the *second* hangs the machine — 0 game
+frames in 30 CPC frames, on every state tried. `emu_verify3.py` has
+always rewritten the bytes before each jump, which is exactly why it
+never saw this and why its results stand. Fixed by doing the same.
 
 ---
 
@@ -243,7 +324,10 @@ sample does not visit them."*
   had in it.
 - Six ammunition pickups drawn on the floor, occluded exactly by the
   wall line the renderer leaves in `rc_dn`.
-- One monster that stands still, scaled by distance, as a test target.
+- **One monster that walks at you and can be killed.** 3 hit points, one
+  cell every 6 frames, greedy pursuit; at 0 it leaves the map and its
+  radar blip goes out. The aim cone is the three column pairs it actually
+  paints, so you have to point at it.
 - A title screen with the keys and the credit line.
 - Sound: six AY effects, ticked at a true 50 Hz out of `wait_vsync` —
   the shot picks stone or flesh from the same test the impact mark does.
@@ -254,21 +338,49 @@ sample does not visit them."*
 
 Ordered by what unlocks the most, with the honest cost of each.
 
-### 1. The monster has to do something — *the biggest single gap*
+### 1. The monster — *half done*
 
-It stands there. A game needs it to **notice, approach, and hurt you**,
-and you need to be able to **kill it**.
+- ~~**Hit points and death.**~~ **Done.** `MON_HPMAX` 3, taken off in
+  `mon_hit` on the frames `fx_fire` comes back `FX_BLOOD`; at zero
+  `MONCELL` goes `#FF`, which `mon_draw`, `mon_scan` and the radar's
+  `hr_one` all already tested for, so death needed no new branch
+  anywhere. A seventh AY effect, `SFX_MONDIE`, is the only feedback that
+  the third round did something the first two did not.
+- ~~**Movement.**~~ **Done, and its limits are measured.** `mon_move`
+  steps one cell every `MON_RATE` = 6 frames along the axis you are
+  further away on, falling back to the other when that cell is solid.
+  `monmodel.py` replays the same rule over every pair the monster's own
+  steps could join:
 
-- **Hit points and death.** The shot already knows it hit (`fx_fire`
-  compares two screen rows). Give the monster 3 HP, remove it at 0, and
-  the loop closes: see it, shoot it, it dies.
-- **Movement.** One cell a game frame toward the player when in line of
-  sight. The march already computes visibility; reuse it rather than
-  writing a second one. **Cost: cheap** — a few hundred µs of decision,
-  and it reuses `box_draw`.
-- **Damage and player death.** Contact costs health. Needs a health
-  readout (a third HUD slot, same machinery as the pips) and a death
-  state.
+  | doors | reaches the player | worst |
+  |---|---:|---:|
+  | shut — the map as it loads | **2160 / 2160 = 100%** | 5 steps, 6.0 s |
+  | open | 13054 / 24180 = 54% | 24 steps |
+
+  100% with the doors shut is the map, not luck: a shut door reads 2 in
+  `SOLID`, so the monster is sealed into one 4×4 room, and inside an
+  empty rectangle greedy is complete. That is the fight this game
+  actually has. Three richer rules were modelled over the same space —
+  momentum 57%, momentum-plus-turn 62%, wall-slide 62% — and the best
+  buys eight points, costs a byte of state and a dozen instructions, and
+  is still stuck a third of the time. What would fix it is aiming at the
+  *doorway*, and that is a search.
+
+  The rate is scaled to the player: a walk is 0.094 cells a frame and
+  SHIFT doubles it, so 1/6 = 0.167 is **faster than walking and slower
+  than running**. You cannot stroll away from it and you can run.
+- **The aim cone was the whole field of view, and hit points made that
+  matter.** `box_draw` writes `bx_bot` once for the box, not once per
+  pair, so "the monster drew" and "the monster drew where the gun points"
+  were the same test. Measured on the disc: it read flesh on 10 of the 11
+  headings the monster was visible on. `mon_draw` now copies `bx_bot`
+  only when the pairs it painted include the crosshair's — measured
+  again, **2 headings of 11, 10° of 55**.
+- **Damage and player death — the obvious next piece.** The monster now
+  walks up to you and stands there. Contact needs to cost health, which
+  needs a health readout (a third HUD slot, same machinery as the pips)
+  and a death state. Note `MENUBUF equ SOLID`: death has to restart the
+  world, not resume it.
 - **More than one.** `mon_draw` handles a single monster from one cell
   in `gen_maze.inc`. A list of four, like `AMMOTAB`, is the same shape —
   but four monsters at 8200 µs of overlay is where the frame budget
@@ -441,32 +553,28 @@ legal map is.
 
 ## Order I would build it in
 
-0. **Fix the pacing tools, before any feature.** In this order, because
-   each makes the next mean something:
-   a. `pacemodel.py:527` — `<=` to `<`. It grades a fail as a pass.
-   b. Wire the build: `gensnd.py` into the `amaze` recipe, and
-      `sound.asm` / `rastcol.asm` / `pip.asm` / `menu.asm` /
-      `gen_*.inc` into `$(SRC)`.
-   c. Move the HUD's `cost_add`s out of both models' `tail=` and into
-      `units()` where the disc runs them.
-   d. Re-run `make pace` and write the *real* over-budget count into
-      `main3.asm:345-354`, `:274-279` and `vpcfg.inc:49-50` — which
-      today quote a distribution with no over-budget bucket at all,
-      and a worst frame of 156501 against a measured 159152.
-   e. `gensnd.build()` — assert the nine-tick window that `C_SND`
-      rests on.
-
-   Only then is "the period is locked" a statement about the disc
-   rather than about a model that disagrees with it.
+0. ~~**Fix the pacing tools, before any feature.**~~ **Done.** The
+   off-by-one, the build wiring, the HUD charges' placement, the
+   `C_SND` window assert, the recipe that stopped at line 16, the
+   `C_TAIL` re-fit, and the teleport stub in the march's FTAB. "The
+   period is locked" is now a statement about the disc.
 1. ~~**Sound.**~~ Done, `ae0c6d0` — with the caveats above.
-2. **Monster hit points, death, and simple pursuit.** Closes the game
-   loop — the thing that makes it a game rather than a demo.
-3. **The editor**, once there is a reason to draw a second level.
-4. **Health, score, exit, level progression.** Now the maps mean
-   something.
-5. **The cheap world blitter**, when the monster count wants it.
-6. **The moving-door pass**, when the period has to hold under fire.
-7. **`emu_snd.py`** — hook `snd_wr` by address, run `snd_tick` N times
+2. ~~**Monster hit points, death, and simple pursuit.**~~ **Done**, with
+   `PACE_FRAMES` 10 underneath it to pay for the pursuit.
+3. **Player health and death — the half of the loop that is missing.**
+   The monster walks up to you and nothing happens. Contact is `L1 == 1`
+   (it cannot be 0: `box_draw` rejects at the near plane, so a monster on
+   your own cell is invisible and unshootable, which is why `mon_move`
+   stops at 1). Needs: a health byte, a readout — one rectangle at
+   560–704 µs, **not** a bar at 1905–3811 — and a death state that
+   restarts the world, because `MENUBUF equ SOLID`.
+4. **An exit, and a score.** Now killing the monster and crossing the
+   maze mean something.
+5. **The editor**, once there is a reason to draw a second level.
+6. **The cheap world blitter**, when the monster count wants it.
+7. **The moving-door pass** — 19.261% and the one configuration the
+   engine still cannot claim.
+8. **`emu_snd.py`** — hook `snd_wr` by address, run `snd_tick` N times
    after each `snd_play(i)`, assert the write stream equals
    `gensnd.EFFECTS`. The one thing that would catch a step order, a
    duration off by one, or an effect that never reaches `st_stop`.

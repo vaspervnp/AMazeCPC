@@ -4,14 +4,14 @@ The textured **column renderer** is built, correct and on a disc. §1's
 hook-placement blocker is **closed**: the charge is now one-sided per
 interval, measured. The rooms are 4x4 and every door in the map opens.
 
-The disc is **not locked**, and the reason is now known and is not what
-this file said for a long time: **a frame with a door OPEN honestly needs
-more vsync periods than `PACE_FRAMES` gives it.** The flood pours through
-an open doorway into the next room, and the pacing was only ever swept
-with every door shut. That is §1, and it is a WORK problem, not a charge
-bug — see the two optimisations in §2, which is what closing it needs.
+**The period is locked for the map as it loads.** `PACE_FRAMES` is 10 —
+199.7 ms, 5.01 fps — and `pacescan.py` puts **0 of 8128512** doors-shut
+states over budget. Doors open is 0.199%; doors in motion is 19.261% and
+is the one configuration this engine still cannot claim.
 
-Read `engine2/src/costcol.inc` and the header of `engine2/src/rastcol.asm`
+`plan.md` is the current document; this file is the renderer's own
+handoff and §1 below describes a blocker that is now closed. Read
+`engine2/src/costcol.inc` and the header of `engine2/src/rastcol.asm`
 first; every number here is written down next to the code it constrains.
 
 ---
@@ -21,16 +21,19 @@ first; every number here is written down next to the code it constrains.
 | | |
 |---|---|
 | `VPCOL` (`engine2/src/vpcfg.inc`) | **1** — the column renderer ships |
-| `PACE_FRAMES` (`engine2/src/main3.asm`) | **9** — 179.7 ms, 5.56 fps (was 10) |
+| `PACE_FRAMES` (`engine2/src/main3.asm`) | **10** — 199.7 ms, 5.01 fps |
 | the map (`tools/world.py`) | **nine 4x4 rooms** in a 3x3 grid, 144 floor cells |
 | `make amaze` | OK, disc fresh (`md5` of `engine2/build/TEX.BIN` == `build/e3/TEX.BIN`) |
 | `emu_rcol.py verify` | **183/183 screens byte-exact** against `colmodel.py`, 24 of them a door IN MOTION |
 | `emu_rcol.py atomic` | **PASS** — every interval inside its charge, 0 model/asm disagreements, 40 states / 2 seeds |
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
 | `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
-| `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 states over budget |
-| `pacescan.py` (doors OPEN) | **FAIL** — 827,181 of 8,792,064 (9.4%) over budget, up to 12 waits |
-| `emu_verify3.py` | doors **PASS** (all six, all 12 doors); period **FAIL** — [9, 10, 11], and [9, 10] with every door shut |
+| `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 over budget |
+| `pacescan.py` (doors OPEN) | 17,530 of 8,792,064 = **0.199%**, worst frame 190152 of 194560 |
+| `pacescan.py` (doors MOVING) | 1,565,642 of 8,128,512 = **19.261%** — the open problem |
+| `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
+| `monmodel.py` | **PASS** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs |
+| `emu_verify3.py` | **ALL CHECKS PASS**, period `[10]` on all six named views |
 
 The span renderer is still the fallback and still locks: set
 `VPCOL equ 0` **and** `PACE_FRAMES equ 6` (an `assert` in `main3.asm`
@@ -128,9 +131,21 @@ meaning something else. `C_CSKIP` fell 697 → 560 and `C_COLS` 1980 → 1800.
 
 ---
 
-## 1. THE BLOCKER — the frame asks for more periods than it has
+## 1. THE BLOCKER — CLOSED, and kept for the argument in it
 
-`emu_verify3.py` reads `[9, 10, 11]` vsyncs where it must read one value.
+**This section is history.** It was written when the doors-open sweep
+read 9.4% and `emu_verify3` read `[9, 10, 11]`; both are fixed. Two
+things closed it: the per-pair hook moved to the top of `rc_column` with
+a one-sided charge, and the frame was given a tenth period once the
+failure had been correctly identified as a *budget* and not an *overrun*.
+The doors-open figure is now 0.199% and the worst frame fits inside the
+budget.
+
+It is left here because the reasoning is the reusable part — in
+particular "do not chase a particular view; chase the unit", and the
+retraction below of a conclusion that was confidently wrong.
+
+`emu_verify3.py` read `[9, 10, 11]` vsyncs where it must read one value.
 Which named views overrun moves with the map — on the 4x4 map it is
 `corridor` at 11, `junction` / `worst state` / `(1,5) h12` at 10 — so do
 not chase a particular view; chase the unit.
@@ -328,6 +343,25 @@ consecutive prefixes, so the numbers it prints **are** the intervals.
 a packing check, not a cost check. It said 0 states over budget while the
 disc took an extra period on a reachable state.
 
+**A TABLE FOLDED N WAYS NEEDS TESTING N WAYS, NOT ONCE.** `step_vector`
+folds one quadrant of `STEPTAB` into four, and the quadrant-1 fold was
+wrong for as long as it existed: headings 18..35 came out mirrored about
+135°, so the player **looked south and walked west** on a quarter of the
+compass. Every test in the repo passed, because they tested heading 0 and
+heading 63 — quadrants 0 and 3. `gen_march.py` writes `MARCHTB` for all
+72 with no folding, which is why the *view* was right and the
+disagreement was invisible in any single-heading test. `emu_verify3`
+section 4b now sweeps all 72 against 5a. Whenever code says "the other
+three are exact sign flips of it", test the other three.
+
+**Tolerances and settle times go stale when the period moves.**
+`emu_pace.place()` settled for 14 CPC frames — 1.4 game frames at
+`PACE_FRAMES` 10 — so the first sampled frame still carried the
+accumulator of the frame the teleport abandoned, and 3 frames of 4800
+read 11 vsyncs that a fresh boot could not reproduce. `sweep()` called a
+state MIXED on a 0.6 ms spread when the sampler's own quantisation is
+0.8. Both are derived quantities now (`3 * PACE_N`, `4 * SAMPLE_US`).
+
 **The model and the asm must take the same unit SEQUENCE, not just the
 same total.** `atomic` cross-checks the charge the Z80 is *about to take*
 at hook `k` against the model's `k`-th unit and prints `MODEL/ASM
@@ -432,12 +466,20 @@ python3 engine2/tools/emu_rcol.py fit 14      # re-fit costcol.inc, MEASURED
 python3 engine2/tools/emu_march.py            # the march vs marchmodel.py
 python3 engine2/tools/roomcost.py             # what the MAP costs the march
 python3 engine2/tools/pacescan.py             # all reachable states, offline
-python3 engine2/tools/emu_verify3.py          # the disc: mode, doors, PERIOD
+python3 engine2/tools/emu_holes.py 60         # the constants ARE upper bounds
+python3 engine2/tools/monmodel.py             # the monster's pursuit rule
+python3 engine2/tools/emu_verify3.py          # the disc: mode, doors, MONSTER, PERIOD
 python3 engine2/tools/emu_pace3.py 120 40 30
 python3 engine2/tools/texshot.py              # the art, and the model's output
 python3 engine2/tools/shot_amaze3.py          # screenshots into build/
 ```
 
-Regenerating the world after editing `tools/world.py`:
-`PYTHONPATH=$PWD/tools python3 engine2/tools/gen_march.py`
-(it is **not** part of the `amaze` target).
+`make pace` runs the pacing set as a LOOP that collects every exit code
+and fails at the end — it used to stop at the first failure, which meant
+`emu_holes.py` had not run for sixteen commits while `C_TAIL` drifted
+1623 µs under the truth. `make verify` runs `monmodel.py` and then
+`emu_verify3.py`.
+
+Regenerating the world after editing `tools/world.py` is now **part of
+the `amaze` target** (`$(GEN)`); it was not, for a long time, and editing
+the map changed nothing on the disc.

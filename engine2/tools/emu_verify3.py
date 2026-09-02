@@ -151,6 +151,34 @@ def _gm(name):
 
 NAMMO = _gm("NAMMO")
 START = (_gm("START_X"), _gm("START_Y"))
+MONSTART = _gm("MONSTART")      # where the map puts the monster; MONCELL
+                                # is the byte that MOVES, so a test that
+                                # wants the start has to read the equ
+MON_HPMAX = _equ("MON_HPMAX")
+MON_RATE = _equ("MON_RATE")
+
+# pip.asm's half width in column PAIRS, which is also the AIM CONE: the
+# shot hits when the pairs mon_draw painted include the crosshair's.
+_PIP = open(os.path.join(_E2, "src", "pip.asm")).read().split("\n")
+
+
+def _pe(name):
+    for line in _PIP:
+        p = line.split()
+        if len(p) >= 3 and p[0] == name and p[1] == "equ":
+            return int(p[2])
+    raise SystemExit(f"{name} not found in pip.asm")
+
+
+MON_HW = _pe("MON_HW")
+FX_BLOOD = 0xC3
+
+# pip.asm's scratch is `equ`, and rasm emits no symbol for an equ, so
+# these are computed the way the source computes them.  The asserts in
+# pip.asm are what keep the two bases where they are.
+PIPVARS, FXVARS = 0x3DF0, 0x3EA0
+A_PIP_P, A_BX_BOT = PIPVARS + 4, PIPVARS + 15
+A_FX_PEN, A_MON_BOT = FXVARS + 2, FXVARS + 3
 
 DOOR_MIN_FRAMES = 6
 assert _equ("DOOR_OPEN") - _equ("DOOR_SHUT") >= DOOR_MIN_FRAMES, (
@@ -217,6 +245,12 @@ def main():
     g = Game()
     c = g.c
     ok = True
+    # SAMPLED AT BOOT, CHECKED IN SECTION 10.  MONCELL is a byte the
+    # monster walks and mon_hit sets to #FF, and by the time section 10
+    # runs the earlier sections have spent forty rounds and walked the
+    # whole map -- so reading it there tests nothing about game_init.
+    # First attempt did exactly that and read #FF.
+    mon_at_boot = c.peek(g.s["MONCELL"])
 
     def check(cond, what, detail):
         nonlocal ok
@@ -279,6 +313,41 @@ def main():
     check(x2 != x0 and y2 != y0, "both axes move on a 45 deg heading",
           f"heading 63 = 315 deg: dx {(x2 - x0) / 256.0:+.3f} "
           f"dy {(y2 - y0) / 256.0:+.3f} cells")
+
+    # ---- AND ALL SEVENTY-TWO, against the angle each one MEANS.
+    #
+    #  THIS CHECK EXISTS BECAUSE TWO HEADINGS ARE NOT A COMPASS.  The two
+    #  above are heading 0 and heading 63 -- quadrant 0 and quadrant 3.
+    #  game.asm's step_vector folds one quarter of STEPTAB four ways, and
+    #  the QUADRANT 1 fold was wrong: it produced (-cos t, sin t) where it
+    #  wanted (-sin t, cos t), i.e. headings 18..35 mirrored about 135
+    #  degrees.  Heading 18 walked due WEST while gen_march.py's MARCHTB
+    #  -- which has all 72 headings and no folding -- pointed the VIEW due
+    #  south.  A quarter of the compass walked sideways to the picture,
+    #  and every test in this file passed.
+    #
+    #  It is measured off (mv_dx)(mv_dy), which step_vector writes once a
+    #  frame, so it needs no walking and no collision-free space: poke the
+    #  heading, run a frame, read the vector.
+    print("\n4b THE STEP VECTOR AT ALL 72 HEADINGS (step_vector's fold)")
+    import math
+    bad = []
+    for a in range(72):
+        c.poke(g.s["PLR_A"], a)
+        f0 = g.frames()
+        while g.frames() == f0:
+            c.run_us(4000)
+        dx = struct.unpack("<h", c.read_ram(g.s["MV_DX"], 2))[0]
+        dy = struct.unpack("<h", c.read_ram(g.s["MV_DY"], 2))[0]
+        got = math.degrees(math.atan2(dy, dx)) % 360
+        want = (5.0 * a) % 360
+        if abs((got - want + 180) % 360 - 180) > 4.0:
+            bad.append((a, round(got, 1), want))
+    check(not bad, "every heading steps along the angle it names",
+          "all 72 within 4 deg of 5a" if not bad else
+          f"{len(bad)} wrong, first five: "
+          + ", ".join(f"a={a} got {got} want {want}" for a, got, want
+                      in bad[:5]))
 
     print("\n5  COLLISION (the player cannot enter a wall)")
     solid = c.read_ram(SOLID, 256)
@@ -579,7 +648,108 @@ def main():
     check(c.peek(adir) == 0xFF, "with every pickup taken the pad goes dark",
           f"ammo_dir = #{c.peek(adir):02X}")
 
-    print("\n9  FRAME PERIOD (measured, one gap at a time, five samples a"
+    # =================================================================
+    print("\n10 THE MONSTER (it walks at you, and three rounds kill it)")
+    mc, mhp, mtk = g.s["MONCELL"], g.s["MON_HP"], g.s["MON_TICK"]
+
+    # ---- (a) PURSUIT, against engine2/tools/monmodel.py's replay of the
+    #      same rule.  Not against a description of it: the model steps
+    #      the cell in Python and the two are compared cell for cell.
+    import monmodel as MM
+    solid, _ = MM.load_solid()
+    check(mon_at_boot == MONSTART,
+          "the disc boots with the monster where the MAP put it",
+          f"MONCELL at boot = {mon_at_boot} = "
+          f"({mon_at_boot&15},{mon_at_boot>>4}), MONSTART = {MONSTART}")
+
+    MX, MY, PX, PY = 1, 12, 4, 12       # same room, monster due WEST
+    c.poke(mc, MY * 16 + MX)
+    c.poke(mhp, 99)
+    c.poke(mtk, 1)                      # step on the very next frame
+    g.place(PX * 256 + 128, PY * 256 + 128, 0)
+    disc, want, m = [], [], MY * 16 + MX
+    for _ in range(4):
+        f0 = g.frames()
+        while g.frames() == f0:         # exactly one GAME frame
+            c.run_us(4000)
+        disc.append(c.peek(mc))
+        m = MM.step(solid, m, PX, PY)
+        want.append(m)
+        for _ in range(MON_RATE - 1):   # ...and the frames it holds still
+            f0 = g.frames()
+            while g.frames() == f0:
+                c.run_us(4000)
+    check(disc == want, "it walks the cells monmodel.py says it walks",
+          f"disc {disc}, model {want}")
+    check(disc[-1] == PY * 16 + PX - 1,
+          "and it STOPS beside the player, never on him",
+          f"ended at cell {disc[-1]} = "
+          f"({disc[-1]&15},{disc[-1]>>4}), player ({PX},{PY})")
+
+    # ---- (b) THE AIM CONE.  Turn with the real key rather than
+    #      teleporting per heading: place() restarts main_loop and the
+    #      point here is what a player sees while turning.
+    c.poke(mc, MY * 16 + MX)
+    c.poke(mhp, 99)
+    c.poke(mtk, 99)                     # frozen for the sweep
+    g.place(PX * 256 + 128, PY * 256 + 128, 0)
+    cone, drawn, pairs = [], [], {}
+    c.key_down(cpcmod.KEY_RIGHT)
+    for _ in range(80):
+        f0 = g.frames()
+        while g.frames() == f0:
+            c.run_us(4000)
+        a = c.peek(g.s["PLR_A"])
+        if c.peek(A_BX_BOT) and a not in drawn:
+            drawn.append(a)
+            pairs[a] = c.peek(A_PIP_P)
+        if c.peek(A_MON_BOT) and a not in cone:
+            cone.append(a)
+    c.key_up(cpcmod.KEY_RIGHT)
+    c.run_frames(12)
+    check(0 < len(cone) < len(drawn),
+          "the aim cone is NARROWER than the monster is visible across",
+          f"drawn on {len(drawn)} headings, hit on {len(cone)}"
+          f" = {len(cone)*5} of {len(drawn)*5} degrees: {sorted(cone)}")
+    check(len(cone) <= 2 * MON_HW + 1,
+          "...and no wider than the pairs it actually paints",
+          f"MON_HW {MON_HW} paints {2*MON_HW+1} pairs, cone is"
+          f" {len(cone)} headings; centre pair of each:"
+          + " ".join(f" h{a}:{pairs[a]}" for a in sorted(cone)))
+
+    # ---- (c) THREE ROUNDS.  The monster leaves the map by MONCELL going
+    #      #FF, which is what mon_draw, mon_scan and the radar all test.
+    c.poke(mc, MY * 16 + MX)
+    c.poke(mhp, MON_HPMAX)
+    c.poke(mtk, 99)
+    c.poke(g.s["PLR_AMMO"], AMMO_MAX)
+    g.place(PX * 256 + 128, PY * 256 + 128, sorted(cone)[0] if cone else 36)
+    hp = [c.peek(mhp)]
+    for _ in range(MON_HPMAX):
+        c.key_down(ord('z'))
+        c.run_frames(PACE_N + 5)
+        c.key_up(ord('z'))
+        c.run_frames(PACE_N + 5)
+        hp.append(c.peek(mhp))
+    check(hp == list(range(MON_HPMAX, -1, -1)),
+          f"{MON_HPMAX} rounds take it down one hit point each",
+          f"mon_hp {hp}")
+    check(c.peek(mc) == 0xFF, "at zero it leaves the map",
+          f"MONCELL = #{c.peek(mc):02X}")
+    check(c.peek(g.s["MON_BLIP"]) == 0xFF, "...and its radar blip goes out",
+          f"mon_blip = #{c.peek(g.s['MON_BLIP']):02X}")
+    n0 = c.peek(g.s["PLR_AMMO"])
+    c.key_down(ord('z'))
+    c.run_frames(PACE_N + 5)
+    c.key_up(ord('z'))
+    c.run_frames(PACE_N + 5)
+    check(c.peek(A_FX_PEN) != FX_BLOOD,
+          "a shot through where it stood no longer draws blood",
+          f"fx_pen = #{c.peek(A_FX_PEN):02X}, ammo {n0} -> "
+          f"{c.peek(g.s['PLR_AMMO'])}")
+
+    # =================================================================
+    print("\n11 FRAME PERIOD (measured, one gap at a time, five samples a"
           " vsync)")
     print("       The old four-chunk pad gave 80 ms 79% / 100 ms 20% /"
           " 120 ms 1% / 140 ms\n"

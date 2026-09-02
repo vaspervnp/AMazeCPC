@@ -182,6 +182,12 @@ MON_PEN     equ #F3         ; pen 13, firmware ink 9 (mauve) -- the one
                             ; blue walls and the olive floor
 MON_MAX     equ 6           ; L1 cells: it is not drawn past this
 MON_HMAX    equ 28          ; ...and no taller than this on screen
+MON_HW      equ 1           ; half width in column PAIRS, so three pairs.
+                            ; ONE CONSTANT, TWO READERS: it sets bx_hw
+                            ; below AND it is the aim cone, because the
+                            ; shot hits when the pairs this draws include
+                            ; the crosshair's.  They were two literals and
+                            ; the second one did not exist.
 
 mon_draw
     xor  a
@@ -223,7 +229,7 @@ mn_yp
     xor  a
     ld   (bx_sh),a                  ; half a cell tall...
     ld   (bx_air),a                 ; ...standing on the floor...
-    inc  a
+    ld   a,MON_HW
     ld   (bx_hw),a                  ; ...and three pairs wide
     ld   a,MON_HMAX                 ; ...and capped, because hud_rect costs
     ld   (bx_hmax),a                ; ~70 us a ROW and an uncapped monster
@@ -236,6 +242,36 @@ mn_yp
                                     ; into it, which is what walking into
                                     ; something looks like anyway.
     call box_draw
+
+    ; ---- AND ONLY IF IT COVERS THE CROSSHAIR.  This used to copy
+    ;      bx_bot unconditionally, which made the aim cone THE WHOLE
+    ;      FIELD OF VIEW: box_draw writes bx_bot once for the box, not
+    ;      once per pair, so "the monster drew" and "the monster drew
+    ;      where the gun is pointing" were the same test.  MEASURED on
+    ;      the booted disc, player four cells from the monster, all 72
+    ;      headings: the shot read flesh on ten of the eleven headings
+    ;      that had the monster anywhere on screen, including the two
+    ;      where it was against the viewport edge.
+    ;
+    ;      It did not matter while the monster was a target that could
+    ;      not be killed.  It matters the moment it has hit points,
+    ;      because three rounds anywhere near it is not aiming.
+    ;
+    ;      THE TEST IS THE DRAWN PAIRS, not an angle.  box_draw puts the
+    ;      box's centre pair in pip_p and paints pip_p-MON_HW..pip_p+MON_HW,
+    ;      so the cone is exactly "one of those pairs is the middle one"
+    ;      -- the pair fx_fire reads rc_dn at.  Three pairs of 22, and it
+    ;      is the same three the player can see the monster standing in.
+    ld   a,(bx_bot)
+    or   a
+    ret  z                          ; box_draw rejected it: mon_bot stays 0
+    ld   a,(pip_p)
+    sub  CNPAIR/2
+    jr   nc,mn_cp
+    neg
+mn_cp
+    cp   MON_HW+1
+    ret  nc                         ; drawn, but not over the middle pair
     ld   a,(bx_bot)                 ; ...and leave its foot for fx_fire
     ld   (mon_bot),a
     ret

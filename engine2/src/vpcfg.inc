@@ -52,26 +52,24 @@
 ;  and on the booted disc the sweep is one bar at 119.81 ms.
 ;
 ;  THAT IS THE SPAN RENDERER'S ANSWER AND THE DISC DOES NOT SHIP IT.
-;  VPCOL is 1 below, so the build is the column renderer at 40x96 with
-;  PACE_FRAMES 9 -- and that configuration does NOT read zero.  Measured
-;  the same way, exhaustively, with the HUD's charges billed where
-;  main3.asm actually makes them:
+;  VPCOL is 1 below, so the build is the column renderer at 44x96 with
+;  PACE_FRAMES 10.  Measured the same way, exhaustively, with the HUD's
+;  charges billed where main3.asm actually makes them:
 ;
-;      doors shut    143730 of 8128512  = 1.768%  need a 10th period
-;      doors open    437302 of 8792064  = 4.974%
-;      doors moving 3081362 of 8128512  = 37.908%
-;      worst charged frames  169232 / 190152 / 259107 us of 175104
+;      doors shut         0 of 8128512  = 0.000%
+;      doors open     17530 of 8792064  = 0.199%
+;      doors moving 1565642 of 8128512  = 19.261%
+;      worst charged frames  169232 / 190152 / 259107 us of 194560
 ;
-;  (0.854 / 3.574 / 35.171 until C_TAIL was re-fitted from 1950 to 3700
-;   against a measured 3573.4 -- the model had been under-charging the
-;   frame head by 1623 us and every pacing number was that much too
-;   kind.)
+;  SO THE SHIPPING BUILD READS ZERO TOO, for the map as it loads.  It
+;  did not at PACE_FRAMES 9, which read 1.768 / 4.974 / 37.908 -- and it
+;  read 0.854 / 3.574 / 35.171 before that only because C_TAIL was 1623
+;  us under the truth and the model was that much too kind.
 ;
-;  The zero above is real, and it is about a build nobody runs.  Left
-;  here because it is the reference the width work was done against --
-;  but do not read it as a statement about the shipping disc.  See the
-;  PACE_FRAMES block in main3.asm for that, and for the cost_add gap
-;  that most of the 0.854% comes out of.
+;  Note the doors-open worst frame, 190152, is INSIDE the 194560 budget:
+;  the 0.199% that is still over is greedy-packing waste, not work that
+;  does not fit.  See the cost_add note in main3.asm, and the measured
+;  negative result for the gate that was built to close it.
 ;
 ;  TWO CONSTANTS HAD TO MOVE WITH THE WIDTH, and both were found by
 ;  MEASURING at 44 rather than assuming 40's numbers carried over:

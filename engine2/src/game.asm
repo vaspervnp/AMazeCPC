@@ -293,6 +293,21 @@ gi_next
 ;  consists of.
 ; ---------------------------------------------------------------------
 ammo_arm
+    ; ---- THE MONSTER IS PART OF STARTING A LIFE, and it has to be put
+    ;      back BY VALUE.  MONCELL is a byte mon_move writes every
+    ;      MON_RATE frames and mon_hit sets to #FF, so by the time a
+    ;      restart runs it holds wherever the thing died -- which is
+    ;      nowhere.  MONSTART is the map's own equ, which nothing can
+    ;      overwrite; gen_march.py emits the pair for exactly this.
+    ld   a,MONSTART
+    ld   (MONCELL),a
+    ld   a,MON_HPMAX
+    ld   (mon_hp),a
+    ld   a,MON_RATE
+    ld   (mon_tick),a
+    ld   a,AMMO_NODIR
+    ld   (mon_blip),a
+
     ld   a,AMMO_MAX
     ld   (plr_ammo),a
     ld   hl,ammo_blip               ; no blip anywhere until the first scan,
@@ -375,8 +390,12 @@ fi_have                             ; nothing reads as a dropped key
     cp   FX_BLOOD                   ; ear and the eye should agree about
     ld   a,SFX_SHOT_STONE           ; whether that was a wall or a body
     jr   nz,fs_snd
-    ld   a,SFX_SHOT_FLESH
-fs_snd
+    call mon_hit                    ; FLESH: take a hit point off it, and
+fs_snd                              ; let it pick between the wet thump
+                                    ; and the death cry.  The ONE caller,
+                                    ; because fx_fire's compare is the one
+                                    ; place the engine knows the round
+                                    ; landed on the monster and not a wall
     call snd_play
     ld   a,RECOIL_N                 ; THE RECOIL IS THE FEEDBACK.  The pip
     ld   (gun_recoil),a             ; going out in the HUD is 8 pixels in
@@ -580,6 +599,191 @@ mon_scan
     or   c
 ms_none
     ld   (mon_blip),a               ; ...or A = #FF from the compare above
+    ret
+
+
+; ---------------------------------------------------------------------
+;  mon_hit -- one round landed in the monster.  Called by fire, on the
+;  frames pip.asm's fx_fire came back with FX_BLOOD.
+;
+;  OUT  A = the effect to play: the flesh hit, or the death.
+;  Clobbers AF HL.
+;
+;  DEATH IS #FF IN MONCELL, and that is the whole of it.  mon_draw,
+;  mon_scan and hud2.asm's radar all already test for #FF -- they had to,
+;  because a map with no monster on it is a legal map -- so removing the
+;  monster needs no new branch anywhere.  The one thing that does NOT
+;  follow from the byte is the blip: mon_scan writes it once a frame and
+;  would write it again next frame, but the radar is drawn from the LAST
+;  scan, so clearing it here is what stops one frame of a dead monster's
+;  mauve dot.
+; ---------------------------------------------------------------------
+MON_HPMAX   equ 3           ; rounds it takes.  Three of a magazine of
+                            ; six, so one monster costs half the ammo a
+                            ; player is carrying and a miss is felt.
+                            ;
+                            ; NOT `MON_HP`, WHICH IS THE OBVIOUS NAME.
+                            ; rasm's labels are CASE-INSENSITIVE, so the
+                            ; equ and the byte `mon_hp` below are the same
+                            ; symbol and it refuses to assemble -- which
+                            ; is the good outcome; the bad one would have
+                            ; been silence.  AMMO_MAX / plr_ammo is the
+                            ; same pairing and the same reason.
+
+mon_hit
+    ld   hl,mon_hp
+    dec  (hl)
+    ld   a,SFX_SHOT_FLESH
+    ret  nz                         ; still standing
+    ld   a,#FF
+    ld   (MONCELL),a                ; off the map, for everything that
+    ld   (mon_blip),a               ; reads either byte
+    ld   a,SFX_MONDIE
+    ret
+
+
+; ---------------------------------------------------------------------
+;  mon_move -- THE MONSTER WALKS AT YOU.  One cell every MON_RATE game
+;  frames, greedily: step along the axis you are further away on, and if
+;  that cell is solid try the other.
+;
+;  Clobbers AF BC DE HL.
+;
+;  GREEDY, AND HERE IS EXACTLY HOW INCOMPLETE THAT IS.  A rule with no
+;  memory walks into walls: put the player behind a doorway that is not
+;  on the straight line and the monster jams against the wall between
+;  them and stays there.  engine2/tools/monmodel.py replays this routine
+;  over EVERY (monster cell, player cell) pair the monster's own steps
+;  could join, with the player held still -- the state is one byte and
+;  the rule is deterministic, so a repeated cell is a proof of "never",
+;  not a timeout:
+;
+;      DOORS SHUT -- the map as it loads
+;        2160 of 2160 pairs = 100.00%, worst 5 steps
+;      DOORS OPEN
+;        13054 of 24180 = 53.99%, worst 24 steps
+;
+;  100% WITH THE DOORS SHUT IS NOT LUCK, it is the map: a shut door reads
+;  2 in SOLID, so the monster is sealed into one 4x4 room, and inside a
+;  rectangle with nothing in it greedy is complete.  That is the fight
+;  this game actually has -- the monster starts in the room the player
+;  starts in -- and it is why the rule is nine instructions instead of a
+;  search.
+;
+;  THE 46% WAS SHOPPED FOR AND NOT ACCEPTED BLIND.  Three richer rules
+;  were modelled over the same space (see monmodel.py's note): carry on
+;  in the last direction when both axes block, 57.24%; that plus a turn
+;  through the four neighbours, 61.75%; slide along the blocking wall,
+;  62.24%.  The best of them buys eight points, costs a byte of state and
+;  a dozen instructions, and still leaves the monster stuck more than a
+;  third of the time.  A rule that is wrong 38% of the time is not
+;  better than one that is wrong 46% of the time in a way that is easy to
+;  describe.  What would actually fix it is aiming at the DOORWAY rather
+;  than at the player, and that is a search.
+;
+;  IT NEVER ENTERS THE PLAYER'S CELL, and that is not politeness.  At L1
+;  zero the box's centre is at the near plane and pip.asm's box_draw
+;  rejects it, so a monster standing on the player would be invisible AND
+;  unshootable.  It stops at L1 1, in your face and fully drawn.
+; ---------------------------------------------------------------------
+MON_RATE    equ 6           ; game frames per cell.  THE PLAYER'S OWN
+                            ; SPEED IS THE SCALE: a walk is STEP/256 =
+                            ; 0.094 cells a frame and SHIFT doubles it to
+                            ; 0.188, so 1/6 = 0.167 is faster than
+                            ; walking and slower than running.  You
+                            ; cannot stroll away from it and you can run.
+                            ; At PACE_FRAMES 10 that is 1.2 s a cell, and
+                            ; the worst in-room chase above is 5 steps =
+                            ; 6.0 s to cross the room and reach you.
+
+mon_move
+    ld   a,(MONCELL)
+    inc  a
+    ret  z                          ; #FF: dead, or a map with none on it
+    ld   hl,mon_tick
+    dec  (hl)
+    ret  nz                         ; not its frame
+    ld   (hl),MON_RATE
+
+    ld   a,(MONCELL)
+    ld   c,a                        ; as_l1 wants the cell in C and leaves
+    call as_l1                      ; it there; (as_tdx)/(as_tdy) come out
+    cp   2                          ; signed, cell MINUS player
+    ret  c                          ; L1 0 or 1: arrived.  See the note
+
+    ld   a,(as_tdx)                 ; ---- the two candidate steps, each as
+    call mm_dir                     ;      a CELL OFFSET and a magnitude
+    ld   (mm_mx),a
+    ld   a,b
+    ld   (mm_ox),a
+    ld   a,(as_tdy)
+    call mm_dir
+    ld   (mm_my),a
+    ld   a,b                        ; a step in y is sixteen cells, and
+    add  a,a                        ; +-1 shifted left four times is +-16
+    add  a,a                        ; in eight bits, sign and all
+    add  a,a
+    add  a,a
+    ld   (mm_oy),a
+
+    ld   a,(mm_mx)                  ; ---- and the dominant axis goes first
+    ld   hl,mm_my
+    cp   (hl)
+    jr   c,mm_yfirst                ; TIES GO TO X, because >= is the free
+    ld   a,(mm_ox)                  ; branch after a CP
+    call mm_try
+    ret  nc
+    ld   a,(mm_oy)
+    jp   mm_try
+mm_yfirst
+    ld   a,(mm_oy)
+    call mm_try
+    ret  nc
+    ld   a,(mm_ox)
+    jp   mm_try
+
+; --- IN A = a signed offset.  OUT A = |offset|, B = the step TOWARD zero
+;     as -1, 0 or +1.  The sign is inverted because as_tdx is cell minus
+;     player: a monster east of the player has dx > 0 and must step west.
+mm_dir
+    ld   b,0
+    or   a
+    ret  z
+    jp   m,md_neg
+    ld   b,-1
+    ret
+md_neg
+    neg
+    ld   b,1
+    ret
+
+; --- IN A = a cell offset, C = the monster's cell.  Takes the step if
+;     the cell is open.  OUT carry SET = did not move, clear = moved.
+;
+;     SOLID AND NOT "not a wall": 0 is open, 1 a wall, 2 a shut door.  A
+;     shut door stops the monster exactly as it stops the player, which
+;     is what seals it into its room until the player opens one.
+;
+;     THE ADD CANNOT WALK OFF THE MAP.  A step of -1 from x = 0 would
+;     wrap into the previous row -- but row 0, row 15 and columns 0 and
+;     15 are wall in every map world.py will emit (it asserts a closed
+;     border), so the candidate always reads solid and is rejected
+;     before the wrap can be acted on.
+mm_try
+    or   a
+    scf
+    ret  z                          ; no offset on this axis at all
+    add  a,c
+    ld   l,a
+    ld   h,SOLID/256
+    ld   a,(hl)
+    or   a                          ; ...which also clears the carry
+    jr   z,mt_go
+    scf
+    ret                             ; wall or shut door
+mt_go
+    ld   a,l                        ; carry is still clear from the `or a`
+    ld   (MONCELL),a                ; -- and neither of these touches it
     ret
 
 
@@ -788,7 +992,13 @@ gs_walked
 
     call ammo_scan                  ; --- collect the pickup we are on,
                                     ;     else say where the nearest is
-    call mon_scan                   ; --- ...and where the monster is
+    call mon_move                   ; --- the monster takes its step...
+    call mon_scan                   ; --- ...and THEN says where it is.
+                                    ;     This order, because the radar is
+                                    ;     drawn from the last scan: scan
+                                    ;     first and the blip would be one
+                                    ;     cell and one frame behind the
+                                    ;     thing the renderer draws
 
     call fire_edge                  ; --- CTRL or Z, on the press edge
 
@@ -885,15 +1095,41 @@ sv_got
     jr   z,sv_store
     dec  a
     jr   nz,sv_q23
-    ld   a,e                        ; q1: (-s, c)
-    ld   e,d
-    neg
-    ld   d,a
-    ex   de,hl                      ; ...E must end up x, D y
-    ld   a,l
-    ld   l,h
-    ld   h,a
-    ex   de,hl
+    ; ---- q1: (x, y) = (-s, c).  AND IT USED TO COME OUT (-c, s).
+    ;
+    ;      What stood here swapped E and D, negated one, and then did
+    ;      `ex de,hl` / three loads / `ex de,hl` to "put E back as x" --
+    ;      which swapped them a SECOND time and undid the first.  The
+    ;      result was (-cos t, sin t): quadrant 1 mirrored about 135
+    ;      degrees.  sv_store reads nothing but D and E, so the whole HL
+    ;      dance was moving a value that was already where it belonged.
+    ;
+    ;      MEASURED on the booted disc, poking (plr_a) and reading
+    ;      (mv_dx)(mv_dy) at every 6th heading:
+    ;
+    ;          a=18  wanted  90.0 deg   got 180.0
+    ;          a=24  wanted 120.0 deg   got 150.3
+    ;          a=30  wanted 150.0 deg   got 119.7
+    ;
+    ;      and quadrants 0, 2 and 3 all exact.  THE RENDERER WAS RIGHT
+    ;      THE WHOLE TIME: gen_march.py writes MARCHTB for all 72
+    ;      headings out of Python's own cos/sin, and MARCHTB[18]'s fwd is
+    ;      (0, 1024) = due south.  So on eighteen of the seventy-two
+    ;      headings the player LOOKED SOUTH AND WALKED WEST.
+    ;
+    ;      Nothing caught it because nothing tested quadrant 1:
+    ;      emu_verify3 checked heading 0 (east) and heading 63 (315 deg),
+    ;      the walk test walks east, and emu_pace's corridors() asked for
+    ;      heading 18 believing it was south -- which is how this
+    ;      surfaced at all, as a corridor that walked 0.000 cells along
+    ;      its own axis.  emu_verify3 now sweeps ALL 72.
+    ;
+    ;      This is the same shape as sv_q3 below: swap, then negate the
+    ;      one that needs it.
+    ld   a,d                        ; A = sin
+    neg                             ; ...= -sin
+    ld   d,e                        ; D = cos
+    ld   e,a                        ; E = -sin
     jr   sv_store
 sv_q23
     dec  a
@@ -1450,6 +1686,15 @@ ammo_blip   ds MAXAMMO          ; ONE PACKED (band << 4) | WORLD SECTOR
                                 ; nose-relative for the direction pad.
 as_cur      db 0                ; the distance of the pickup being looked at
 as_ix       db 0                ; ...and its slot in ammo_blip
+mon_hp      db MON_HPMAX         ; rounds it can still take.  0 is death,
+                                ; and death is #FF in MONCELL -- see
+                                ; mon_hit
+mon_tick    db MON_RATE         ; game frames until its next cell.  Counts
+                                ; DOWN, reloaded by mon_move
+mm_ox       db 0                ; mon_move's two candidate steps, each a
+mm_oy       db 0                ; signed CELL offset (+-1, +-16)...
+mm_mx       db 0                ; ...and how far away the player is on
+mm_my       db 0                ; that axis, which picks the order
 mon_blip    db AMMO_NODIR       ; the monster's packed bearing, for the
                                 ; dial.  Its own byte -- see mon_scan
 as_bi       db 0                ; ...and which slot the winner was in

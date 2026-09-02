@@ -111,9 +111,16 @@ test: amaze
 	$(PYTHON) engine2/tools/emu_game.py all
 
 # boot the built disc and check mode, double buffering, turning, walking,
-# collision, doors and the measured frame period -- all read out of the
-# running machine
+# collision, doors, THE MONSTER and the measured frame period -- all read
+# out of the running machine.
+#
+# monmodel.py runs FIRST and on its own, because emu_verify3's monster
+# section imports it and compares the disc's cells against its steps: if
+# the two disagree the interesting question is which one is wrong, and
+# the model's own summary -- how much of the map the greedy rule covers
+# -- is what says whether the RULE changed or the DISC did.
 verify: amaze
+	$(PYTHON) engine2/tools/monmodel.py
 	$(PYTHON) engine2/tools/emu_verify3.py
 
 # the rasteriser, byte for byte against its model.  TWO of them now:

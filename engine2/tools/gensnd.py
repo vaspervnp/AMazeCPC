@@ -8,9 +8,9 @@ scan_keys already speaks half the protocol, because reading a key row IS
 an AY register read -- so the hardware was one pulse away the whole time.
 
 FIFTY TICKS A SECOND, ON A FIVE-FRAME-A-SECOND GAME.  The engine runs
-interrupts OFF and draws 5.56 frames a second, which is far too coarse
-for a gunshot: a two-step envelope would last 360 ms.  But every one of
-the nine vsync waits a frame goes through ONE routine, main3.asm's
+interrupts OFF and draws 5.01 frames a second, which is far too coarse
+for a gunshot: a two-step envelope would last 400 ms.  But every one of
+the PACE_FRAMES vsync waits a frame goes through ONE routine, main3.asm's
 wait_vsync, so hanging the sound tick there gives a true 50 Hz driver
 with no interrupt and no second clock.  That is the whole trick.
 
@@ -18,8 +18,8 @@ A STEP IS SIX BYTES AND A TICK USUALLY WRITES NOTHING.  An effect is a
 list of steps; a step holds every AY register the driver touches and how
 many ticks to hold it.  So the common tick -- inside a held step -- is a
 decrement and a return, and the expensive one only happens when the
-sound actually changes.  That matters because the tick runs nine times a
-frame and the frame budget is measured in microseconds.
+sound actually changes.  That matters because the tick runs PACE_TICKS
+times a frame and the frame budget is measured in microseconds.
 
 MIXER VALUES KEEP BITS 6 AND 7 CLEAR, ALWAYS.  R7 bit 6 is the direction
 of the AY's port A, and on a CPC port A is the KEYBOARD.  Setting it
@@ -60,10 +60,12 @@ BOTH = TONE & NOISE
 MAXVOL = 15
 
 # ---- WHAT C_SND RESTS ON, AND IT IS AN INVARIANT ABOUT THIS FILE -----
-#  main3.asm charges C_SND = 2200 us once a frame for all nine of the
-#  frame's sound ticks.  That number was measured at 1944 us worst, and
-#  the frame it was measured on is the one where SFX_SHOT's steps land
-#  four STEP CHANGES plus the stop inside a single nine-tick window.
+#  main3.asm charges C_SND = 2200 us once a frame for all PACE_TICKS of
+#  the frame's sound ticks.  That number was measured at 1944 us worst on
+#  a NINE-tick frame, and the frame it was measured on is the one where
+#  SFX_SHOT's steps land four STEP CHANGES plus the stop inside a single
+#  window.  At ten ticks the same four loads sit in the window with one
+#  more idle tick beside them: 1944 + 31 = 1975, still under 2200.
 #
 #  A tick that sits inside a held step is a decrement and a return.  A
 #  tick that CHANGES step writes five AY registers through snd_wr, and
@@ -86,8 +88,32 @@ MAXVOL = 15
 #  1944 us for four changes is MEASURED; four is therefore the ceiling
 #  that measurement licenses, and a fifth change means C_SND has to be
 #  re-measured before it can be trusted -- which is what the assert says.
-PACE_TICKS = 9          # snd_tick calls in one game frame: PACE_FRAMES
-MAX_CHANGES = 4         # ...step changes allowed inside any nine of them
+#
+#  AND THE WINDOW IS READ OUT OF main3.asm, NOT WRITTEN HERE.  It was
+#  `PACE_TICKS = 9` with a comment saying ": PACE_FRAMES", which is a
+#  copy of a constant that has moved twice.  When PACE_FRAMES went to 10
+#  this file would still have slid a NINE-tick window over the effects
+#  and licensed a table with five loads in the frame's real ten -- the
+#  same second-copy failure C_BG had, and the reason pacemodel.py reads
+#  every C_* out of the disc's own source.  A window that is too short
+#  is the dangerous direction: it under-counts, so it passes.
+
+
+def _equ(name, default, src="main3.asm"):
+    """Read an `equ` out of the source, the same way pacemodel.py does."""
+    path = os.path.join(_E2, "src", src)
+    for line in open(path):
+        p = line.split()
+        if len(p) >= 3 and p[0] == name and p[1] == "equ":
+            try:
+                return int(p[2])
+            except ValueError:
+                return default
+    return default
+
+
+PACE_TICKS = _equ("PACE_FRAMES", 10)    # snd_tick calls in one game frame
+MAX_CHANGES = 4         # ...step changes allowed inside any ten of them
 
 
 def tone(hz):
@@ -154,6 +180,23 @@ EFFECTS = [
         (4, tone(250), None, 10),
         (6, tone(300), None, 7),
         (6, tone(330), None, 3),
+    ]),
+
+    # ---- 7: the monster dying, and it is the LONGEST effect here on
+    #      purpose.  Every other sound in the game is an event; this one
+    #      is a consequence, and it is the only feedback that the third
+    #      round did something the first two did not.  A falling tone
+    #      under opening noise -- 18 ticks, 360 ms, most of two frames.
+    #
+    #      IT MUST NOT SOUND LIKE shot_flesh, which is what the first
+    #      two rounds play.  That one is a 110 Hz thump inside the
+    #      crack; this starts above it and falls THROUGH it, so the ear
+    #      hears a pitch moving rather than a single hit.
+    ("mondie", [
+        (3, tone(240), 20, 13),
+        (4, tone(170), 24, 12),
+        (5, tone(120), 28, 9),
+        (6, tone(85), 31, 5),
     ]),
 
     # ---- 6: picking up ammunition.  Two rising notes, short and clean,
@@ -232,7 +275,8 @@ def build():
             f"(window from tick {at}{', with the stop' if stop_in else ''})"
             f"; C_SND = 2200 us in main3.asm was MEASURED at "
             f"{MAX_CHANGES} loads plus a stop -- 1944 us. A fifth load "
-            f"is about 2320 and the frame takes a tenth vsync period. "
+            f"is about 2320 and the frame takes one vsync period more "
+            f"than PACE_FRAMES. "
             f"Re-measure C_SND before raising MAX_CHANGES, or give the "
             f"effect's early steps more ticks.")
         out.append((name, rows))
