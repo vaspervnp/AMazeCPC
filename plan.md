@@ -50,9 +50,9 @@ times 72 headings — in each of the three door configurations.
 
 | doors | at `PACE_FRAMES` 9 | at 10 | worst charged frame |
 |---|---:|---:|---:|
-| shut — the map as it loads | 1.768% | **0.000%** | 169232 µs |
-| open | 4.974% | **0.199%** | 190152 µs |
-| moving | 37.908% | 19.261% | 259107 µs |
+| shut — the map as it loads | 1.768% | **0.000%** | 170932 µs |
+| open | 4.974% | **0.199%** | 191852 µs |
+| moving | 37.908% | 19.261% | 260807 µs |
 
 Zero out of 8128512. That is the sentence this project has had to
 withdraw twice, and this is the first time it rests on an exhaustive
@@ -66,7 +66,7 @@ zero, is the headroom the monster's pursuit was then spent out of:
 `PACE_FRAMES` 9 that alone would have put states back over.
 
 **Doors open is still 0.199%** — one frame in 500 — and its worst frame,
-190152, is *inside* the 194560 budget. So what remains is greedy-packing
+191852, is *inside* the 194560 budget. So what remains is greedy-packing
 waste, not work that does not fit. `cost_unit` yields when the next unit
 does not fit and throws the rest of the interval away, so waste scales
 with the biggest units; after `C_BG` the biggest is `C_PIP` at 8200, one
@@ -75,7 +75,7 @@ ways is the same move `RQ_SPLIT` is in `raster.asm`, and like `RQ_SPLIT`
 it wants measuring before believing. Not done.
 
 **Doors in motion is halved but not solved** — 19.261%, worst frame
-259107, the moving-door overlay pass drawing a second time. A player
+260807, the moving-door overlay pass drawing a second time. A player
 cannot make sixteen doors move at once, so it bounds a case that does not
 occur rather than describing one that does; it is still the one
 configuration this engine cannot claim.
@@ -324,12 +324,15 @@ never saw this and why its results stand. Fixed by doing the same.
   had in it.
 - Six ammunition pickups drawn on the floor, occluded exactly by the
   wall line the renderer leaves in `rc_dn`.
-- **One monster that walks at you and can be killed.** 3 hit points, one
-  cell every 6 frames, greedy pursuit; at 0 it leaves the map and its
-  radar blip goes out. The aim cone is the three column pairs it actually
-  paints, so you have to point at it.
+- **One monster that walks at you, hurts you, and can be killed.** 3 hit
+  points, one cell — or one bite — every 6 frames, greedy pursuit; at 0
+  it leaves the map and its radar blip goes out. The aim cone is the
+  three column pairs it actually paints, so you have to point at it.
+- **Player health, and death.** 5 hit points on a bar in the bottom-left
+  slot; at 0 a death screen, and SPACE rebuilds the world for a new life.
+  The map points you at the monster on the first frame (`START_A`).
 - A title screen with the keys and the credit line.
-- Sound: six AY effects, ticked at a true 50 Hz out of `wait_vsync` —
+- Sound: nine AY effects, ticked at a true 50 Hz out of `wait_vsync` —
   the shot picks stone or flesh from the same test the impact mark does.
 
 ---
@@ -376,15 +379,41 @@ Ordered by what unlocks the most, with the honest cost of each.
   headings the monster was visible on. `mon_draw` now copies `bx_bot`
   only when the pairs it painted include the crosshair's — measured
   again, **2 headings of 11, 10° of 55**.
-- **Damage and player death — the obvious next piece.** The monster now
-  walks up to you and stands there. Contact needs to cost health, which
-  needs a health readout (a third HUD slot, same machinery as the pips)
-  and a death state. Note `MENUBUF equ SOLID`: death has to restart the
-  world, not resume it.
+- ~~**Damage and player death.**~~ **Done.** The monster's turn is a
+  step *or* a bite, never both — `mon_bite` is reached from `mon_move`'s
+  own `MON_RATE` tick when there is no cell left to step into because
+  you are standing in the next one. So "how fast is the monster" has one
+  answer instead of two that can drift: one cell or one hit point every
+  6 frames, 1.2 s.
+
+  `PLR_HPMAX` is 5 — six seconds of contact. The readout is a **bar**
+  and not pips, because `hud_rect` is priced per *row*: two rectangles
+  of 8 rows against six pips of 8. MEASURED 1555.3 µs at 1–4 hit points
+  and 981.1 at the ends, where one of the two has zero width and is
+  skipped; `C_HP` is 1700. My arithmetic said 1120 and the bench said
+  otherwise — `hud_rect` has ~400 µs of setup per *call* on top of its
+  rows.
+
+  Death shows `menu_dead` and restarts. `MENUBUF equ SOLID` forced that
+  and it turned out to be the right structure: painting either screen
+  writes 669 bytes over the map, so `new_game` rebuilds the world —
+  which is what starting a life needs anyway.
+
+- **The opening was unsurvivable and the fix was one line of the map.**
+  `game_init` set `plr_a = 0`, due east, with the monster two cells
+  *west* — behind your head. Measured: it steps adjacent on frame 6 and
+  bites from frame 12, so five hit points are gone by frame 36, and a
+  180° turn is 36 frames at one 5° step each. You died without ever
+  seeing what killed you. `gen_march.py` now derives `START_A` from the
+  start cell and the monster cell, so the map points you at it; from a
+  cold boot, three rounds kill it before it touches you.
 - **More than one.** `mon_draw` handles a single monster from one cell
   in `gen_maze.inc`. A list of four, like `AMMOTAB`, is the same shape —
   but four monsters at 8200 µs of overlay is where the frame budget
   says stop. **Budget first, then count.**
+- **And it is still one monster, so the game is one fight long.** Kill
+  it and the maze is empty: six pickups, twelve doors and nothing to
+  spend a round on. That is the honest state of it.
 
 ### 2. A reason to be in the maze
 
@@ -561,15 +590,14 @@ legal map is.
 1. ~~**Sound.**~~ Done, `ae0c6d0` — with the caveats above.
 2. ~~**Monster hit points, death, and simple pursuit.**~~ **Done**, with
    `PACE_FRAMES` 10 underneath it to pay for the pursuit.
-3. **Player health and death — the half of the loop that is missing.**
-   The monster walks up to you and nothing happens. Contact is `L1 == 1`
-   (it cannot be 0: `box_draw` rejects at the near plane, so a monster on
-   your own cell is invisible and unshootable, which is why `mon_move`
-   stops at 1). Needs: a health byte, a readout — one rectangle at
-   560–704 µs, **not** a bar at 1905–3811 — and a death state that
-   restarts the world, because `MENUBUF equ SOLID`.
-4. **An exit, and a score.** Now killing the monster and crossing the
-   maze mean something.
+3. ~~**Player health and death.**~~ **Done** — the bite, the bar, the
+   death screen, and a `START_A` that makes the opening survivable.
+4. **An exit, and a score — the loop still has no END.** You can be
+   killed and you can kill; you cannot win. An exit door that ends the
+   level is trivial in the map format and needs a "level complete"
+   screen, which `menu.asm` now takes as one more word list. A score
+   line is the same blitter pointed at the HUD, and there are four empty
+   readout slots left.
 5. **The editor**, once there is a reason to draw a second level.
 6. **The cheap world blitter**, when the monster count wants it.
 7. **The moving-door pass** — 19.261% and the one configuration the

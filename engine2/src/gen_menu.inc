@@ -8,9 +8,10 @@ MN_GH        equ 6   ; glyph rows
 MN_PITCH     equ 3   ; screen bytes from one glyph to the next
 MN_LINE      equ 8   ; scanlines from one row of text to the next
 MN_NPEN      equ 5   ; nibble tables, one a pen
-MN_BLOB      equ 568   ; bytes to copy down
+MN_BLOB      equ 669   ; bytes to copy down
 
 MN_O_PENS    equ 0   ; ...and where each part starts
 MN_O_FONT    equ 160
 MN_O_TEXT    equ 394
+MN_O_DEAD    equ 568
 

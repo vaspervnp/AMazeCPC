@@ -45,6 +45,11 @@ VSYNC_MS = 19.968                       # 312 lines x 64 us
 # did when PACE_FRAMES went to 10.
 SAMPLE_US = 250
 
+# game.asm's, read from the source: place() restores it -- see there.
+PLR_HPMAX = int([l.split()[2] for l in open(os.path.join(_E2, "src",
+                                                         "game.asm"))
+                 if l.startswith("PLR_HPMAX")][0])
+
 # main3.asm's PACE_FRAMES, read from the source so this file cannot drift
 # from the disc it is measuring.
 PACE_N = int([l.split()[2] for l in open(os.path.join(_E2, "src",
@@ -224,6 +229,19 @@ class Rig:
         first frame after the jump."""
         if settle is None:
             settle = 3 * PACE_N
+        # ---- AND PUT THE PLAYER BACK ON HIS FEET.  The monster hunts
+        # now and bites every MON_RATE frames once it is next to you, so
+        # a sweep of 600 states x 8 frames kills the player part way
+        # through -- and the death screen STOPS THE FRAME LOOP, which is
+        # what this file measures.  MEASURED: the sweep collected 72 game
+        # frames instead of 4800 and emu_pace3 146 instead of 10184.
+        #
+        # The monster is left ON the map on purpose: mon_draw is real
+        # work in a real frame and taking it off would measure a frame
+        # the disc does not draw.  Only the consequence is undone, and
+        # only at a teleport, which is not something a player does
+        # anyway.  Same discipline as emu_holes.py's preludes.
+        self.c.poke(self.s["PLR_HP"], PLR_HPMAX)
         self.c.write_ram(self.s["PLR_X"], struct.pack("<H", px))
         self.c.write_ram(self.s["PLR_Y"], struct.pack("<H", py))
         self.c.poke(self.s["PLR_A"], a)

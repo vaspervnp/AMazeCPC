@@ -240,7 +240,7 @@
 ;  extra yield, so it trades a rare late frame for a frequent one.
 ;
 ;  AND KNOWING WHICH KIND IT WAS IS WHAT FIXED IT.  A budget failure is
-;  answered with budget: PACE_FRAMES went to 10, the same 169232 now sits
+;  answered with budget: PACE_FRAMES went to 10, the same frame now sits
 ;  against 194560, and the doors-shut over-budget count is ZERO out of
 ;  8128512.  The gate would have made that worse in both configurations.
 ;
@@ -427,15 +427,15 @@ SCR_BACK    equ #8000
 ;        4  0.033%   5  2.277%   6  7.750%   7 47.861%   8 40.311%
 ;        9  1.768%   <-- the last bucket that FITS
 ;        OVER BUDGET: 0.  Not "few".  ZERO, out of eight million.
-;        worst charged frame 169232 us against a budget of 194560
+;        worst charged frame 170932 us against a budget of 194560
 ;
 ;      DOORS OPEN, 8792064 states
 ;        ...17530 over budget = 0.199%, one frame in 500
-;        worst charged frame 190152 us -- INSIDE the budget, so what is
+;        worst charged frame 191852 us -- INSIDE the budget, so what is
 ;        left is packing waste and not work; see the cost_add note
 ;
 ;      DOORS MOVING, 8128512 states -- see-through AND still drawn
-;        ...19.26% over budget, worst charged frame 259107 us
+;        ...19.26% over budget, worst charged frame 260807 us
 ;
 ;  THE PERIOD IS LOCKED FOR THE MAP AS IT LOADS, AND THAT SENTENCE HAS
 ;  BEEN WITHDRAWN TWICE BEFORE, so here is exactly what it now rests on:
@@ -812,6 +812,42 @@ C_SCAN      equ 650         ; hud_scan WHEN IT PAINTS -- the ammo
                             ; kind of work because the pips are six
                             ; rectangles and this is at most two: the
                             ; eight unlit bearings are furniture.
+C_HP        equ 1700        ; hud_health WHEN IT PAINTS -- the health bar
+                            ; in the bottom-left slot.  Charged by
+                            ; hud2.asm through cost_add, exactly like
+                            ; C_AMMO and C_SCAN, and for the same reason.
+                            ;
+                            ; TWO RECTANGLES OF EIGHT ROWS, WHICH IS THE
+                            ; WHOLE DESIGN.  hud_rect is priced per ROW,
+                            ; so a readout costs (rectangles x rows) and
+                            ; not (rectangles): the ammo pips are six of
+                            ; eight rows = 48 and cost 4000; this is two
+                            ; of eight.  Five health PIPS would have been
+                            ; ~3400 us for the same information, and
+                            ; health moves far more often than the round
+                            ; count when a monster is on you.
+                            ;
+                            ; MEASURED, emu_holes.py (d), at every hit
+                            ; point the bar can show:
+                            ;
+                            ;   0 of 5     981.1 us   one rectangle
+                            ;   1..4      1555.3 us   both
+                            ;   5 of 5     981.1 us   one rectangle
+                            ;
+                            ; 1400 WAS 155.3 UNDER, and it was under
+                            ; because it was ARITHMETIC AND NOT A BENCH:
+                            ; "16 rows at ~70 us" gives 1120 and forgets
+                            ; that hud_rect has ~400 us of setup per CALL
+                            ; on top of its rows.  The bench said so on
+                            ; the first run.  1700 clears 1555.3 by
+                            ; 144.7, the margin C_HUD carries.
+                            ;
+                            ; The ends are cheap because one rectangle is
+                            ; skipped: at zero there is no bar to draw
+                            ; and at full there is nothing to erase.  A
+                            ; bench of ONE hit point value would have
+                            ; found 981 and set the constant there --
+                            ; which is why (d) sweeps all six.
 ; ---- THE DIAL'S RADAR, hud2.asm:hud_radar, IN THREE PIECES ---------
 ;  MEASURED on the booted disc with a harness that poisons the buffer's
 ;  remembered blips on every iteration, so the worst case is what the
@@ -1154,17 +1190,35 @@ start
                                     ; state; silence it before the menu
     call set_palette
 
+    ld   hl,menu_show               ; ---- WHICH SCREEN COMES FIRST.  At
+    ld   (nl_screen),hl             ; boot it is the title; after the last
+                                    ; hit point, player_died points this
+                                    ; at menu_dead and jumps back here.
+
+; ---------------------------------------------------------------------
+;  new_game -- EVERYTHING A LIFE NEEDS, and the death loop re-enters it.
+;
+;  It has to be all of this and not a subset, because menu.asm's MENUBUF
+;  IS SOLID: painting either screen writes 669 bytes over the map, the
+;  flood's MARK array and the front of the quad list.  So a death screen
+;  cannot be shown and the game resumed -- the world has to be rebuilt,
+;  which is exactly what these five calls do anyway.  What looked like an
+;  awkward constraint turned out to name the right structure.
+; ---------------------------------------------------------------------
+new_game
+    ld   sp,STACKTOP                ; player_died jumps here out of the
+                                    ; middle of the frame loop
+
     ld   hl,SCR_BACK                ; both buffers black first: hud_static
     call clear_16k                  ; paints furniture, not background, and
     ld   hl,SCR_FRONT               ; leaves the gaps between its rectangles
     call clear_16k                  ; as whatever was there
 
-    ld   a,#30                      ; ---- THE TITLE SCREEN.  It needs the
-    call crtc_r12                   ; front buffer on display and the
-    call menu_show                  ; palette up, which set_palette has
-                                    ; just done; it paints SCR_FRONT and
-                                    ; returns when SPACE has been pressed
-                                    ; AND released.
+    ld   a,#30                      ; ---- THE SCREEN.  It needs the front
+    call crtc_r12                   ; buffer on display and the palette up,
+    ld   hl,(nl_screen)             ; which set_palette did once at boot;
+    call nl_call                    ; it paints SCR_FRONT and returns when
+                                    ; SPACE has been pressed AND released.
     ld   hl,SCR_FRONT               ; ...and then the title goes, so the
     call clear_16k                  ; HUD's furniture lands on black
 
@@ -1189,15 +1243,19 @@ start
     ld   a,(ammo_dir)               ; slot on the frame before its first
     call hud_scan                   ; hud_ammo / hud_scan / hud_radar
     call hud_radar
-    ld   a,#80
-    call hud_setbuf
-    call hud_static
+    ld   a,(plr_hp)                 ; ...and the health bar, likewise: it
+    call hud_health                 ; has an early-out on "unchanged", so
+    ld   a,#80                      ; a buffer never painted would keep a
+    call hud_setbuf                 ; DEAD player's empty bar through the
+    call hud_static                 ; whole of the next life
     call hud_update
     ld   a,(plr_ammo)
     call hud_ammo
     ld   a,(ammo_dir)
     call hud_scan
     call hud_radar
+    ld   a,(plr_hp)
+    call hud_health
 
     ld   a,#30                      ; display the front buffer
     call crtc_r12
@@ -1249,6 +1307,8 @@ main_loop
     ld   a,(ammo_dir)               ; only when it paints -- see C_AMMO
     call hud_scan                   ; ...and the scanner, likewise C_SCAN
     call hud_radar                  ; ...and the dial's blips and sweep
+    ld   a,(plr_hp)                 ; ...and the health bar, which charges
+    call hud_health                 ; C_HP and only when it moves
     ld   bc,C_PIP                   ; the pickup on the floor: it goes on
     call cost_unit                  ; TOP of the walls and is cut by the
     call pip_draw                   ; floor line they left in rc_dn
@@ -1278,8 +1338,31 @@ main_loop
     call flip
     call game_step
     or   a
-    jp   z,main_loop
-    ; fall through to quit
+    jp   nz,quit                    ; ESC
+
+    ; ---- AND THE OTHER WAY TO STOP PLAYING.  game_step's return value
+    ;      is the ESC key and nothing else; death is a separate byte
+    ;      because it is decided deep inside game_step (mon_bite, in
+    ;      mon_move, on the monster's own tick) and threading a second
+    ;      meaning through that return would make every caller of
+    ;      game_step -- including engine2/test/tst_game.asm -- care.
+    ld   a,(plr_hp)
+    or   a
+    jp   nz,main_loop
+
+player_died
+    ld   hl,menu_dead
+    ld   (nl_screen),hl
+    jp   new_game                   ; which resets SP, repaints, and calls
+                                    ; game_init -> ammo_arm, where the
+                                    ; player gets his hit points back
+
+; --- CALL THE ROUTINE IN HL.  Three bytes, and the alternative is a
+;     branch on a flag that means the same thing twice.
+nl_call
+    jp   (hl)
+
+nl_screen   dw 0                    ; -> menu_show or menu_dead
 
 
 ; ---------------------------------------------------------------------

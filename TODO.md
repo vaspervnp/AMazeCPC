@@ -29,7 +29,7 @@ first; every number here is written down next to the code it constrains.
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
 | `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
 | `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 over budget |
-| `pacescan.py` (doors OPEN) | 17,530 of 8,792,064 = **0.199%**, worst frame 190152 of 194560 |
+| `pacescan.py` (doors OPEN) | 17,530 of 8,792,064 = **0.199%**, worst frame 191852 of 194560 |
 | `pacescan.py` (doors MOVING) | 1,565,642 of 8,128,512 = **19.261%** — the open problem |
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
 | `monmodel.py` | **PASS** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs |
@@ -115,9 +115,9 @@ the farthest-bucket line is the one that matters, because `march.asm`
 files a face by `|dx| + |dy|` with **no upper bound**, and a key of 8
 would write into the page above the last bucket.
 
-The bigger rooms cost 9 states of 8.1 million a tenth period. That was
+The bigger rooms cost 9 states of 8.1 million an extra period. That was
 paid for by making `rc_charge` cheap (below) rather than by a slower
-frame: `PACE_FRAMES` stays 9.
+frame; `PACE_FRAMES` was 9 then and is 10 now, for the reason in &sect;1.
 
 **`rc_charge` went from ~500 µs a pair to ~100.** It ran `rc_mul8` — an
 eight-iteration loop — twice and counted bands besides, ~11 ms of a frame

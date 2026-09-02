@@ -36,4 +36,4 @@ CFARIDX     equ 156              ; ...and the offset in it.  rc_far
                                     ; dominant colour is not in every
                                     ; column, and column 0 is the wall's
                                     ; left edge, which does not have it.
-TEXEND      equ #7F22
+TEXEND      equ #7F87

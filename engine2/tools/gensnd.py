@@ -199,6 +199,17 @@ EFFECTS = [
         (6, tone(85), 31, 5),
     ]),
 
+    # ---- 8: TAKING A HIT.  Short, low and ugly, and it must not be
+    #      confusable with shot_flesh -- that one is the player DOING
+    #      something and this one is the player LOSING something.  So:
+    #      no crack at the front, and the pitch goes UP into a squeal
+    #      rather than down into a thump.
+    ("hurt", [
+        (2, tone(150), 12, 14),
+        (3, tone(200), 18, 11),
+        (3, tone(260), 24, 6),
+    ]),
+
     # ---- 6: picking up ammunition.  Two rising notes, short and clean,
     #      the one sound in the game that should feel like a reward.
     ("pickup", [

@@ -172,6 +172,24 @@ def _pe(name):
 
 MON_HW = _pe("MON_HW")
 FX_BLOOD = 0xC3
+PLR_HPMAX = _equ("PLR_HPMAX")
+
+# ...and the health bar's geometry, which genhud.py derives from the slot
+# that holds it.  Read, not copied: section 11 checks the PIXELS.
+_GH = open(os.path.join(_E2, "src", "gen_hud.inc")).read().split("\n")
+
+
+def _gh(name):
+    for line in _GH:
+        p = line.split()
+        if len(p) >= 3 and p[0] == name and p[1] == "equ":
+            return int(p[2].replace("#", "0x"), 0)
+    raise SystemExit(f"{name} not found in gen_hud.inc")
+
+
+HUD_HPX, HUD_HPY = _gh("HUD_HPX"), _gh("HUD_HPY")
+HUD_HPW, HUD_HPSEG = _gh("HUD_HPW"), _gh("HUD_HPSEG")
+HUD_HPPEN = _gh("HUD_HPPEN")
 
 # pip.asm's scratch is `equ`, and rasm emits no symbol for an equ, so
 # these are computed the way the source computes them.  The asserts in
@@ -251,12 +269,41 @@ def main():
     # whole map -- so reading it there tests nothing about game_init.
     # First attempt did exactly that and read #FF.
     mon_at_boot = c.peek(g.s["MONCELL"])
+    # ...AND THEN TAKEN OFF THE MAP FOR SECTIONS 1-9.
+    #
+    #  It hunts now.  Section 7 walks the player onto all six pickups and
+    #  section 8 stands him in seventeen places; the monster follows,
+    #  bites, and the player DIES half way through -- after which the
+    #  death screen has stopped the frame loop and every check below it
+    #  is measuring a machine that is not running.  MEASURED: eight
+    #  checks in sections 7, 8, 10 and 11 failed at once, and every one
+    #  of them was this.
+    #
+    #  #FF is a legal map -- mon_draw, mon_scan and mon_move all test for
+    #  it -- so this is not a special mode, it is the no-monster map.
+    #  Section 10 puts it back, because that is the section about it.
+    c.poke(g.s["MONCELL"], 0xFF)
 
     def check(cond, what, detail):
         nonlocal ok
         if not cond:
             ok = False
         print(f"  [{'PASS' if cond else 'FAIL'}] {what}: {detail}")
+
+    def gframe(limit=60):
+        """Run until (frame_ctr) moves.  -> False if it never does.
+
+        THE BOUND IS NOT DEFENSIVE PROGRAMMING, IT IS THE TEST.  The
+        obvious `while frames() == f0: run_us(...)` spins for ever the
+        moment the player dies, because the death screen stops the frame
+        loop -- which is precisely what section 11 exists to check.  It
+        hung the whole run once before this was written."""
+        f0 = g.frames()
+        for _ in range(limit * 6):          # 6 x 4 ms is over a period
+            c.run_us(4000)
+            if g.frames() != f0:
+                return True
+        return False
 
     print("1  SCREEN MODE")
     check(c.mode == 0, "mode 0", f"c.mode = {c.mode}")
@@ -334,9 +381,7 @@ def main():
     bad = []
     for a in range(72):
         c.poke(g.s["PLR_A"], a)
-        f0 = g.frames()
-        while g.frames() == f0:
-            c.run_us(4000)
+        gframe()
         dx = struct.unpack("<h", c.read_ram(g.s["MV_DX"], 2))[0]
         dy = struct.unpack("<h", c.read_ram(g.s["MV_DY"], 2))[0]
         got = math.degrees(math.atan2(dy, dx)) % 360
@@ -669,16 +714,12 @@ def main():
     g.place(PX * 256 + 128, PY * 256 + 128, 0)
     disc, want, m = [], [], MY * 16 + MX
     for _ in range(4):
-        f0 = g.frames()
-        while g.frames() == f0:         # exactly one GAME frame
-            c.run_us(4000)
+        gframe()                        # exactly one GAME frame
         disc.append(c.peek(mc))
         m = MM.step(solid, m, PX, PY)
         want.append(m)
         for _ in range(MON_RATE - 1):   # ...and the frames it holds still
-            f0 = g.frames()
-            while g.frames() == f0:
-                c.run_us(4000)
+            gframe()
     check(disc == want, "it walks the cells monmodel.py says it walks",
           f"disc {disc}, model {want}")
     check(disc[-1] == PY * 16 + PX - 1,
@@ -696,9 +737,7 @@ def main():
     cone, drawn, pairs = [], [], {}
     c.key_down(cpcmod.KEY_RIGHT)
     for _ in range(80):
-        f0 = g.frames()
-        while g.frames() == f0:
-            c.run_us(4000)
+        gframe()
         a = c.peek(g.s["PLR_A"])
         if c.peek(A_BX_BOT) and a not in drawn:
             drawn.append(a)
@@ -749,7 +788,104 @@ def main():
           f"{c.peek(g.s['PLR_AMMO'])}")
 
     # =================================================================
-    print("\n11 FRAME PERIOD (measured, one gap at a time, five samples a"
+    print("\n11 HEALTH, THE BITE, AND THE DEATH SCREEN")
+    php, mc, mtk = g.s["PLR_HP"], g.s["MONCELL"], g.s["MON_TICK"]
+
+    # ---- (a) THE BAR IS READ OFF THE SCREEN, not off the variable.
+    #      A readout that agrees with the byte it was handed proves
+    #      nothing; the question is whether the pixels moved.
+    def bar_bytes():
+        y = HUD_HPY + 2                 # a scanline inside the bar
+        addr = g.base() + (y & 7) * 0x800 + (y >> 3) * 80 + HUD_HPX
+        return sum(1 for b in c.read_ram(addr, HUD_HPW) if b == HUD_HPPEN)
+
+    MX, MY, PX, PY = 3, 12, 4, 12       # adjacent: L1 == 1, so it bites
+    c.poke(mc, MY * 16 + MX)
+    c.poke(g.s["MON_HP"], 99)           # unkillable, so the test is the
+    c.poke(mtk, 99)                     # bite and nothing else
+    c.poke(php, PLR_HPMAX)
+    g.place(PX * 256 + 128, PY * 256 + 128, 36)
+    # ---- LET BOTH BUFFERS CATCH UP BEFORE READING PIXELS.  hud_health
+    #      paints the buffer being drawn INTO, so the displayed one is a
+    #      frame behind until the value has been stable for two frames.
+    #      Sampled on the frame of the change, the bar reads the previous
+    #      hit point -- which is the readout working, not failing.
+    gframe()
+    gframe()
+    c.poke(mtk, 1)                      # ...and NOW let it bite
+    seen, bars = [], []
+    for _ in range(PLR_HPMAX + 1):
+        seen.append(c.peek(php))
+        bars.append(bar_bytes())
+        if not seen[-1]:
+            break
+        for _ in range(MON_RATE):       # one whole bite interval
+            if not gframe():
+                break
+    check(seen == list(range(PLR_HPMAX, -1, -1)),
+          "standing next to it costs one hit point every MON_RATE frames",
+          f"plr_hp {seen}")
+    check(bars == [n * HUD_HPSEG for n in seen],
+          "and the bar ON SCREEN shrinks with it",
+          f"{bars} bytes of HUD_HPPEN against "
+          f"{[n * HUD_HPSEG for n in seen]} wanted")
+
+    # ---- (b) AT ZERO THE GAME STOPS.  frame_ctr is the witness: the
+    #      death screen is menu.asm waiting for SPACE, so no game frame
+    #      completes at all while it is up.
+    f0 = g.frames()
+    c.run_frames(4 * PACE_N)
+    check(g.frames() == f0, "at zero hit points the frame loop stops",
+          f"{(g.frames() - f0) & 0xFFFF} game frames in {4*PACE_N} CPC "
+          f"frames -- the death screen is up")
+
+    # ---- (c) ...AND SPACE STARTS A NEW LIFE, world and all.  MENUBUF is
+    #      SOLID, so painting that screen destroyed the map: if the map
+    #      were not rebuilt the player would be standing inside the
+    #      menu's font table.
+    c.key_down(cpcmod.KEY_SPACE)
+    c.run_frames(PACE_N + 5)
+    c.key_up(cpcmod.KEY_SPACE)
+    c.run_frames(12 * PACE_N)
+    x, y, _ = g.player()
+    solid_now = c.read_ram(SOLID, 256)
+    check(c.peek(g.s["PLR_AMMO"]) == AMMO_MAX
+          and c.peek(mc) != 0xFF and c.peek(g.s["MON_HP"]) == MON_HPMAX,
+          "SPACE re-arms the player AND puts the monster back",
+          f"plr_hp {c.peek(php)}, plr_ammo {c.peek(g.s['PLR_AMMO'])}, "
+          f"MONCELL {c.peek(mc)}, mon_hp {c.peek(g.s['MON_HP'])}")
+    check((x >> 8, y >> 8) == START and solid_now[(y >> 8) * 16 + (x >> 8)] == 0,
+          "...and REBUILDS THE MAP the death screen wrote over",
+          f"player at ({x>>8},{y>>8}), START {START}, "
+          f"SOLID there = {solid_now[(y>>8)*16+(x>>8)]}")
+    f0 = g.frames()
+    c.run_frames(4 * PACE_N)
+    check(g.frames() != f0, "the frame loop is running again",
+          f"{(g.frames() - f0) & 0xFFFF} game frames in {4*PACE_N} CPC frames")
+
+    # ---- (d) AND THE OPENING IS SURVIVABLE, which is the one thing
+    #      about this game that a model cannot tell you.  From a cold
+    #      boot the map points the player AT the monster (START_A), so
+    #      three rounds and nothing else should end it with no damage
+    #      taken.  It did not before: plr_a was 0, due east, with the
+    #      monster two cells west, and a 180-degree turn is 36 frames
+    #      against a bite every 6 from frame 12.
+    g2 = Game()
+    for _ in range(MON_HPMAX):
+        g2.c.key_down(ord('z'))
+        g2.c.run_frames(PACE_N + 5)
+        g2.c.key_up(ord('z'))
+        g2.c.run_frames(PACE_N + 5)
+    check(g2.c.peek(g2.s["MONCELL"]) == 0xFF
+          and g2.c.peek(g2.s["PLR_HP"]) == PLR_HPMAX,
+          "from a COLD BOOT, three rounds kill it before it touches you",
+          f"MONCELL #{g2.c.peek(g2.s['MONCELL']):02X}, "
+          f"plr_hp {g2.c.peek(g2.s['PLR_HP'])} of {PLR_HPMAX}, "
+          f"START_A {_gm('START_A')}")
+    del g2
+
+    # =================================================================
+    print("\n12 FRAME PERIOD (measured, one gap at a time, five samples a"
           " vsync)")
     print("       The old four-chunk pad gave 80 ms 79% / 100 ms 20% /"
           " 120 ms 1% / 140 ms\n"

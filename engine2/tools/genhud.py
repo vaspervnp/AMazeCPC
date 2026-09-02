@@ -407,6 +407,44 @@ SCAN_CELL = [(1, 0),        # 0  ahead
 SCAN_HUBCELL = (1, 1)
 
 
+#  ---- THE HEALTH BAR, in the BOTTOM-LEFT slot ------------------------
+#  A BAR AND NOT PIPS, and that is a budget decision, not a taste one.
+#  hud_rect costs ~70 us a ROW, so a readout's cost is (rectangles x
+#  rows), not (rectangles).  Six ammo pips of 8 rows are 48 rows and
+#  C_AMMO is 4000 us; a bar is TWO rectangles of the same 8 rows, 16
+#  rows, and MEASURED it charges C_HP.  Health changes far more often
+#  than the round count when a monster is on you, so the cheap shape is
+#  the one that belongs here.
+#
+#  It draws in FX_BLOOD's own red, which ties the bar to the mark the
+#  shot leaves in flesh -- the one other place in the game that colour
+#  means damage.
+HP_PEN = 9                          # bright red, ink 6 -- as FX_BLOOD
+HP_MAX = 5                          # segments, and so the player's hit
+                                    # points: game.asm asserts they agree
+
+
+def health_slot():
+    """-> (x, y, w, h, seg) for the health bar.
+
+    DERIVED FROM THE SLOT, like ammo_slot() and scan_slot(): the inner
+    well of the BOTTOM-LEFT bevelled slot.  `seg` is the width of one hit
+    point in bytes, and it is even, because hud_rect's unrolled PUSH
+    block is entered in units of two bytes -- so a bar drawn at any
+    health is an even width and needs no odd path.
+    """
+    ww, wh, gap = 22, 22, 5
+    _cxb, cy = dial_centre()
+    wx = 2                                      # the LEFT column...
+    wy = cy - (3 * wh + 2 * gap) // 2 + 2 * (wh + gap)   # ...BOTTOM slot
+    ix, iy, iw, ih = wx + 1, wy + 2, ww - 2, wh - 4      # the inner well
+    seg = (iw // HP_MAX) & ~1                   # even bytes per hit point
+    assert seg >= 2, (seg, iw)
+    w, h = seg * HP_MAX, 8
+    assert w <= iw and h <= ih, (w, h, iw, ih)
+    return ix + (iw - w) // 2, iy + (ih - h) // 2, w, h, seg
+
+
 def scan_slot():
     """-> (x0, y0, bw, bh, sx, sy) for the 3x3 pad.
 
@@ -645,6 +683,20 @@ def write_inc(path, rects, tab):
              f"; a round the player still has")
     L.append(f"HUD_AMBG     equ #{SOLID[SHADOW]:02X}   "
              f"; ... and one already fired")
+
+    # ---- THE HEALTH BAR, in the bottom-left slot ---------------------
+    hx, hy, hw, hh, hseg = health_slot()
+    L.append("")
+    L.append(f"HUD_HPX      equ {hx}   ; health bar, byte x")
+    L.append(f"HUD_HPY      equ {hy}   ; ... and scanline y")
+    L.append(f"HUD_HPW      equ {hw}   ; full width, BYTES (even)")
+    L.append(f"HUD_HPH      equ {hh}   ; ... and height in scanlines")
+    L.append(f"HUD_HPSEG    equ {hseg}   ; bytes of bar per hit point (even)")
+    L.append(f"HUD_HPN      equ {HP_MAX}   ; hit points the bar shows")
+    L.append(f"HUD_HPPEN    equ #{SOLID[HP_PEN]:02X}   "
+             f"; health still in hand -- FX_BLOOD's own red")
+    L.append(f"HUD_HPBG     equ #{SOLID[SHADOW]:02X}   "
+             f"; ... and health already lost")
 
     # ---- THE AMMO SCANNER, in the middle-left slot -------------------
     #  A 3x3 direction pad.  hud2.asm is handed a packed byte -- see

@@ -40,6 +40,11 @@ C_DOORACT = 900      # door_act, MEASURED 756.6 us worst -- the SPACE
                      # billed to every frame.  The sweep below carries it
                      # on EVERY frame anyway, which is the pessimistic
                      # direction: a player who taps SPACE every frame.
+C_HP = 1400          # hud_health when a hit point MOVED.  Two rectangles
+                     # of eight rows against the ammo readout's six --
+                     # hud_rect is priced per ROW, so a bar is a quarter
+                     # of what pips would have cost.  Charged by hud2.asm
+                     # itself through cost_add, like C_AMMO.
 C_AMMO = 4000        # hud_ammo when the round count MOVED, MEASURED
                      # 3811.1 us worst (emu_hud.py).  Charged by hud2.asm
                      # itself through cost_add, like C_DOORACT and for
@@ -154,7 +159,7 @@ FTHRESH = 0x3C * 256                 # 15360 us, FACE_THI: charge then test
 # ---- the HUD gates' thresholds, DERIVED, not chosen ------------------
 #  Each is COST_THI less the worst ungated run that follows it, so the
 #  interval cannot leave the gate and reach a full 19968 us period.
-HUD_RUN_A = C_AMMO + C_SCAN                          # the two readouts
+HUD_RUN_A = C_AMMO + C_SCAN + C_HP                   # the three readouts
 HUD_RUN_R = C_SWEEP + N_BLIP * C_BLIP + C_RNEEDLE    # ...and the dial
 HUD_RUN = HUD_RUN_A + HUD_RUN_R                      # both, ungated
 HUD_THI1 = THRESH - HUD_RUN                          # one gate covers all
@@ -190,7 +195,7 @@ GUN_CHARGED = _equ("GUN_CHARGED", 1)
 # wrong in the same way.  A model that keeps its own copy of a constant
 # cannot catch that; one that reads the disc's can only be wrong if the
 # disc is.
-for _n in ("C_TAIL", "C_DOORACT", "C_AMMO", "C_SCAN", "C_PIP", "C_SND", "C_SWEEP", "C_BLIP", "C_RNEEDLE", "C_DANIM", "C_BG", "C_MSETUP", "C_CELL",
+for _n in ("C_TAIL", "C_DOORACT", "C_AMMO", "C_HP", "C_SCAN", "C_PIP", "C_SND", "C_SWEEP", "C_BLIP", "C_RNEEDLE", "C_DANIM", "C_BG", "C_MSETUP", "C_CELL",
            "C_FACE",
            "C_REJ", "C_CLIP", "C_HUD", "C_GUN",
            "C_QSET", "C_BLINE", "C_WPAIR", "C_CHUNK", "C_PMUL", "C_WSTEP",
@@ -474,6 +479,7 @@ def units(ncell, faces, quads, cyh):
     # THE WORST CASE, WHICH IS WHAT THESE ARE:
     #   C_AMMO     hud_ammo when the round count moved
     #   C_SCAN     hud_scan when the nearest pickup's bearing moved
+    #   C_HP       hud_health when a hit point moved
     #   C_SWEEP    the sweep and the six-way compare -- EVERY frame,
     #              unconditionally (hud2.asm:617)
     #   C_BLIP x8  one per blip that moved: six ammo cells, plus the
@@ -495,6 +501,7 @@ def units(ncell, faces, quads, cyh):
         u.append((2, HUD_THI_A, 0))             # ...ahead of the readouts
     u.append((3, 0, C_AMMO))
     u.append((3, 0, C_SCAN))
+    u.append((3, 0, C_HP))
     if HUD_GATE == 2:
         u.append((2, HUD_THI_R, 0))             # ...and ahead of the dial
     u.append((3, 0, C_SWEEP))

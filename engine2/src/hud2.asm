@@ -137,6 +137,9 @@ hs_front
     ld   hl,hud_sw-hud_am           ; ...and so does the sweep's
     add  hl,bc
     ld   (hud_swp),hl
+    ld   hl,hud_hp-hud_am           ; ...and the health bar's
+    add  hl,bc
+    ld   (hud_hpp),hl
     ld   (hud_rbp),ix               ; the blips are MAXAMMO bytes a buffer
     ld   hl,hud_mb-hud_am           ; ...and the monster's is one again,
     add  hl,bc                      ; so it rides the same offset
@@ -356,6 +359,78 @@ ha_pen
     djnz ha_pip
     ifdef PACED
     ld   bc,C_AMMO
+    call cost_add
+    endif
+    ret
+
+
+; ---------------------------------------------------------------------
+;  hud_health -- the player's hit points, in the bottom-left slot.
+;
+;  IN   A = (plr_hp), 0..HUD_HPN.  OUT  this buffer's bar shows it.
+;  Clobbers AF BC DE HL.
+;
+;  TWO RECTANGLES, NOT HUD_HPN PIPS, and hud_rect's ~70 us a ROW is the
+;  whole reason.  The ammo readout draws six pips of 8 rows = 48 rows and
+;  costs 4000 us; this draws the health still in hand and the health
+;  already lost as one rectangle each -- 16 rows -- and is charged C_HP.
+;  Health changes far more often than the round count when a monster is
+;  on you, so the cheap shape belongs here and not there.
+;
+;  THE SAME EARLY-OUT AS hud_ammo, and it is worth the two bytes a
+;  buffer: the bar is repainted on the frames the count MOVES, which is
+;  one frame in tens, and on every other frame this is a compare and a
+;  ret.  hud_hp carries one byte per buffer and hud_hpp points at the
+;  current one, exactly as hud_am / hud_amp do.
+;
+;  A WIDTH OF ZERO IS NOT DRAWN, WHICH IS WHY THE ORDER IS THIS WAY.
+;  hud_rect returns on a zero height but a zero WIDTH would enter its
+;  unrolled PUSH block at the wrong offset, so at full health the lost
+;  rectangle must not run, and at zero health the kept one must not.
+;  Both are tested, and each test is one OR.
+; ---------------------------------------------------------------------
+hud_health
+    ld   hl,(hud_hpp)
+    cp   (hl)
+    ret  z                          ; the common case: nothing to do
+    ld   (hl),a
+
+    add  a,a                        ; hit points times HUD_HPSEG, which is
+    add  a,a                        ; 4: two doublings, no multiply
+    ld   d,a                        ; D = the kept width in bytes
+    assert HUD_HPSEG == 4
+
+    ld   a,HUD_HPY
+    ld   (hr_y),a
+    ld   a,HUD_HPH
+    ld   (hr_h),a
+
+    ld   a,HUD_HPX                  ; ---- the health still in hand
+    ld   (hr_x),a
+    ld   a,d
+    or   a
+    jr   z,hh_lost                  ; none left: do not draw a zero width
+    ld   (hr_w),a
+    ld   a,HUD_HPPEN
+    ld   (hr_pen),a
+    push de
+    call hud_rect
+    pop  de
+
+hh_lost                             ; ---- and the health already lost
+    ld   a,HUD_HPW
+    sub  d
+    jr   z,hh_done                  ; full: nothing to erase.  NOT `ret z`
+    ld   (hr_w),a                   ; -- that path has already DRAWN, and
+    ld   a,HUD_HPX                  ; returning from it would leave the
+    add  a,d                        ; rectangle uncharged.  Every path
+    ld   (hr_x),a                   ; that painted goes through hh_done.
+    ld   a,HUD_HPBG
+    ld   (hr_pen),a
+    call hud_rect
+hh_done
+    ifdef PACED
+    ld   bc,C_HP
     call cost_add
     endif
     ret
@@ -935,6 +1010,8 @@ hud_sc      db #FF,#FF              ; ...and the scanner bearing each shows
 hud_scp     dw hud_sc               ; -> the entry for the current buffer
 hud_sw      db #FF,#FF              ; ...and which tick each has lit
 hud_swp     dw hud_sw
+hud_hp      db #FF,#FF              ; ...and the health bar each shows
+hud_hpp     dw hud_hp
 hud_swa     db 0                    ; the sweep's phase, 0..7.  ONE for both
                                     ; buffers: it is the clock, not a
                                     ; picture, and each buffer catches up
@@ -982,3 +1059,24 @@ HRPUSH
     push de
     rend
     jp   (ix)
+
+
+; ---------------------------------------------------------------------
+;  THE ONE THING TYING A .asm CONSTANT TO A GENERATED .inc ONE.
+;
+;  genhud.py derives the health bar's width from its own HP_MAX and
+;  hud_health draws HUD_HPSEG bytes per point; game.asm's PLR_HPMAX is what
+;  the player actually has.  If those two ever disagree the bar either
+;  leaves a segment permanently dark or runs past the slot that holds
+;  it, and nothing else in the build would say a word.
+;
+;  It lives HERE and not beside PLR_HPMAX because rasm evaluates an assert
+;  where it stands, and main3.asm includes game.asm before hud2.asm --
+;  so at PLR_HPMAX's line HUD_HPN is not a symbol yet.  That is the same
+;  trap the HUD_THI_* asserts fell into.
+    assert PLR_HPMAX == HUD_HPN
+    assert HUD_HPSEG * HUD_HPN == HUD_HPW
+    assert (HUD_HPSEG & 1) == 0     ; hud_rect enters HRPUSH two bytes at
+                                    ; a time, so every width it is handed
+                                    ; must be even -- and the bar's width
+                                    ; is HUD_HPSEG times a hit point

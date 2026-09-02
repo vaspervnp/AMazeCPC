@@ -6,7 +6,7 @@
 SND_STEP     equ 6   ; bytes in one step: ticks, tone lo, tone hi,
                      ; noise, mixer, volume -- in the order the
                      ; driver writes them
-SND_N        equ 8   ; effects, including 0 = silence
+SND_N        equ 9   ; effects, including 0 = silence
 SND_SILENT   equ #3F   ; mixer: everything off, ports input
 
 ; ---- the AY registers the driver writes, named once ----
@@ -25,7 +25,8 @@ SFX_SHOT_FLESH  equ 3
 SFX_CLICK       equ 4
 SFX_DOOR        equ 5
 SFX_MONDIE      equ 6
-SFX_PICKUP      equ 7
+SFX_HURT        equ 7
+SFX_PICKUP      equ 8
 
 ; ---- effect -> its step list ----
 SNDTAB
@@ -36,6 +37,7 @@ SNDTAB
     dw SND_CLICK
     dw SND_DOOR
     dw SND_MONDIE
+    dw SND_HURT
     dw SND_PICKUP
 
 SND_SILENCE
@@ -74,6 +76,11 @@ SND_MONDIE
     db #04,#70,#01,#18,#36,#0C
     db #05,#09,#02,#1C,#36,#09
     db #06,#DF,#02,#1F,#36,#05
+    db 0                    ; ...and 0 ticks ends it
+SND_HURT
+    db #02,#A1,#01,#0C,#36,#0E
+    db #03,#38,#01,#12,#36,#0B
+    db #03,#F0,#00,#18,#36,#06
     db 0                    ; ...and 0 ticks ends it
 SND_PICKUP
     db #03,#5F,#00,#00,#3E,#0C

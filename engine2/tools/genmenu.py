@@ -165,6 +165,25 @@ MENU = [
     (23, P_FOOT,  None, "REVIVE8BIT - 2026 - VASPER"),
 ]
 
+#  ---- THE SCREEN AFTER THE LAST HIT POINT ---------------------------
+#  A SECOND WORD LIST, NOT A SECOND SCREEN ROUTINE.  menu.asm's blitter
+#  walks a list of (row, x, pen, len, indices...) records terminated by a
+#  zero length; which list it walks is one `ld ix`.  So a death screen
+#  costs a second list here, four bytes of terminator, and three
+#  instructions there -- against a copy of the blitter.
+#
+#  IT DOES NOT SAY "GAME OVER", because it is not: SPACE restarts, and
+#  the line has to say so.  Same P_GO pen as the title's, so the eye
+#  looks in the same place for the same instruction.
+DEAD = [
+    (7,  P_TITLE, None, "YOU ARE DEAD"),
+    (11, P_TEXT,  None, "THE MONSTER GOT YOU"),
+    (17, P_GO,    None, "PRESS SPACE TO TRY AGAIN"),
+    (23, P_FOOT,  None, "REVIVE8BIT - 2026 - VASPER"),
+]
+
+SCREENS = [("TEXT", MENU), ("DEAD", DEAD)]
+
 
 def place(col, text):
     """-> the byte column a line starts at, centring when col is None."""
@@ -174,14 +193,22 @@ def place(col, text):
 
 
 def build():
-    for _row, _pen, col, text in MENU:
-        for ch in text:
-            assert ch in GLYPHS, f"no glyph for {ch!r} in {text!r}"
-        assert place(col, text) + len(text) * PITCH <= SCR_W, text
+    # EVERY SCREEN, not just the title.  The death screen brought the
+    # first new letters this font had been asked for since it was
+    # written, and a missing glyph is a KeyError three functions away in
+    # blob(); here it names the character and the line it is in.
+    for _name, lines in SCREENS:
+        for _row, _pen, col, text in lines:
+            for ch in text:
+                assert ch in GLYPHS, f"no glyph for {ch!r} in {text!r}"
+            assert place(col, text) + len(text) * PITCH <= SCR_W, text
     # THE TWO COLUMNS MUST NOT MEET.  A key name that outgrows KEY_MAX
     # would otherwise be overprinted by its own description, which is
     # what 'ARROWS' and 'MOVE AND TURN' did when the column was a number
     # somebody picked by looking at the screen.
+    # ...AND THIS ONE IS THE TITLE SCREEN'S ALONE.  KEY_COL and USE_COL
+    # are the two-column layout of the key list; the death screen is
+    # centred lines and has no columns to collide.
     for _row, pen, col, text in MENU:
         if pen == P_KEY:
             assert col == KEY_COL, f"{text!r} is not in the key column"
@@ -210,7 +237,8 @@ def unused():
     whole of it.
     """
     return [c for c in CHARSET
-            if c != ' ' and not any(c in t for _r, _p, _c, t in MENU)]
+            if c != ' ' and not any(c in t for _n, ls in SCREENS
+                                    for _r, _p, _c, t in ls)]
 
 
 def blob():
@@ -241,12 +269,13 @@ def blob():
         for r in rows:
             out.append(sum((8 >> i) for i, c in enumerate(r) if c == '#'))
 
-    off["TEXT"] = len(out)              # y, x, pen, len, then the indices
-    for row, pen, col, text in MENU:
-        out += bytes((row * LINE, place(col, text), PENS.index(pen),
-                      len(text)))
-        out += bytes(CHARSET.index(c) for c in text)
-    out += bytes(4)                     # a length of 0 ends the list
+    for name, lines in SCREENS:         # y, x, pen, len, then the indices
+        off[name] = len(out)
+        for row, pen, col, text in lines:
+            out += bytes((row * LINE, place(col, text), PENS.index(pen),
+                          len(text)))
+            out += bytes(CHARSET.index(c) for c in text)
+        out += bytes(4)                 # a length of 0 ends the list
 
     return bytes(out), off
 
@@ -269,6 +298,7 @@ def write_inc(path):
          f"MN_O_PENS    equ {off['PENS']}   ; ...and where each part starts",
          f"MN_O_FONT    equ {off['FONT']}",
          f"MN_O_TEXT    equ {off['TEXT']}",
+         f"MN_O_DEAD    equ {off['DEAD']}",
          ""]
     open(path, "w").write("\n".join(L) + "\n")
 
@@ -276,16 +306,19 @@ def write_inc(path):
 def main():
     out = os.path.join(_E2, "src", "gen_menu.inc")
     write_inc(out)
-    n = sum(len(t) for _r, _p, _c, t in MENU)
-    print(f"menu: {len(MENU)} lines, {n} characters, {len(CHARSET)} glyphs, "
+    n = sum(len(t) for _n, ls in SCREENS for _r, _p, _c, t in ls)
+    print(f"menu: {sum(len(ls) for _n, ls in SCREENS)} lines over "
+          f"{len(SCREENS)} screens, {n} characters, {len(CHARSET)} glyphs, "
           f"{len(PENS)} pens")
     print(f"  font {GW}x{GH} px, pitch {PITCH} bytes = "
           f"{SCR_W // PITCH} characters a line")
     u = unused()
     if u:
         print(f"  glyphs this screen does not spell with: {''.join(u)}")
-    for _row, _pen, col, text in MENU:
-        print(f"  x={place(col, text):3d}  {text!r}")
+    for name, lines in SCREENS:
+        print(f"  {name}:")
+        for _row, _pen, col, text in lines:
+            print(f"    x={place(col, text):3d}  {text!r}")
     print("wrote", out)
 
 

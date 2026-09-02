@@ -59,14 +59,14 @@
 ;      doors shut         0 of 8128512  = 0.000%
 ;      doors open     17530 of 8792064  = 0.199%
 ;      doors moving 1565642 of 8128512  = 19.261%
-;      worst charged frames  169232 / 190152 / 259107 us of 194560
+;      worst charged frames  170932 / 191852 / 260807 us of 194560
 ;
 ;  SO THE SHIPPING BUILD READS ZERO TOO, for the map as it loads.  It
 ;  did not at PACE_FRAMES 9, which read 1.768 / 4.974 / 37.908 -- and it
 ;  read 0.854 / 3.574 / 35.171 before that only because C_TAIL was 1623
 ;  us under the truth and the model was that much too kind.
 ;
-;  Note the doors-open worst frame, 190152, is INSIDE the 194560 budget:
+;  Note the doors-open worst frame, 191852, is INSIDE the 194560 budget:
 ;  the 0.199% that is still over is greedy-packing waste, not work that
 ;  does not fit.  See the cost_add note in main3.asm, and the measured
 ;  negative result for the gate that was built to close it.

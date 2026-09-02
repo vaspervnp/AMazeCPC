@@ -17,6 +17,15 @@ HUD_AMN      equ 6   ; how many rounds the readout shows
 HUD_AMPEN    equ #03   ; a round the player still has
 HUD_AMBG     equ #00   ; ... and one already fired
 
+HUD_HPX      equ 3   ; health bar, byte x
+HUD_HPY      equ 173   ; ... and scanline y
+HUD_HPW      equ 20   ; full width, BYTES (even)
+HUD_HPH      equ 8   ; ... and height in scanlines
+HUD_HPSEG    equ 4   ; bytes of bar per hit point (even)
+HUD_HPN      equ 5   ; hit points the bar shows
+HUD_HPPEN    equ #C3   ; health still in hand -- FX_BLOOD's own red
+HUD_HPBG     equ #00   ; ... and health already lost
+
 HUD_SCW      equ 6   ; a scanner cell, bytes (even)
 HUD_SCH      equ 5   ; ... and scanlines
 HUD_SCOFF    equ #CF   ; an unlit bearing -- what hud_scan restores

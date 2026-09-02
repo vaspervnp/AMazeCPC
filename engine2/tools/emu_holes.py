@@ -72,6 +72,7 @@ KEY_FIRE = ord('z')
 # bench sitting on.
 AMMO_MAX = P._equ("AMMO_MAX", 6, "game.asm")
 MON_HPMAX = P._equ("MON_HPMAX", 3, "game.asm")
+PLR_HPMAX = P._equ("PLR_HPMAX", 5, "game.asm")
 SCRATCH = os.path.join(_E2, "build")
 
 
@@ -286,9 +287,17 @@ def main(nstates=24):
     # would otherwise walk the monster onto the player, where mon_move
     # returns early at L1 < 2 and the measurement collapses to the cheap
     # branch again -- silently, and in the safe-looking direction.
+    #
+    # AND plr_hp WITH IT, for the same reason twice over: mon_move ends
+    # in mon_bite when the player is in the next cell, and a bench loop
+    # would spend five hit points in five calls and then measure the
+    # `ret z` -- which is not the branch C_TAIL has to cover.  It also
+    # keeps main_loop from noticing a dead player mid-bench.
     pre_mon = ["    ld a,1", "    ld (#%04X),a" % s["MON_TICK"],
                "    ld a,%d" % rig.c.peek(s["MONCELL"]),
-               "    ld (#%04X),a" % s["MONCELL"]]
+               "    ld (#%04X),a" % s["MONCELL"],
+               "    ld a,%d" % PLR_HPMAX,
+               "    ld (#%04X),a" % s["PLR_HP"]]
 
     # ---- AND THE SAME FOR THE TRIGGER.  `fire` is an edge, an ammo
     # count and a monster that can die, so three things have to be put
@@ -387,8 +396,31 @@ def main(nstates=24):
     print("  worst %.1f us at heading %d" % (hw, hwa))
     print("  C_HUD %d -- margin %+.1f" % (P.C_HUD, P.C_HUD - hw))
 
+    # ---- (d) hud_health, at every hit point it can show.
+    #  The cost is NOT flat across them: the routine draws the health in
+    #  hand and the health lost as one rectangle each, and at 0 and at
+    #  full one of the two has zero width and is skipped.  So the worst
+    #  is somewhere in the middle and a bench of one value would find the
+    #  cheap end -- the same fault C_MSETUP and C_HUD were both fitted
+    #  with.  (hud_hp) is forced to a DIFFERENT value before every call,
+    #  or the early-out returns and the bench measures a compare.
+    print("\n=== (d) hud_health, at every hit point")
+    php, phpa = 0.0, None
+    for n in range(PLR_HPMAX + 1):
+        pre = ["    ld a,%d" % ((n + 1) % (PLR_HPMAX + 1)),
+               "    ld (#%04X),a" % s["HUD_HP"],
+               "    ld (#%04X),a" % (s["HUD_HP"] + 1),
+               "    ld a,%d" % n]
+        v = rig.bench(s["HUD_HEALTH"], pre=pre, us=250000)
+        print("  %d of %d hit points   %8.1f us" % (n, PLR_HPMAX, v))
+        if v > php:
+            php, phpa = v, n
+    print("  worst %.1f us at %d hit points" % (php, phpa))
+    print("  C_HP %d -- margin %+.1f" % (P.C_HP, P.C_HP - php))
+
     ok = (P.C_TAIL >= tail and P.C_TAIL + cd >= tail + dact
-          and P.C_MSETUP >= wrap and P.C_MSETUP >= flat and P.C_HUD >= hw)
+          and P.C_MSETUP >= wrap and P.C_MSETUP >= flat and P.C_HUD >= hw
+          and P.C_HP >= php)
     print("\n  EVERY CONSTANT A ONE-SIDED UPPER BOUND: %s" % ok)
     return 0 if ok else 1
 

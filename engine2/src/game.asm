@@ -165,6 +165,19 @@ DOOR_OPEN   equ 8           ; 8 - 2 = SIX frames to run, one step each
 ;  indices stop at 255 -- but cell 255 is the bottom-right corner and is
 ;  always WALL, so it can never be a pickup and never be stood on).
 AMMO_MAX    equ 6
+
+; ---- THE PLAYER'S HIT POINTS, and the bar that shows them are ONE
+;  NUMBER.  genhud.py derives the health bar's width from HP_MAX and
+;  hud_health draws HUD_HPSEG bytes per point, so a PLR_HPMAX that
+;  disagreed with the readout would either leave a segment permanently
+;  dark or run the bar past the slot that holds it.  The assert is the
+;  only thing tying an .asm constant to a generated .inc one.
+PLR_HPMAX   equ 5
+;  The assert is at the FOOT of hud2.asm and not here: gen_hud.inc is
+;  included by hud2.asm, which main3.asm includes AFTER this file, and
+;  rasm evaluates an assert where it stands -- so HUD_HPN is not a
+;  symbol yet at this line.  Same trap the HUD_THI_* asserts fell into.
+
 AMMO_GONE   equ #FF
 AMMO_NODIR  equ #FF         ; (ammo_dir) when the map has none left.  A
                             ; real value is (band << 4) | bearing with
@@ -241,9 +254,16 @@ game_init
     ld   (plr_x),hl
     ld   hl,START_Y*256+128
     ld   (plr_y),hl
-    xor  a
-    ld   (plr_a),a                  ; heading 0 = +x = east
-    ld   (door_n),a
+    ld   a,START_A                  ; THE MAP DECIDES WHICH WAY YOU FACE,
+    ld   (plr_a),a                  ; and gen_march.py derives it as the
+    xor  a                          ; heading from the start cell to the
+    ld   (door_n),a                 ; monster's.  It was `xor a` -- due
+                                    ; east -- with the monster two cells
+                                    ; WEST, i.e. behind your head, and
+                                    ; once the monster walked that made
+                                    ; the opening unsurvivable: it bites
+                                    ; from frame 12 and a 180-degree turn
+                                    ; is 36 frames.  See start_heading().
 
     ld   hl,PREVKEYS                ; nothing held, and bits are active low
     ld   b,10
@@ -307,6 +327,8 @@ ammo_arm
     ld   (mon_tick),a
     ld   a,AMMO_NODIR
     ld   (mon_blip),a
+    ld   a,PLR_HPMAX                   ; ...and the player back on his feet
+    ld   (plr_hp),a
 
     ld   a,AMMO_MAX
     ld   (plr_ammo),a
@@ -709,7 +731,7 @@ mon_move
     ld   c,a                        ; as_l1 wants the cell in C and leaves
     call as_l1                      ; it there; (as_tdx)/(as_tdy) come out
     cp   2                          ; signed, cell MINUS player
-    ret  c                          ; L1 0 or 1: arrived.  See the note
+    jr   c,mon_bite                 ; L1 0 or 1: it is on you.  See the note
 
     ld   a,(as_tdx)                 ; ---- the two candidate steps, each as
     call mm_dir                     ;      a CELL OFFSET and a magnitude
@@ -741,6 +763,31 @@ mm_yfirst
     ret  nc
     ld   a,(mm_ox)
     jp   mm_try
+
+; --- THE MONSTER'S TURN IS A STEP OR A BITE, NEVER BOTH.
+;
+;     It is reached from mon_move's own MON_RATE tick, which is what
+;     makes the rate one number instead of two: the thing moves one cell
+;     every six frames, and when there is no cell left to move into
+;     because the player is standing in the next one, it takes a hit
+;     point instead.  One bite every 1.2 s at PACE_FRAMES 10, so PLR_HPMAX
+;     5 is six seconds of contact -- long enough to back away and shoot,
+;     short enough that standing in front of it is a decision.
+;
+;     A SEPARATE ATTACK COOLDOWN WOULD BE A SECOND CONSTANT SAYING THE
+;     SAME THING, and the two would drift.  This way "how fast is the
+;     monster" has one answer.
+;
+;     Clobbers AF HL.
+mon_bite
+    ld   hl,plr_hp
+    ld   a,(hl)
+    or   a
+    ret  z                          ; already dead: main_loop is about to
+    dec  (hl)                       ; notice, and a second bite would
+    ld   a,SFX_HURT                 ; underflow the bar to 255 segments
+    jp   snd_play
+
 
 ; --- IN A = a signed offset.  OUT A = |offset|, B = the step TOWARD zero
 ;     as -1, 0 or +1.  The sign is inverted because as_tdx is cell minus
@@ -1675,6 +1722,9 @@ mv_fast     db 0                ; non-zero while SHIFT is held
 
 plr_ammo    db AMMO_MAX         ; rounds left, 0..AMMO_MAX.  hud2.asm reads
                                 ; it; ammo_arm sets it
+plr_hp      db PLR_HPMAX           ; hit points left.  0 ends the game --
+                                ; main3.asm tests it beside the ESC key,
+                                ; because both are "stop playing"
 gun_recoil  db 0                ; frames of kick left.  gun.asm's consumer
 ammo_st     ds MAXAMMO          ; the live pickups: a cell index each, or
                                 ; AMMO_GONE once collected

@@ -47,8 +47,29 @@ MENUBUF     equ SOLID
 MNPENS      equ MENUBUF+MN_O_PENS
 MNFONT      equ MENUBUF+MN_O_FONT
 MNTEXT      equ MENUBUF+MN_O_TEXT
+MNDEAD      equ MENUBUF+MN_O_DEAD
 
+; ---------------------------------------------------------------------
+;  TWO SCREENS, ONE BLITTER.  genmenu.py emits the words as a list of
+;  (row, x, pen, len, indices...) records ended by a zero length, and
+;  which list this walks is one `ld ix`.  So the death screen costs a
+;  second list in the generator, four bytes of terminator, and the three
+;  instructions below -- against a copy of everything from here down.
+;
+;  menu_show   the title, at startup
+;  menu_dead   the one after the last hit point.  main3.asm restarts the
+;              world after it, because MENUBUF equ SOLID: painting either
+;              screen DESTROYS THE MAP, so there is no resuming from one.
+;              That is not a limitation being worked around, it is why
+;              the death screen restarts rather than continues.
+; ---------------------------------------------------------------------
+menu_dead
+    ld   hl,MNDEAD
+    jr   mn_at
 menu_show
+    ld   hl,MNTEXT
+mn_at
+    ld   (mn_list),hl
     ; ---- FETCH IT OUT OF BANK 5 FIRST.  The font, the colour tables and
     ;      the words are 568 bytes that are read once and never again, so
     ;      they live in the renderer's table bank rather than in a code
@@ -68,7 +89,7 @@ menu_show
     ld   hl,SCR_FRONT               ; the picture goes in the buffer that
     call clear_16k                  ; is on display, and only that one
 
-    ld   ix,MNTEXT
+    ld   ix,(mn_list)
 mn_next
     ld   a,(ix+3)                   ; the length: 0 ends the list
     or   a
@@ -202,3 +223,4 @@ mn_n        db 0
 mn_row      db 0
 mn_gp       dw 0
 mn_pen      dw 0
+mn_list     dw MNTEXT           ; which word list to paint -- see mn_at
