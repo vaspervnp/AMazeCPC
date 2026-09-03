@@ -136,13 +136,52 @@ agreed and nobody caught it: `colmodel.charge` has taken a `dlift`
 argument since the animation landed, and `pacemodel` never passed it —
 it defaults to 0. It is threaded through now, so a fix can be measured.
 
-**What is NOT yet measured** is how much of the two lost periods the
-over-charge accounts for, as against real work. `emu_rcol atomic` is the
-tool for that. The fix — make `rc_charge` subtract the lifted rows,
-behind a `rc_dlift == 0` early-out so the common frame pays three
-instructions — has to keep the one-sided property `atomic` proves, and
+### And it is the charge, not the work — measured
+
+The real state above, driven through `emu_rcol`'s rig: the **Z80's own**
+per-hook charges summed, against the render **timed** on the machine, at
+each step of the lift. Quad render only; the whole-frame budget is
+194560 µs.
+
+| `rc_dlift` | charge | work | over-charge | periods |
+|---:|---:|---:|---:|---:|
+| 0 | 194862 | 170350 | 24512 | 1.23 |
+| 42 | 194862 | 164625 | 30237 | 1.51 |
+| 85 | 194862 | 157650 | 37212 | 1.86 |
+| 128 | 194862 | 145800 | 49062 | 2.46 |
+| 170 | 194862 | 138825 | 56037 | 2.81 |
+| 213 | 194862 | 131700 | 63162 | 3.16 |
+
+**The charge is flat to the microsecond** — 194862 at every step, which
+is `rc_charge` ignoring `rc_dlift` on the disc and not merely in the
+model. **The work falls 22.7%** as the door rises, exactly as `rc_column`
+draws less of it.
+
+Two numbers settle the question:
+
+- The quad **charge alone**, 194862, already exceeds the whole frame's
+  194560 budget — by 302 µs, before `bg_fill`, the march, the projector
+  or the HUD have been charged anything.
+- The quad **work** at its heaviest, 170350, is **24210 µs under** that
+  same budget.
+
+So the frame is late because of what it is charged, not because of what
+it does. By the last step of the run the charge is over by 63162 µs —
+**more than three vsync periods** — and the disc takes its twelve
+vsyncs on that frame just as it does on the first.
+
+What this does *not* settle: whether the FIRST frame of a run would fit
+on work alone once the rest of the frame is counted. This rig times
+`raster_colframe` and nothing else, and 170350 leaves 24210 for
+`bg_fill` (9215), the march, the projector, the HUD and the overlay,
+which is tight. The later frames are unambiguous; the first one wants
+the whole-frame measurement before anyone claims it.
+
+**The fix** is `rc_charge` subtracting the lifted rows behind an
+`rc_dlift == 0` early-out, so the common frame pays three instructions.
+It has to keep the one-sided property `emu_rcol atomic` proves, and
 `colmodel.charge` has to mirror it, or the model and the disc diverge
-again.
+again — which is exactly how this went unseen.
 
 ---
 

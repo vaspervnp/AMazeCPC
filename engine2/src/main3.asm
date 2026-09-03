@@ -514,11 +514,42 @@ SCR_BACK    equ #8000
 ;
 ;  pacemodel.py had the same hole and that is why nobody caught it: it
 ;  never passed dlift to colmodel.charge, which has taken the argument
-;  since the animation landed.  Threaded through now, so a fix can be
-;  measured.  What is NOT yet measured is how much of the two lost
-;  periods is the over-charge and how much is real work; emu_rcol's
-;  `atomic` is the tool, and any fix has to keep the one-sided property
-;  it proves.
+;  since the animation landed.  Threaded through now.
+;
+;  AND IT IS THE CHARGE AND NOT THE WORK.  MEASURED through emu_rcol's
+;  rig on that state -- the Z80's OWN per-hook charges summed, against
+;  the render TIMED on the machine, at each step of the lift.  Quad
+;  render only:
+;
+;      dlift    charge      work   over-charge   periods
+;          0    194862    170350         24512      1.23
+;         42    194862    164625         30237      1.51
+;         85    194862    157650         37212      1.86
+;        128    194862    145800         49062      2.46
+;        170    194862    138825         56037      2.81
+;        213    194862    131700         63162      3.16
+;
+;  The charge is FLAT TO THE MICROSECOND across the whole run, which is
+;  rc_charge ignoring rc_dlift on the DISC and not merely in the model.
+;  The work falls 22.7%, exactly as rc_column draws less of it.
+;
+;  Two numbers settle it.  The quad charge ALONE, 194862, already
+;  exceeds the whole frame's 194560 budget -- by 302 us, before bg_fill,
+;  the march, the projector or the HUD are charged anything.  The quad
+;  WORK at its heaviest, 170350, is 24210 us UNDER that same budget.  So
+;  the frame is late for what it is CHARGED, not for what it does.
+;
+;  NOT SETTLED: whether the FIRST frame of a run would fit on work alone
+;  once the rest of the frame is counted -- that rig times
+;  raster_colframe and nothing else, and 170350 leaves 24210 for
+;  bg_fill's 9215 plus the march, the projector, the HUD and the
+;  overlay, which is tight.  The LATER frames are unambiguous.
+;
+;  The fix is rc_charge subtracting the lifted rows behind an
+;  `rc_dlift == 0` early-out, so the common frame pays three
+;  instructions.  It has to keep the one-sided property emu_rcol's
+;  `atomic` proves, and colmodel.charge has to mirror it -- which is
+;  exactly how this went unseen for as long as it did.
 ;
 ;  AND SEE cost_add, BELOW, FOR THE REST.  The HUD's five cost_adds
 ;  charge on top of whatever C_HUD left, with no gate between them and

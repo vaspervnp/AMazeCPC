@@ -15,10 +15,15 @@ death screen, an exit that ends the level and a score.
 door is opening: **12 vsyncs instead of 10, for the whole five-frame
 run, on 8 of 8 doors measured on the disc.** `rc_charge` never reads
 `rc_dlift`, so a door being drawn shorter every frame is charged at full
-height — and `cost_unit` yields on the charge, not on the work. This was
-dismissed in three files for a long time as "a case that does not occur";
-it occurs every time a player opens a door. See plan.md, "Doors in
-motion: the case that DOES occur".
+height — and `cost_unit` yields on the charge, not on the work.
+
+**And it IS the charge, measured**: the Z80's own charge for the quad
+render is flat at **194862 µs** across the whole lift while the timed
+work falls **170350 → 131700**. The charge alone exceeds the 194560
+whole-frame budget by 302 µs; the work at its heaviest is 24210 µs
+*under* it. This was dismissed in three files for a long time as "a case
+that does not occur"; it occurs every time a player opens a door. See
+plan.md, "Doors in motion: the case that DOES occur".
 
 **The BODY is the binding constraint from here on** — `game_end` is 22
 bytes under `BUCK0` and RAM bank 5 has 51 free. The next feature has to
