@@ -933,6 +933,22 @@ rcc_flat
     add  hl,de                  ; 21
     ld   de,C_COLS
     add  hl,de
+    ; ---- AND AN OVERLAY PAIR COSTS MORE THAN A PASS-1 PAIR.
+    ;      rc_pairloop has just scribbled RC_RC+1 over both cover bytes,
+    ;      rc_rows will take the lift branch and rc_slide will run two
+    ;      rc_mul8 loops.  C_COLS covers the pass-1 setup and none of
+    ;      that: MEASURED 263-659 us short over 90 overlay pair hooks,
+    ;      and C_COLSO is 800.  See costcol.inc.
+    ;
+    ;      (rc_over) AND NOT (rc_kind & 2), even though the overlay pass
+    ;      draws nothing but moving faces: this charge is for what THE
+    ;      PASS does, and the pass flag is what rc_pairloop itself tests.
+    ld   a,(rc_over)
+    or   a
+    jr   z,rcc_p1
+    ld   de,C_COLSO
+    add  hl,de
+rcc_p1
     ld   b,h
     ld   c,l
     jp   cost_unit

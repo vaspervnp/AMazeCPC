@@ -648,7 +648,7 @@ def face_columns(q, c, cover=None, over=False, dlift=0):
 
 def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
            c_colr, c_cedge, c_cstep, dlift=0, c_cfar=0, c_cfarp=0,
-           c_cfars=0, c_cfarend=0):
+           c_cfars=0, c_cfarend=0, c_colso=0):
     """-> the microsecond charges rastcol.asm takes, in order.
 
     THE TWIN OF THE COST HOOKS, the way pacemodel.quad_units is the twin
@@ -682,6 +682,7 @@ def charge(quads, c, c_cframe, c_cface, c_cskip, c_cols, c_cband,
             + u["edges"] * c_cedge + u["steps"] * c_cstep
             + u["far"] * c_cfar + u["farp"] * c_cfarp
             + u["fars"] * c_cfars + u["farend"] * c_cfarend
+            + u["colso"] * c_colso
             for u in charge_terms(quads, c, dlift)]
 
 
@@ -708,7 +709,7 @@ def charge_terms(quads, c, dlift=0):
         return out                       # raster_colframe rets before
     z = {"frame": 0, "face": 0, "skip": 0, "pair": 0,
          "bands": 0, "rows": 0, "edges": 0, "steps": 0,
-         "far": 0, "farp": 0, "fars": 0, "farend": 0}
+         "far": 0, "farp": 0, "fars": 0, "farend": 0, "colso": 0}
     out.append(dict(z, frame=1))         # its hook on an empty list
     # TWO PASSES, in raster_colframe's own order.  rc_face is entered for
     # every record in BOTH passes but returns before the charge on the
@@ -764,7 +765,12 @@ def charge_terms(quads, c, dlift=0):
                 # alone on both sides.
                 if dlift and is_moving(q):
                     rows -= (rows * dlift) >> 8
+                # ...and an OVERLAY pair carries C_COLSO on top: the
+                # cover scribble, the lift branch and rc_slide's two
+                # rc_mul8 loops, none of which a pass-1 pair does.  Keyed
+                # on the PASS, exactly as rc_charge keys it on (rc_over).
                 out.append(dict(z, pair=1, bands=nb, rows=rows,
+                                colso=1 if over is True else 0,
                                 edges=min(2 * (jhi - jlo), free)))
             if 1 <= i["delta"] <= 3:
                 out.append(dict(z, skip=1, steps=i["delta"]))

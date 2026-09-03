@@ -357,7 +357,8 @@ def charges_for(quads, c, dlift=0):
     import pacemodel as P
     return colmodel.charge(quads, c, P.C_CFRAME, P.C_CFACE, P.C_CSKIP,
                            P.C_COLS, P.C_CBAND, P.C_COLR, P.C_CEDGE,
-                           P.C_CSTEP, dlift=dlift, c_cfar=P.C_CFAR,
+                           P.C_CSTEP, dlift=dlift, c_colso=P.C_COLSO,
+                           c_cfar=P.C_CFAR,
                            c_cfarp=P.C_CFARP,
                            c_cfars=P.C_CFARS,
                            c_cfarend=P.C_CFAREND)

@@ -227,6 +227,7 @@ C_CFACE = _equ("C_CFACE", 1700, "costcol.inc")
 C_CFRAME = _equ("C_CFRAME", 2000, "costcol.inc")
 C_CSKIP = _equ("C_CSKIP", 370, "costcol.inc")
 C_COLS = _equ("C_COLS", 700, "costcol.inc")
+C_COLSO = _equ("C_COLSO", 800, "costcol.inc")
 C_CBAND = _equ("C_CBAND", 460, "costcol.inc")
 C_COLR = _equ("C_COLR", 22, "costcol.inc")
 C_CEDGE = _equ("C_CEDGE", 60, "costcol.inc")
@@ -470,7 +471,7 @@ def units(ncell, faces, quads, cyh, dlift=0):
         u += [(0, cc, cc) for cc in
               _cm.charge(quads, _rm.cfg(), C_CFRAME, C_CFACE, C_CSKIP,
                          C_COLS, C_CBAND, C_COLR, C_CEDGE, C_CSTEP,
-                         dlift=dlift,
+                         dlift=dlift, c_colso=C_COLSO,
                          c_cfar=C_CFAR, c_cfarp=C_CFARP,
                          c_cfars=C_CFARS, c_cfarend=C_CFAREND)]
     else:

@@ -186,14 +186,63 @@ The first frame is still late. That is the `dlift 42` frame, where the
 lift removes least and the work is heaviest — the sweep models exactly
 that frame, which is why its figure moves so much less than the disc's.
 
-**And the fix exposed a second, older defect.** `atomic` had never once
-tested a moving face, so it now takes a `dlift` *and* a `moving` flag —
-they are separate questions, and a face carries the moving bit at
-`dlift 0` on the first and last frame of every run. With a moving face
-and no lift at all, intervals measure **478 µs over their charge**; with
-the lift, 239. So the overlay pass has always been under-charged, my
-change halves it, and it is still not zero. `emu_rcol atomic n 0 1` is
-the command that shows it.
+**And the fix exposed a second, older defect: the overlay pass was
+under-charged.** `atomic` had never once tested a moving face, so it now
+takes a `dlift` *and* a `moving` flag — separate questions, since a face
+carries the moving bit at `dlift 0` on the first and last frame of a run.
+
+Fitted over 90 overlay pair hooks, 6 states × 6 lifts: the shortfall runs
+**263 to 659 µs**. The *slope* was never wrong — measured against charged
+rows it is 20.35 against `C_COLR`'s 21 — it is the per-pair **intercept**.
+An overlay pair does work no pass-1 pair does: `rc_pairloop` scribbles
+`RC_RC+1` over both cover bytes, `rc_rows` takes the lift branch, and
+`rc_slide` runs **two `rc_mul8` loops, eight iterations each**. `C_COLS`
+covers the pass-1 setup and none of it.
+
+So `C_COLSO` = 800, charged only when `rc_over` is set, and `C_CFRAME`
+450 → 600 because a non-empty overlay list means the second pass is
+entered at all (389 measured with no moving face, **490 with one**).
+`atomic` now reports *every interval inside its charge* with a moving
+face at every lift — the first time that has ever been true.
+
+### And that costs a period. Honestly.
+
+| | doors-shut | one-moving | the disc, per door |
+|---|---:|---:|---|
+| session start (`PACE_FRAMES` 9) | 1.768% | 19.261% | `[12,12,12,12,12]` |
+| `PACE_FRAMES` 10 | **0%** | 13.85% | `[12,12,12,12,12]` |
+| + the `dlift` fix | 0% | 13.16% | `[12,11,11,10,10]` |
+| + the honest overlay charge | 0% | 16.17% | `[13,13,12,12,11]` |
+
+`cost_unit` yields on the **charge**, so making a charge honest costs
+periods exactly as making it loose does. 800 µs × ~9 overlay pairs is
+7200 µs, and greedy packing turns that into whole yields:
+
+```
+work at dlift 42            ~164625 µs
+charge before any fix        194862      over by 30237
+charge after the lift fix    187932      over by 23307
+charge + C_COLSO x9          195132      over by 30507
+```
+
+**The charge is back roughly where it started — but it is now an upper
+bound on the work, which it never was.** `C_CFRAME`'s +150 is charged on
+every frame and doors-shut survives it: worst 170932 → 171082, still
+**0 of 8128512**.
+
+I shipped the correct charge because a charge that does not bound its
+work is the one thing this whole design cannot survive, and `atomic`
+exists to say so. But the observable stutter is one period worse than
+the previous commit, and that is a judgement someone may want to reverse:
+deleting `C_COLSO` restores `[12,11,11,10,10]` and re-breaks the
+invariant.
+
+**The lever that would give both** is making the overlay's real work
+cheaper rather than charging more for it. `rc_slide`'s two eight-iteration
+`rc_mul8` loops per pair are most of what `C_COLSO` pays for — and
+`rc_charge`'s own two `rc_mul8` loops were once replaced by six shifts,
+which is what took `C_COLS` from 1980 to 1800. Same move, same routine,
+not done.
 
 ---
 

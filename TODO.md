@@ -25,11 +25,36 @@ before   [12, 12, 12, 12, 12, 10, 10]
 after    [12, 11, 11, 10, 10, 10, 10]
 ```
 
-**Two things are left.** The FIRST frame of a run is still two periods
-late — the lift is smallest and the work heaviest there. And the overlay
-pass is **UNDER**-charged by up to 478 µs, an older defect `atomic` never
-saw because it had never drawn a moving face; `emu_rcol atomic n 0 1`
-shows it now.
+**AND THEN THE OVERLAY'S UNDER-CHARGE, WHICH PULLS THE OTHER WAY.**
+`atomic` had never drawn a moving face, so the overlay pass had never
+been timed: fitted over 90 pair hooks it is **263–659 µs short**, the
+per-pair intercept and not the slope. `C_COLSO` 800 covers it and
+`C_CFRAME` 450 → 600 covers entering the second pass at all. Every
+interval is now inside its charge with a moving face at every lift —
+the first time that has been true.
+
+**It costs a period.** `cost_unit` yields on the charge, so an honest
+charge costs periods exactly as a loose one does:
+
+```
+                        one-moving   the disc, per door
+session start (PF 9)       19.261%   [12,12,12,12,12]
+PACE_FRAMES 10             13.85%    [12,12,12,12,12]
++ the dlift fix            13.16%    [12,11,11,10,10]
++ honest overlay charge    16.17%    [13,13,12,12,11]
+```
+
+Shipped correct, because a charge that does not bound its work is the one
+thing this design cannot survive. Deleting `C_COLSO` restores
+`[12,11,11,10,10]` and re-breaks the invariant — a reversible judgement,
+recorded here so it can be made deliberately. Doors-shut survives the
+`C_CFRAME` rise: worst 170932 → 171082, still **0 of 8128512**.
+
+**The lever that would give both** is making the overlay's real work
+cheaper instead of charging more: `rc_slide` runs two eight-iteration
+`rc_mul8` loops per pair, which is most of what `C_COLSO` pays for, and
+`rc_charge`'s own two were once replaced by six shifts — the move that
+took `C_COLS` from 1980 to 1800. Same routine, not done.
 
 **And the menu drew its text in colours read from arbitrary memory.**
 `mn_next` computed `MNPENS + 2*pen` and dereferenced it, where the pen
@@ -61,13 +86,13 @@ first; every number here is written down next to the code it constrains.
 | the map (`tools/world.py`) | **nine 4x4 rooms** in a 3x3 grid, 144 floor cells |
 | `make amaze` | OK, disc fresh (`md5` of `engine2/build/TEX.BIN` == `build/e3/TEX.BIN`) |
 | `emu_rcol.py verify` | **166/166 screens byte-exact** against `colmodel.py`, 24 of them a door IN MOTION |
-| `emu_rcol.py atomic` | **PASS** at rest; with a MOVING face it finds a pre-existing 478 µs under-charge (`atomic n 0 1`) |
+| `emu_rcol.py atomic` | **PASS** at rest AND with a moving face at every lift (`atomic n <dlift> 1`) |
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
 | `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
-| `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 over budget |
+| `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 over budget, worst 171082 |
 | `pacescan.py` (doors OPEN) | 17,530 of 8,792,064 = **0.199%**, worst frame 191852 of 194560 |
-| `pacescan.py` (ONE door moving) | 1,069,807 of 8,128,512 = **13.16%** — the first frame of a run |
-| the disc, while a door runs | **[12, 11, 11, 10, 10]** vsyncs against 10 (was all 12) |
+| `pacescan.py` (ONE door moving) | 1,314,688 of 8,128,512 = **16.17%** — honest charge, see above |
+| the disc, while a door runs | **[13, 13, 12, 12, 11]** vsyncs against 10 |
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
 | `monmodel.py` | **PASS** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs |
 | the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |
