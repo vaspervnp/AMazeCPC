@@ -100,17 +100,42 @@ mn_next
     jr   z,mn_wait
     ld   (mn_n),a
 
-    ld   a,(ix+2)                   ; ---- this line's pen table
-    add  a,a
+    ; ---- THIS LINE'S PEN TABLE, AND IT WAS READ AS A POINTER TO ONE.
+    ;
+    ;  MNPENS is MN_NPEN tables of SIXTEEN NIBBLES x TWO BYTES laid end
+    ;  to end -- 32 bytes a pen, genmenu.blob() -- and mn_glyph wants the
+    ;  BASE of pen p's table.  What stood here computed MNPENS + 2*p and
+    ;  then DEREFERENCED it, so the "pointer" it loaded was two mode-0
+    ;  PIXEL bytes out of pen 0's own table, used as an address:
+    ;
+    ;      pen 0 -> #0000   pen 1 -> #5500   pen 2 -> #AA00
+    ;      pen 3 -> #FF00   pen 4 -> #0055
+    ;
+    ;  So every line of every screen was drawn in colours read from
+    ;  whatever happened to live at those addresses -- and pen 3 lands at
+    ;  #FF00, inside the front buffer clear_16k has just ZEROED, so a
+    ;  P_GO line drew NOTHING AT ALL.  MEASURED on the booted title
+    ;  screen: seven bands of text where the word list has eight rows,
+    ;  and the missing one is y=144, "PRESS SPACE TO START".
+    ;
+    ;  It went unseen because the four surviving pens read garbage that
+    ;  happened to be non-zero, so the screen looked plausible -- and
+    ;  because nothing checked the menu's PIXELS until the win screen's
+    ;  score digit was checked against the font.
+    ;
+    ;  p <= MN_NPEN-1 = 4 and 32*4 = 128, so the index still fits a byte.
+    ld   a,(ix+2)
+    add  a,a                        ; x2
+    add  a,a                        ; x4
+    add  a,a                        ; x8
+    add  a,a                        ; x16
+    add  a,a                        ; x32 = 16 nibbles of two bytes
     ld   e,a
     ld   d,0
     ld   hl,MNPENS
     add  hl,de
-    ld   a,(hl)
-    inc  hl
-    ld   h,(hl)
-    ld   l,a
     ld   (mn_pen),hl
+    assert MN_NPEN * 32 <= 256      ; ...or the index above overflows
 
     ld   a,(ix+1)                   ; ---- and where it starts
     ld   (mn_x),a

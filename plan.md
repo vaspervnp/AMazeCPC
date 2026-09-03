@@ -92,6 +92,9 @@ are 4×4 on a five-cell pitch, so reaching a second door takes 53 frames.
 | one moving, rest open | 1186129 / 8792064 = **13.49%** | 262553 µs |
 | all twelve moving | 19.261% | 260807 µs |
 
+(Those are the figures *before* the fix below. After it: 13.16% and
+12.85%, worst frames 252051 and 256568.)
+
 One door is nearly as expensive as twelve, because only the doors inside
 the flood's radius matter and the nearest one is the one you are looking
 at. **So the problem is not pessimism. It is real and it is reachable.**
@@ -152,36 +155,45 @@ each step of the lift. Quad render only; the whole-frame budget is
 | 170 | 194862 | 138825 | 56037 | 2.81 |
 | 213 | 194862 | 131700 | 63162 | 3.16 |
 
-**The charge is flat to the microsecond** — 194862 at every step, which
-is `rc_charge` ignoring `rc_dlift` on the disc and not merely in the
-model. **The work falls 22.7%** as the door rises, exactly as `rc_column`
-draws less of it.
+The charge was **flat to the microsecond**; the work fell 22.7%. The
+quad charge *alone* exceeded the whole frame's budget by 302 µs while the
+quad work at its heaviest was 24210 µs *under* it. So the frame was late
+for what it was charged, not for what it did.
 
-Two numbers settle the question:
+### Fixed: `rc_charge` subtracts the lifted rows
 
-- The quad **charge alone**, 194862, already exceeds the whole frame's
-  194560 budget — by 302 µs, before `bg_fill`, the march, the projector
-  or the HUD have been charged anything.
-- The quad **work** at its heaviest, 170350, is **24210 µs under** that
-  same budget.
+Twenty-eight instructions at `rcc_rok`, behind an `rc_dlift == 0`
+early-out so every frame with no door running pays three of them. **They
+cost nothing**: `rastcol.asm` has an `align 256` before `COLBLK` and the
+insert came out of that padding — 173 bytes → 145, `game_end` unmoved.
 
-So the frame is late because of what it is charged, not because of what
-it does. By the last step of the run the charge is over by 63162 µs —
-**more than three vsync periods** — and the disc takes its twelve
-vsyncs on that frame just as it does on the first.
+`colmodel.charge_terms` mirrors it, so the model and the disc still agree
+hook for hook — which matters, because *both* previously ignored `dlift`
+and their agreement is what hid this.
 
-What this does *not* settle: whether the FIRST frame of a run would fit
-on work alone once the rest of the frame is counted. This rig times
-`raster_colframe` and nothing else, and 170350 leaves 24210 for
-`bg_fill` (9215), the march, the projector, the HUD and the overlay,
-which is tight. The later frames are unambiguous; the first one wants
-the whole-frame measurement before anyone claims it.
+**On the disc, per door, before and after:**
 
-**The fix** is `rc_charge` subtracting the lifted rows behind an
-`rc_dlift == 0` early-out, so the common frame pays three instructions.
-It has to keep the one-sided property `emu_rcol atomic` proves, and
-`colmodel.charge` has to mirror it, or the model and the disc diverge
-again — which is exactly how this went unseen.
+```
+before   [12, 12, 12, 12, 12, 10, 10]
+after    [12, 11, 11, 10, 10, 10, 10]
+```
+
+Ten lost periods a run become four, and the last three frames of every
+run are back on pace. The modelled worst frame follows: one-moving-shut
+13.85% → **13.16%**, worst charged frame 258792 → 252051.
+
+The first frame is still late. That is the `dlift 42` frame, where the
+lift removes least and the work is heaviest — the sweep models exactly
+that frame, which is why its figure moves so much less than the disc's.
+
+**And the fix exposed a second, older defect.** `atomic` had never once
+tested a moving face, so it now takes a `dlift` *and* a `moving` flag —
+they are separate questions, and a face carries the moving bit at
+`dlift 0` on the first and last frame of every run. With a moving face
+and no lift at all, intervals measure **478 µs over their charge**; with
+the lift, 239. So the overlay pass has always been under-charged, my
+change halves it, and it is still not zero. `emu_rcol atomic n 0 1` is
+the command that shows it.
 
 ---
 
@@ -705,11 +717,13 @@ legal map is.
    win. See below for what it cost and what it does not do.
 5. **The editor**, once there is a reason to draw a second level.
 6. **The cheap world blitter**, when the monster count wants it.
-7. **The moving-door pass** — and it is now the ONLY measurably broken
-   thing in the game: 12 vsyncs instead of 10 for the whole of every
-   door's run, on the disc, on 8 of 8 doors. `rc_charge` does not read
-   `rc_dlift`. See "Doors in motion: the case that DOES occur" above for
-   the measurement and the shape of the fix.
+7. **The moving-door pass** — mostly fixed. `rc_charge` reads `rc_dlift`
+   now and the run went `[12,12,12,12,12]` → `[12,11,11,10,10]` on the
+   disc. Two things are left: the FIRST frame of a run is still two
+   periods late (the lift is smallest and the work heaviest there), and
+   the overlay pass is **under**-charged by up to 478 µs — a separate,
+   older defect that `atomic` had never tested because it had never
+   drawn a moving face. `emu_rcol atomic n 0 1` shows it.
 8. **`emu_snd.py`** — hook `snd_wr` by address, run `snd_tick` N times
    after each `snd_play(i)`, assert the write stream equals
    `gensnd.EFFECTS`. The one thing that would catch a step order, a

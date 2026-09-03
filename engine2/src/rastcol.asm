@@ -875,7 +875,52 @@ rcc_eok
     jr   c,rcc_rok
     ld   a,(hl)
 rcc_rok
-    ld   l,a
+    ; ---- A DOOR THAT HAS RISEN IS DRAWN SHORTER AND MUST BE CHARGED
+    ;      SHORTER, and for as long as this routine existed it was not.
+    ;
+    ;      rc_rows raises a moving face's bottom edge by
+    ;      (rows * rc_dlift) >> 8 -- the same arithmetic rc_slide does --
+    ;      so the face shrinks over its six-frame run.  The charge did
+    ;      not follow, and MEASURED on the disc that cost TWO VSYNC
+    ;      PERIODS on every frame of every door's run: 12 vsyncs against
+    ;      10, on 8 of 8 doors.
+    ;
+    ;      The charge was flat at 194862 us across the whole lift while
+    ;      the work fell 170350 -> 131700, so by the last step the frame
+    ;      was charged 63162 us -- three whole periods -- for work it
+    ;      does not do.  cost_unit yields on the CHARGE, so that is not
+    ;      bookkeeping; it is spent.
+    ;
+    ;      IT IS STILL A ONE-SIDED BOUND.  rc_slide subtracts
+    ;      (visible * dlift) >> 8 from the VISIBLE rows, and `visible` is
+    ;      at most the clipped `rows` charged here; v - ((v*d) >> 8) is
+    ;      non-decreasing in v, so bounding v by rows bounds the lifted
+    ;      count too.  The EDGES term is left alone -- over-charged as
+    ;      before, which leaves that side of the bound untouched.
+    ;
+    ;      AND THE COMMON FRAME PAYS THREE INSTRUCTIONS: rc_dlift is 0
+    ;      on every frame no door is running, which is nearly all of
+    ;      them, so the test leaves before it ever reads rc_kind.
+    ld   c,a                    ; C = rows.  rc_mul8 preserves C and DE,
+                                ; and B is free -- the tail below
+                                ; clobbers it for cost_unit anyway
+    ld   a,(rc_dlift)
+    or   a
+    jr   z,rcc_flat             ; no door running anywhere
+    ld   a,(rc_kind)
+    and  2                      ; bit 1: this face is the one rising
+    jr   z,rcc_flat
+    push de                     ; 8*edges -- rc_mul8 wants DE itself
+    ld   e,c
+    ld   d,0
+    ld   a,(rc_dlift)
+    call rc_mul8                ; HL = rows * dlift
+    pop  de
+    ld   a,c
+    sub  h                      ; rows - ((rows * dlift) >> 8)
+    ld   c,a
+rcc_flat
+    ld   l,c
     ld   h,0
     add  hl,de                  ; HL = rows + 8*edges, <= 865
     ld   d,h                    ; ...times 21, by shifts

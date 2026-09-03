@@ -353,11 +353,11 @@ def time_it(nstates=24):
 
 
 # ---------------------------------------------------------------- atomic --
-def charges_for(quads, c):
+def charges_for(quads, c, dlift=0):
     import pacemodel as P
     return colmodel.charge(quads, c, P.C_CFRAME, P.C_CFACE, P.C_CSKIP,
                            P.C_COLS, P.C_CBAND, P.C_COLR, P.C_CEDGE,
-                           P.C_CSTEP, c_cfar=P.C_CFAR,
+                           P.C_CSTEP, dlift=dlift, c_cfar=P.C_CFAR,
                            c_cfarp=P.C_CFARP,
                            c_cfars=P.C_CFARS,
                            c_cfarend=P.C_CFAREND)
@@ -417,7 +417,7 @@ def _atomic_states(nstates, seed, c):
     return out[:max(nstates, 1)]
 
 
-def atomic(nstates=3, seed=1337):
+def atomic(nstates=3, seed=1337, dlift=0, moving=None):
     """EVERY INTERVAL, MEASURED -- not every frame.
 
     A charge can bound a whole frame and still under-charge one stretch of
@@ -434,9 +434,30 @@ def atomic(nstates=3, seed=1337):
     """
     rig = Rig(paced=True)
     c = rig.cfg
+    rig.c.poke(rig.s("RC_DLIFT"), dlift)
+    # MOVING AND LIFTED ARE TWO DIFFERENT QUESTIONS.  A face can carry
+    # the moving bit with rc_dlift at 0 -- that is the first and last
+    # frame of every run -- and it then takes the OVERLAY pass without
+    # taking the lift.  Testing them together cannot say which of the
+    # two an under-charge belongs to, and `moving` exists to separate
+    # them: `atomic n 0 1` is the overlay pass with no lift at all.
+    if moving is None:
+        moving = bool(dlift)
     worst = []
     for px, py, a, qs in _atomic_states(nstates, seed, c):
-        ch = charges_for(qs, c)
+        if moving and qs:
+            # PROMOTE THE NEAREST FACE TO A DOOR IN MOTION.  Nothing in
+            # _atomic_states produces one, so for the whole life of this
+            # file the lifted path was never charged OR timed -- which is
+            # how rc_charge came to ignore rc_dlift unnoticed.  Nearest =
+            # biggest half height = the face that actually stutters.
+            # `and qs` because _atomic_states' first state is the empty
+            # one that leaves the far plane the whole screen -- there is
+            # no face there to promote.
+            qs = [tuple(q) for q in qs]
+            i = max(range(len(qs)), key=lambda k: qs[k][3])
+            q = list(qs[i]); q[4] = 3; qs[i] = tuple(q)
+        ch = charges_for(qs, c, dlift)
         # THE PRECISE PATH, not bench(): counting whole iterations of a
         # fixed window quantises each PREFIX by up to one iteration --
         # 4.3% of 87000 us -- and the intervals are differences of two
@@ -444,14 +465,17 @@ def atomic(nstates=3, seed=1337):
         # quantity and this printed under-charges that were not there.
         # bench_exact runs the prefix an exact number of times; the
         # residual error is a few microseconds.  See Rig.bench_exact.
-        _terms, iv = measure(rig, qs)
+        _terms, iv = measure(rig, qs, dlift)
         z80 = []
         for k in range(1, len(ch) + 2):
+            rig.c.poke(rig.s("RC_DLIFT"), dlift)
             rig.c.poke(rig.s("HOOKK"), min(k, 255))
             rig.bench_exact(qs, reps=1)
             z80.append(struct.unpack(
                 "<H", rig.c.read_ram(rig.s("HOOKBC"), 2))[0])
-        print(f"\nstate ({px:04X},{py:04X},{a})  {len(qs)} quads, "
+        print(f"\nstate ({px:04X},{py:04X},{a})  dlift {dlift}"
+              f"{' moving' if moving else ''}  "
+              f"{len(qs)} quads, "
               f"{_far_pairs(qs, c)} far pairs, "
               f"{len(ch)} hooks, whole render {sum(iv):.0f} us")
         bad, dis = [], 0
@@ -536,7 +560,7 @@ def _states(nstates, seed):
     return out
 
 
-def measure(rig, qs):
+def measure(rig, qs, dlift=0):
     """-> (terms, intervals) for one state: the regressors colmodel emits
     per hook, and the microseconds the Z80 really spends after it.
 
@@ -546,8 +570,9 @@ def measure(rig, qs):
     regressed on iv[k+1], the prefix difference that follows it.
     """
     c = rig.cfg
-    terms = colmodel.charge_terms(qs, c)
+    terms = colmodel.charge_terms(qs, c, dlift)
     rig.poke_quads(qs)
+    rig.c.poke(rig.s("RC_DLIFT"), dlift)
     t = []
     for k in range(1, len(terms) + 2):
         rig.c.poke(rig.s("HOOKK"), min(k, 255))
@@ -677,6 +702,9 @@ if __name__ == "__main__":
     if cmd == "verify":
         raise SystemExit(1 if verify() else 0)
     if cmd == "atomic":
-        atomic(int(sys.argv[2]) if len(sys.argv) > 2 else 3)
+        atomic(int(sys.argv[2]) if len(sys.argv) > 2 else 3,
+               dlift=int(sys.argv[3]) if len(sys.argv) > 3 else 0,
+               moving=(bool(int(sys.argv[4])) if len(sys.argv) > 4
+                       else None))
         raise SystemExit(0)
     time_it(int(sys.argv[2]) if len(sys.argv) > 2 else 24)

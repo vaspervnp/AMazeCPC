@@ -756,8 +756,15 @@ def charge_terms(quads, c, dlift=0):
                       + (1 if i["dn0"] < c.VP_H else 0))
                 jhi = min(c.CYH, max(0, i["h"] + i["hq"] + 1) >> 4)
                 jlo = min(c.CYH, max(0, i["h"] - i["hq"] - 1) >> 4)
-                out.append(dict(z, pair=1, bands=nb,
-                                rows=min(2 * jhi + 1, free),
+                rows = min(2 * jhi + 1, free)
+                # ...AND A RISEN DOOR IS CHARGED SHORTER, exactly as
+                # rc_charge's rcc_rok does it: rows - ((rows*dlift) >> 8),
+                # only for a face carrying the moving bit, and only while
+                # a door is actually running.  The EDGES term is left
+                # alone on both sides.
+                if dlift and is_moving(q):
+                    rows -= (rows * dlift) >> 8
+                out.append(dict(z, pair=1, bands=nb, rows=rows,
                                 edges=min(2 * (jhi - jlo), free)))
             if 1 <= i["delta"] <= 3:
                 out.append(dict(z, skip=1, steps=i["delta"]))

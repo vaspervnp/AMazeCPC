@@ -11,19 +11,33 @@ states over budget. Doors open is 0.199%.
 **And it is a game now**: a monster that hunts and hurts you, health, a
 death screen, an exit that ends the level and a score.
 
-**THE ONE THING THAT IS MEASURABLY BROKEN** is the frame period while a
-door is opening: **12 vsyncs instead of 10, for the whole five-frame
-run, on 8 of 8 doors measured on the disc.** `rc_charge` never reads
-`rc_dlift`, so a door being drawn shorter every frame is charged at full
-height — and `cost_unit` yields on the charge, not on the work.
+**The door stutter is mostly fixed.** It was 12 vsyncs instead of 10 for
+the whole five-frame run, on 8 of 8 doors: `rc_charge` never read
+`rc_dlift`, so a door drawn shorter every frame was charged at full
+height, and `cost_unit` yields on the charge. Measured, the charge was
+flat at 194862 µs across the lift while the work fell 170350 → 131700 —
+the charge alone exceeded the whole-frame budget while the work was
+24210 µs under it. `rc_charge` subtracts the lifted rows now, for 28
+instructions that came out of an `align 256` pad and cost no bytes:
 
-**And it IS the charge, measured**: the Z80's own charge for the quad
-render is flat at **194862 µs** across the whole lift while the timed
-work falls **170350 → 131700**. The charge alone exceeds the 194560
-whole-frame budget by 302 µs; the work at its heaviest is 24210 µs
-*under* it. This was dismissed in three files for a long time as "a case
-that does not occur"; it occurs every time a player opens a door. See
-plan.md, "Doors in motion: the case that DOES occur".
+```
+before   [12, 12, 12, 12, 12, 10, 10]
+after    [12, 11, 11, 10, 10, 10, 10]
+```
+
+**Two things are left.** The FIRST frame of a run is still two periods
+late — the lift is smallest and the work heaviest there. And the overlay
+pass is **UNDER**-charged by up to 478 µs, an older defect `atomic` never
+saw because it had never drawn a moving face; `emu_rcol atomic n 0 1`
+shows it now.
+
+**And the menu drew its text in colours read from arbitrary memory.**
+`mn_next` computed `MNPENS + 2*pen` and dereferenced it, where the pen
+tables are 32 bytes each and it wanted a base. Pen 3 resolved to #FF00 —
+inside the just-cleared front buffer — so **"PRESS SPACE TO START" has
+never appeared on the title screen**. Found by checking the win screen's
+score digit against the font, byte for byte; fixed; the title now draws
+eight bands for eight rows.
 
 **The BODY is the binding constraint from here on** — `game_end` is 22
 bytes under `BUCK0` and RAM bank 5 has 51 free. The next feature has to
@@ -46,14 +60,14 @@ first; every number here is written down next to the code it constrains.
 | `PACE_FRAMES` (`engine2/src/main3.asm`) | **10** — 199.7 ms, 5.01 fps |
 | the map (`tools/world.py`) | **nine 4x4 rooms** in a 3x3 grid, 144 floor cells |
 | `make amaze` | OK, disc fresh (`md5` of `engine2/build/TEX.BIN` == `build/e3/TEX.BIN`) |
-| `emu_rcol.py verify` | **183/183 screens byte-exact** against `colmodel.py`, 24 of them a door IN MOTION |
-| `emu_rcol.py atomic` | **PASS** — every interval inside its charge, 0 model/asm disagreements, 40 states / 2 seeds |
+| `emu_rcol.py verify` | **166/166 screens byte-exact** against `colmodel.py`, 24 of them a door IN MOTION |
+| `emu_rcol.py atomic` | **PASS** at rest; with a MOVING face it finds a pre-existing 478 µs under-charge (`atomic n 0 1`) |
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
 | `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
 | `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 over budget |
 | `pacescan.py` (doors OPEN) | 17,530 of 8,792,064 = **0.199%**, worst frame 191852 of 194560 |
-| `pacescan.py` (ONE door moving) | 1,125,604 of 8,128,512 = **13.85%** — reachable, and the open problem |
-| the disc, while a door runs | **[12, 12, 12, 12, 12]** vsyncs against 10 — 8 of 8 doors |
+| `pacescan.py` (ONE door moving) | 1,069,807 of 8,128,512 = **13.16%** — the first frame of a run |
+| the disc, while a door runs | **[12, 11, 11, 10, 10]** vsyncs against 10 (was all 12) |
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
 | `monmodel.py` | **PASS** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs |
 | the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |

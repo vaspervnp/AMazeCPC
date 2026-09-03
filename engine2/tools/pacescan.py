@@ -85,6 +85,14 @@ DOORMOV = 3                     # a door part way open (march.asm)
 ONEMOV_SHUT = "onemov_shut"
 ONEMOV_OPEN = "onemov_open"
 
+#  THE LIFT THE SWEEP REPLAYS.  game.asm's DLIFT is 42, 85, 128, 170,
+#  213 -- the five steps a running door takes -- and rc_charge now
+#  subtracts (rows * dlift) >> 8 for a moving face, so the charge is
+#  LARGEST at the smallest lift.  42 is therefore the worst frame of the
+#  run and the one this sweeps; door_lift writes 0 only at rest, when
+#  there is no moving face to charge at all.
+ONEMOV_DLIFT = 42
+
 CONFIGS = ((0, "ALL SHUT -- the map as it loads"),
            (None, "ALL OPEN -- the flood sees through every doorway"),
            (ONEMOV_SHUT, "ONE MOVING, REST SHUT -- reachable, early game"),
@@ -223,11 +231,12 @@ def _chunk(args):
     worst = None
     for i in range(lo, hi):
         px, py = pos[i]
-        st = solid
+        st, dl = solid, 0
         if onemov is not None:
             st = onemov[1][_nearest_door(onemov[0], px, py)]
+            dl = ONEMOV_DLIFT
         for a in range(72):
-            u = pm._state_units(st, px, py, a, cyh)
+            u = pm._state_units(st, px, py, a, cyh, dl)
             acc = 0
             for _ in range(3):              # settle the carry-over
                 w, _wo, acc = pm.segments(u, acc, tail=tail, n=99)
