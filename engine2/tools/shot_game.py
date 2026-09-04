@@ -2,7 +2,7 @@
 
     python3 engine2/tools/shot_game.py [outdir]
 
-Loads the real disc through the real BASIC loader (RUN"DISC), lets it
+Loads the real disc through the real BASIC loader (RUN"AMAZE), lets it
 settle, then holds keys the way a player would and screenshots what comes
 out.  This is the end-to-end check that the relocating loader, the bank
 switch, the palette, the double buffer and the game layer all agree.
@@ -30,8 +30,8 @@ def main():
     c = CPC()
     c.insert_disc(DSK)
     c.run_frames(150)
-    c.type_text('RUN"DISC\n')
-    c.run_frames(400)
+    c.type_text('RUN"AMAZE\n')
+    c.run_frames(bootdisc.LOAD_FRAMES)
     bootdisc.start(c)   # past the title screen -- see bootdisc.py
     print("after boot: mode", c.mode, "screen",
           hex(c.crtc_screen_addr), "pc", hex(c.pc))

@@ -242,8 +242,8 @@ class Game:
         self.c = CPC()
         self.c.insert_disc(DSK)
         self.c.run_frames(150)
-        self.c.type_text('RUN"DISC\n')
-        self.c.run_frames(500)
+        self.c.type_text('RUN"AMAZE\n')
+        self.c.run_frames(bootdisc.LOAD_FRAMES)
         bootdisc.start(self.c)   # past the title screen -- see bootdisc.py          # loader + two hud_static passes
 
     def player(self):

@@ -85,8 +85,8 @@ def main():
     c = CPC()
     c.insert_disc(DSK)
     c.run_frames(150)
-    c.type_text('RUN"DISC\n')
-    c.run_frames(400)
+    c.type_text('RUN"AMAZE\n')
+    c.run_frames(bootdisc.LOAD_FRAMES)
     bootdisc.start(c)   # past the title screen -- see bootdisc.py
     print(f"{'':30s} {'game frames':>12s} {'vsyncs each':>12s} {'ms':>7s}"
           f" {'fps':>6s}")

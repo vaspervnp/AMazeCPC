@@ -42,8 +42,8 @@ def main():
     c = CPC()
     c.insert_disc(DSK)
     c.run_frames(150)
-    c.type_text('RUN"DISC\n')
-    c.run_frames(400)
+    c.type_text('RUN"AMAZE\n')
+    c.run_frames(bootdisc.LOAD_FRAMES)
     bootdisc.start(c)   # past the title screen -- see bootdisc.py
     ok = True
     if c.mode != 0:

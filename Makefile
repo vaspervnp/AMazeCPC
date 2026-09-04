@@ -42,7 +42,15 @@ SRC := engine2/src/main3.asm engine2/src/game.asm engine2/src/frame.asm \
 # engine2/src/tab_equ.inc says the sprites are; a harness that reads them out
 # of Python and the pixels off a disc built from an OLDER copy reports
 # thousands of wrong bytes and no defect.  See the `gun` target below.
-ART := engine2/tools/gunart.py engine2/tools/pal.py engine2/tools/walltex.py
+# ...and assets/revive8b.scr is art in the most literal sense: a 16K MODE 0
+# screen dump that amaze.bas puts up at &C000 before it loads anything else.
+# It keeps its own name on the disc -- REVIVE8B.SCR, which is exactly the 8
+# characters AMSDOS allows -- because it is somebody else's artwork and the
+# credit on the picture and the file should say the same thing.
+# It is COPIED to the disc, not generated, so it needs naming here or a new
+# picture would not rebuild amaze.dsk.
+ART := engine2/tools/gunart.py engine2/tools/pal.py engine2/tools/walltex.py \
+       assets/revive8b.scr
 
 # THE GENERATORS -- AND THIS IS WHERE THE REAL BUILD BUG WAS.  Three of
 # them ran in nobody's recipe: gen_march.py, which owns the MAZE out of
@@ -69,7 +77,7 @@ GEN := engine2/tools/gentab.py engine2/tools/genhud.py \
 .PHONY: all amaze test verify rast pace gun hud enemy shots clean
 all: amaze
 
-amaze: $(SRC) $(ART) $(GEN) engine2/src/disc3.bas
+amaze: $(SRC) $(ART) $(GEN) engine2/src/amaze.bas
 	@mkdir -p $(BUILD)/e3
 	@# THE MAZE FIRST.  gen_march.py turns tools/world.py's grid into
 	@# gen_maze.inc (packed two bits a cell), the per-heading constants
@@ -97,10 +105,12 @@ amaze: $(SRC) $(ART) $(GEN) engine2/src/disc3.bas
 	cp engine2/build/TEX.BIN $(BUILD)/e3/TEX.BIN
 	@# AMSDOS reads ASCII BASIC with CR line endings; LF alone reads as one
 	@# enormous line and BASIC rejects it.
-	sed 's/$$/\r/' engine2/src/disc3.bas > $(BUILD)/e3/DISC.BAS
+	sed 's/$$/\r/' engine2/src/amaze.bas > $(BUILD)/e3/AMAZE.BAS
+	cp assets/revive8b.scr $(BUILD)/e3/REVIVE8B.SCR
 	@rm -f $(BUILD)/amaze.dsk
 	$(IDSK) $(BUILD)/amaze.dsk -n
-	$(IDSK) $(BUILD)/amaze.dsk -i $(BUILD)/e3/DISC.BAS   -t 0 -f
+	$(IDSK) $(BUILD)/amaze.dsk -i $(BUILD)/e3/AMAZE.BAS  -t 0 -f
+	$(IDSK) $(BUILD)/amaze.dsk -i $(BUILD)/e3/REVIVE8B.SCR -t 1 -c C000 -e C000 -f
 	$(IDSK) $(BUILD)/amaze.dsk -i $(BUILD)/e3/GAME3.BIN  -t 1 -c 7000 -e 7000 -f
 	$(IDSK) $(BUILD)/amaze.dsk -i $(BUILD)/e3/TABLES.BIN -t 1 -c 7000 -e 7000 -f
 	$(IDSK) $(BUILD)/amaze.dsk -i $(BUILD)/e3/TEX.BIN    -t 1 -c 7000 -e 7000 -f

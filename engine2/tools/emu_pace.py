@@ -160,8 +160,8 @@ class Rig:
         self.c = CPC()
         self.c.insert_disc(DSK)
         self.c.run_frames(150)
-        self.c.type_text('RUN"DISC\n')
-        self.c.run_frames(500)
+        self.c.type_text('RUN"AMAZE\n')
+        self.c.run_frames(bootdisc.LOAD_FRAMES)
         bootdisc.start(self.c)   # past the title screen -- see bootdisc.py
         # THE BOOT MAP, AND IT IS NOW TWO JOBS.  It has always been the
         # map `reachable()` picks states against; place() also writes it

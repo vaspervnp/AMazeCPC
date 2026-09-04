@@ -3,7 +3,7 @@
     python3 engine2/tools/shot_amaze3.py [outdir]
 
 Every picture below is the front buffer of a CPC 6128 that booted
-build/amaze.dsk through RUN"DISC and is sitting in main3.asm's loop --
+build/amaze.dsk through RUN"AMAZE and is sitting in main3.asm's loop --
 not a render harness, not a Python model.  The player is placed by poking
 plr_x / plr_y / plr_a, which is the same 8.8 / 0..71 state the keys
 produce, and the game is then left to draw several frames of its own.
@@ -56,8 +56,8 @@ def main():
     c = CPC()
     c.insert_disc(DSK)
     c.run_frames(150)
-    c.type_text('RUN"DISC\n')
-    c.run_frames(500)
+    c.type_text('RUN"AMAZE\n')
+    c.run_frames(bootdisc.LOAD_FRAMES)
     bootdisc.start(c)   # past the title screen -- see bootdisc.py
     assert c.mode == 0, f"not in mode 0 after boot: {c.mode}"
 

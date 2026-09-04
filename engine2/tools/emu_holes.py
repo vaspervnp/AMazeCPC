@@ -86,8 +86,8 @@ class Rig:
         self.c = CPC()
         self.c.insert_disc(DSK)
         self.c.run_frames(150)
-        self.c.type_text('RUN"DISC\n')
-        self.c.run_frames(500)
+        self.c.type_text('RUN"AMAZE\n')
+        self.c.run_frames(bootdisc.LOAD_FRAMES)
         bootdisc.start(self.c)   # past the title screen -- see bootdisc.py
         self.solid = self.c.read_ram(addrs.SOLID, 256)
         self.ovh = 0.0

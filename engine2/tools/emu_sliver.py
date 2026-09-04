@@ -232,8 +232,8 @@ def disc():
     m = CPC()
     m.insert_disc(dsk)
     m.run_frames(150)
-    m.type_text('RUN"DISC\n')
-    m.run_frames(500)
+    m.type_text('RUN"AMAZE\n')
+    m.run_frames(bootdisc.LOAD_FRAMES)
     bootdisc.start(m)   # past the title screen -- see bootdisc.py
     assert m.mode == 0
     tot = {"sliver": 0, "left": 0, "right": 0}

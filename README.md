@@ -12,7 +12,9 @@ with horizontal `PUSH DE` runs.
     make gun        # the weapon: every bob offset, byte for byte, then timed
     make pace       # the frame period and the walking speed that follows
 
-Boot with `RUN"DISC`. A title screen lists the keys; **SPACE** starts.
+Boot with `RUN"AMAZE`. A loading screen comes up while the tables and the
+game load; **SPACE** goes past it, or it goes by itself after ten seconds.
+Then a title screen lists the keys, and **SPACE** starts.
 
 Arrow keys move and turn; **SHIFT** runs (and turns twice as fast);
 **SPACE** opens a door you are standing beside; **CTRL** or **Z** fires;

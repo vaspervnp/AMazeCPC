@@ -3,7 +3,7 @@
     python3 engine2/tools/shot_gun.py [outdir]
 
 The pictures are the front buffer of a CPC 6128 that booted
-build/amaze.dsk through RUN"DISC and is sitting in main3.asm's loop.  The
+build/amaze.dsk through RUN"AMAZE and is sitting in main3.asm's loop.  The
 bob offsets are POKED (gun_dx, gun_dy) and more frames are drawn, so each
 picture is the blitter's real output at that offset -- not a model.
 
@@ -72,8 +72,8 @@ def main():
     c = CPC()
     c.insert_disc(DSK)
     c.run_frames(150)
-    c.type_text('RUN"DISC\n')
-    c.run_frames(500)
+    c.type_text('RUN"AMAZE\n')
+    c.run_frames(bootdisc.LOAD_FRAMES)
     bootdisc.start(c)   # past the title screen -- see bootdisc.py
     assert c.mode == 0, f"not in mode 0 after boot: {c.mode}"
     c.poke(s["GUN_STEP"], 0xC9)         # RET: freeze the bob where it is put

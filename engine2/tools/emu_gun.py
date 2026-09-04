@@ -14,7 +14,7 @@ frame.  The model is also what proves the properties the placement
 depends on: both offsets stay in range, neither ever steps by more than
 one, and the path does not repeat.
 
-VERIFY.  build/amaze.dsk is booted through RUN"DISC and left in
+VERIFY.  build/amaze.dsk is booted through RUN"AMAZE and left in
 main3.asm's loop.  gun_step is stubbed to RET so the bob stays where it
 is poked, and for every reachable (dx, dy) -- 5 x 9 = 45 of them -- the
 displayed buffer is read back and compared with engine2/tools/gunart.py's
