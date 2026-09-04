@@ -136,11 +136,23 @@ MAZE_SRC_M2 = [
 AMMO_CELLS = [(2, 2), (8, 3), (13, 2),
               (3, 8), (12, 7), (7, 13)]
 
-# ---- THE MONSTER, one of it, standing still -------------------------
-#  In the room the player starts in, two cells to the west, so it is in
-#  view the moment they turn round.  It is a test target for the shot's
-#  impact effect, not a game character.
-MONSTER_CELL = (1, 12)
+# ---- THE MONSTERS, one to a room, and NONE IN THE ROOM YOU START IN --
+#  There was one, at (1, 12), two cells west of the start: a test target
+#  for the shot's impact effect rather than a game character, and the
+#  first thing that happened in a new game was being bitten by it.
+#
+#  The map is nine 4x4 rooms on a five-cell pitch, so a monster to a room
+#  is what the layout asks for.  The player's own room is left empty --
+#  you get to turn round and look at where you are before anything comes
+#  for you -- and every cell here is checked below against the floor, the
+#  pickups, the exit and the start.
+#
+#  HOW MANY IS A PACING QUESTION, NOT A DESIGN ONE.  pip.asm's mon_draw
+#  is the most expensive thing in the frame at close range (6736.7 us
+#  measured, one cell away) and C_PIPM has to bound all of them together.
+#  See main3.asm.
+MONSTER_CELLS = [(12, 3), (2, 7), (7, 7), (12, 12)]
+MONSTER_CELL = MONSTER_CELLS[0]     # ...for the exit's assert
 
 # ---- THE WAY OUT ---------------------------------------------------
 #  'X' in the grid above, a plain FLOOR cell in SOLID: the exit is a
@@ -208,15 +220,32 @@ def load_maze():
     return grid, sx, sy
 
 
-def monster_cell(grid, sx, sy):
-    """-> (x, y) for the standing monster, or None for this layout."""
+def monster_cells(grid, sx, sy):
+    """-> [(x, y)] for the monsters, or [] for this layout.
+
+    THE ROOM THE PLAYER IS IN MUST BE EMPTY, and that is checked here
+    rather than eyeballed: rooms are 4x4 on a five-cell pitch, so the
+    room of a cell is (x // 5, y // 5).
+    """
     if _ACTIVE is not MAZE_SRC:
-        return None
-    x, y = MONSTER_CELL
-    assert grid[y][x] == FLOOR, f"monster {(x, y)} is not floor"
-    assert (x, y) != (sx, sy), "monster on the player's start cell"
-    assert (x, y) not in AMMO_CELLS, "monster standing on a pickup"
-    return MONSTER_CELL
+        return []
+    home = (sx // 5, sy // 5)
+    for (x, y) in MONSTER_CELLS:
+        assert grid[y][x] == FLOOR, f"monster {(x, y)} is not floor"
+        assert (x, y) != (sx, sy), "monster on the player's start cell"
+        assert (x, y) not in AMMO_CELLS, "monster standing on a pickup"
+        assert (x // 5, y // 5) != home, \
+            f"monster {(x, y)} is in the player's own room"
+    assert len(set(MONSTER_CELLS)) == len(MONSTER_CELLS), "two in one cell"
+    assert len(set((x // 5, y // 5) for x, y in MONSTER_CELLS)) \
+        == len(MONSTER_CELLS), "two monsters in one room"
+    return list(MONSTER_CELLS)
+
+
+def monster_cell(grid, sx, sy):
+    """-> the FIRST monster's cell, for callers that want just one."""
+    c = monster_cells(grid, sx, sy)
+    return c[0] if c else None
 
 
 def exit_cell(grid, sx, sy):

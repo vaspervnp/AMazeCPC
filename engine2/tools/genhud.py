@@ -179,6 +179,35 @@ def ellipse_bands(rc, cxb, cy, rxb, ry, pen):
         i = j
 
 
+MM_N = 16               # the maze is 16x16 cells
+MM_CH = 2               # scanlines a cell.  IT WAS 4, and 4 cost 14800 us
+                        # to paint against a budget with 18178 spare --
+                        # see C_MMAP.  Two scanlines is the same 16x16
+                        # map at half the fill, and the well holds it
+                        # with room over.  A byte is 2 mode-0 pixels
+                        # across, so a cell is a wide-ish rectangle
+MM_SEEN = pal.HUD_FRAME     # the cyan the instrument frames are drawn in
+MM_PLR = pal.HUD_TEXT       # ...and white for where you are standing
+
+
+def map_slot():
+    """-> (x, y, w, h) of the map itself, CENTRED in the right-hand well.
+
+    Derived from the same slot arithmetic that draws the well, so moving
+    the slots moves the map with them -- the rule every other readout in
+    this file follows.
+    """
+    _cxb, cy = dial_centre()
+    ww, wh, gap = 22, 22, 5
+    wx = SCR_W - 2 - ww
+    wy = cy - (3 * wh + 2 * gap) // 2
+    iw, ih = ww - 2, 3 * wh + 2 * gap - 4          # the inner well
+    w, h = MM_N, MM_N * MM_CH
+    assert w <= iw, f"map is {w} bytes wide, the well holds {iw}"
+    assert h <= ih, f"map is {h} lines tall, the well holds {ih}"
+    return wx + 1 + (iw - w) // 2, wy + 2 + (ih - h) // 2, w, h
+
+
 def dial_centre():
     """Centre of the dial: middle of the panel below the viewport."""
     top = VP_Y + VP_H + 2 * BEV_H
@@ -213,11 +242,19 @@ def furniture():
     #  but three bevelled slots read as an instrument panel where two big
     #  black rectangles read as a mistake, and they cost only startup time.
     ww, wh, gap = 22, 22, 5
-    for wx in (2, SCR_W - 2 - ww):
-        for k in range(3):
-            wy = cy - (3 * wh + 2 * gap) // 2 + k * (wh + gap)
-            rc.add(wx, wy, ww, wh, LIGHT)
-            rc.add(wx + 1, wy + 2, ww - 2, wh - 4, SHADOW)
+    for k in range(3):                      # ---- the LEFT column: ammo,
+        wy = cy - (3 * wh + 2 * gap) // 2 + k * (wh + gap)   # scanner, health
+        rc.add(2, wy, ww, wh, LIGHT)
+        rc.add(3, wy + 2, ww - 2, wh - 4, SHADOW)
+    # ---- and the RIGHT column is ONE well now: the map.
+    #  It was three empty slots -- "three bevelled slots read as an
+    #  instrument panel where two big black rectangles read as a
+    #  mistake", which was true while there was nothing to put in them.
+    #  There is now.  One well the height of all three, because a map cut
+    #  into three strips is not a map.
+    mx, my, mh = SCR_W - 2 - ww, cy - (3 * wh + 2 * gap) // 2, 3 * wh + 2 * gap
+    rc.add(mx, my, ww, mh, LIGHT)
+    rc.add(mx + 1, my + 2, ww - 2, mh - 4, SHADOW)
 
     scan_furniture(rc)                  # the ammo scanner's resting pad
 
@@ -663,6 +700,28 @@ def write_inc(path, rects, tab):
     L.append(f"HUD_CXB      equ {cxb}   ; dial centre: byte BOUNDARY x ...")
     L.append(f"HUD_CY       equ {cy}   ; ... and scanline y")
     L.append(f"HUD_NDOT     equ {len(NDL_DOTS)}   ; blocks in the needle")
+    # ---- THE MAP, in the right-hand well ----------------------------
+    #  ONE BYTE A CELL, and that is why hud2.asm has a blitter of its own
+    #  rather than calling hud_rect: hud_rect fills in two-byte units --
+    #  genhud.py asserts every width it is given is even, because the fill
+    #  is an unrolled run of PUSH DE -- so the narrowest cell it can draw
+    #  is two bytes, and sixteen of those is 32 bytes against the 20 the
+    #  well has.  A byte a cell fits, and a straight write is cheaper than
+    #  a rectangle call anyway at this size.
+    #
+    #  IT FITS, SO IT DOES NOT SCROLL.  The window is asserted to hold the
+    #  whole map below; a map that outgrows the well trips the assert
+    #  rather than silently showing a corner of itself.
+    mmx, mmy, mmw, mmh = map_slot()
+    L.append(f"HUD_MMX      equ {mmx}   ; the map, byte x ...")
+    L.append(f"HUD_MMY      equ {mmy}   ; ... and scanline y")
+    L.append(f"HUD_MMCH     equ {MM_CH}   ; scanlines a cell")
+    L.append(f"HUD_MMN      equ {MM_N}   ; cells a side")
+    L.append(f"HUD_MMSEEN   equ #{SOLID[MM_SEEN]:02X}   "
+             f"; a cell the flood has reached")
+    L.append(f"HUD_MMPLR    equ #{SOLID[MM_PLR]:02X}   ; ... and the one you are in")
+    L.append(f"HUD_MMBG     equ #{SOLID[SHADOW]:02X}   ; ... and one it has not")
+    del mmw, mmh
     L.append(f"HUD_NW       equ {NDL_W}   ; every block is this many bytes")
 
     # ---- THE AMMO READOUT, in the top-left slot ----------------------

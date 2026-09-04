@@ -33,6 +33,7 @@ and words in bank 5 for exactly this reason -- read the note there.
 """
 
 import os
+import re
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -46,6 +47,26 @@ import genhud                                                   # noqa: E402
 BANK_BASE = 0x4000
 BANK_SIZE = 16384
 RAMCFG = 0xC6                   # OUT (&7Fxx),&C6 -> bank 6 over &4000
+
+
+def packed_maze():
+    """-> the 64 packed maze bytes, THE ONE PLACE THEY ARE PARSED.
+
+    gen_march.py writes them into gen_maze.inc as a COMMENT now, because
+    the bytes themselves live in bank 6 and an .inc that also emitted
+    them would put 64 bytes back in the code segment.  Three tools read
+    them -- this one, monmodel.py and emu_room.py -- and three parsers
+    of a commented-out table is three chances to disagree about the map.
+    """
+    src = open(os.path.join(_E2, "src", "gen_maze.inc")).read()
+    body = src[src.index("; The bytes, for reading"):src.index("NAMMO")]
+    out = []
+    for line in body.splitlines():
+        m = re.match(r";\s+(#[0-9A-Fa-f,#]+)", line)
+        if m:
+            out += [int(t.strip().lstrip("#"), 16) for t in m.group(1).split(",")]
+    assert len(out) == 64, f"{len(out)} packed maze bytes, expected 64"
+    return out
 
 
 def build():
@@ -78,6 +99,15 @@ def build():
             blob += bytes((dx & 0xFF, dy & 0xFF))
     at["HUD_NDOT"] = genhud.HUD_NDOT
 
+    # ---- the packed maze ------------------------------------------
+    #  64 bytes, two bits a cell, read ONCE by march.asm's maze_unpack
+    #  when new_game rebuilds the world -- which is the rule at the top
+    #  of this file, exactly.  maze_unpack writes SOLID at #3A00, below
+    #  the paging window, and reads nothing out of bank 4, so it can run
+    #  with bank 6 in and put bank 4 back when it is done.
+    at["MAZEDATA"] = BANK_BASE + len(blob)
+    blob += bytes(packed_maze())
+
     assert len(blob) <= BANK_SIZE, (
         f"bank 6 overflows: {len(blob)} > {BANK_SIZE}")
     at["AUXEND"] = BANK_BASE + len(blob)
@@ -96,6 +126,7 @@ AUXCFG      equ #{ramcfg:02X}              ; OUT (&7Fxx),this pages bank 6
 HUDRECTS    equ #{hudrects:04X}          ; {nrect} x (db x, y, w, h, byte)
 HUD_NRECT   equ {nrect}              ; ...and how many
 HUDNDL      equ #{hudndl:04X}          ; the needle: 19 headings x {ndot} x (dx, dy)
+MAZEDATA    equ #{maze:04X}          ; 16x16 cells, two bits each
 AUXEND      equ #{auxend:04X}
 """
 
@@ -107,7 +138,8 @@ def main():
     open(os.path.join(out, "AUX.BIN"), "wb").write(blob)
     open(os.path.join(_E2, "src", "gen_aux.inc"), "w").write(INC.format(
         ramcfg=RAMCFG, hudrects=at["HUDRECTS"], nrect=at["HUD_NRECT"],
-        hudndl=at["HUDNDL"], ndot=at["HUD_NDOT"], auxend=at["AUXEND"]))
+        hudndl=at["HUDNDL"], ndot=at["HUD_NDOT"], maze=at["MAZEDATA"],
+        auxend=at["AUXEND"]))
     print(f"bank 6: {len(blob)} of {BANK_SIZE} bytes, "
           f"{BANK_SIZE - len(blob)} free")
     print(f"  HUDRECTS  #{at['HUDRECTS']:04X}  {at['HUD_NRECT']} rectangles, "

@@ -960,9 +960,47 @@ C_RNEEDLE   equ 750         ; ...and putting the needle back on top when
                             ; moving, and the monster being painted again
                             ; where it already is when a pickup's erase
                             ; may have wiped it -- see hud_radar.
-C_PIPP      equ 5000        ; THE WORLD-SPACE OVERLAY, and it is THREE
-C_PIPM      equ 7000        ; hooks now, not one: pip_draw (the pickup on
-C_PIPF      equ 1500        ; the floor), mon_draw (the monster) and
+C_MMSEEN    equ  900        ; THE MAP.  Not a hook of its own: it is
+                            ; added into C_PIPP below and the two share
+                            ; one cost_unit.
+                            ;
+                            ; A HOOK COSTS PERIODS BY EXISTING, NOT BY
+                            ; ITS SIZE.  Given hooks of their own, the
+                            ; map's two put 147159 states of 8128512 over
+                            ; budget -- and put the SAME 147159 over when
+                            ; the charge was cut by 7500 us and the worst
+                            ; frame fell from 191382 to 183882.  An
+                            ; identical count under a very different
+                            ; magnitude is not a magnitude problem:
+                            ; cost_unit yields when the next unit does
+                            ; not fit and throws the rest of the interval
+                            ; away, so every extra hook is another chance
+                            ; to throw one away.
+                            ;
+                            ; MEASURED 804.9 us with every cell the flood
+                            ; reaches NEW -- which is its worst, because
+                            ; a new cell is the only thing it draws -- and
+                            ; 602.5 with none.  It was 14010.8 when the
+                            ; map was rebuilt from MMBITS every frame; it
+                            ; is drawn once per cell now, into both
+                            ; buffers, and never repainted.  See
+                            ; hud2.asm:mm_seen.
+C_PIPP      equ 5900        ; THE MAP AND THE PICKUP, on one hook: 5000
+                            ; for pip_draw and C_MMSEEN above.
+                            ;
+                            ; A LITERAL, WITH THE SUM AS AN ASSERT, and
+                            ; that is not style.  pacemodel.py reads these
+                            ; constants OUT OF THIS FILE with int(), so an
+                            ; expression here does not parse and the model
+                            ; silently keeps its own Python default --
+                            ; MEASURED, it read 20000 against a disc
+                            ; charging 12500.  A model that disagrees with
+                            ; the disc is the failure this whole directory
+                            ; exists to prevent.  The assert does the job
+                            ; the expression was for.
+                            ; THE WORLD-SPACE OVERLAY, and it is THREE
+C_PIPM      equ 8800        ; hooks now, not one: pip_draw (the pickup on
+C_PIPF      equ 1000        ; the floor), mon_draw (the monster) and
                             ; fx_draw (the muzzle flash and the shot's
                             ; mark) are charged and yielded on separately.
                             ;
@@ -975,7 +1013,21 @@ C_PIPF      equ 1500        ; the floor), mon_draw (the monster) and
                             ;
                             ;   pip_draw, pickup 1 cell     4669.4
                             ;   mon_draw, monster 1 cell    6736.7
+                            ;   mon_all, FOUR of them        8632.6
                             ;   fx_draw, a shot in flight       802.7
+                            ;
+                            ; THE MARGINS ARE THIN ON PURPOSE.  Four
+                            ; monsters and the map together wanted +3000
+                            ; us on every frame and pacescan.py put
+                            ; 101934 states of 8128512 over budget for
+                            ; it -- not because the frame runs long
+                            ; (worst 179382 of 194560) but because
+                            ; cost_unit's greedy packing throws away the
+                            ; rest of an interval a unit will not fit in.
+                            ; These three are one-sided bounds on
+                            ; measured worst cases with 167-226 us over,
+                            ; which is what C_TAIL (187) and C_HUD (127)
+                            ; already run at.
                             ;
                             ; and the map puts an ammo cell at (1,12),
                             ; which is where the monster starts -- so
@@ -1401,12 +1453,25 @@ main_loop
     call hud_radar                  ; ...and the dial's blips and sweep
     ld   a,(plr_hp)                 ; ...and the health bar, which charges
     call hud_health                 ; C_HP and only when it moves
-    ld   bc,C_PIPP                  ; the pickup on the floor: it goes on
-    call cost_unit                  ; TOP of the walls and is cut by the
-    call pip_draw                   ; floor line they left in rc_dn
-    ld   bc,C_PIPM                  ; ...the monster, on its own hook
-    call cost_unit                  ; because it is the biggest of the
-    call mon_draw                   ; three and they can all draw at once
+    ; ---- THE MAP, every frame.  See hud2.asm for why it repaints
+    ;      an eighth of the flood a frame, and DRAWS the cells that are
+    ;      new -- there is no repaint, so a frame that discovers nothing
+    ;      pays only the fold.  It shares the pickup's hook: see C_PIPP.
+    ld   bc,C_PIPP
+    call cost_unit
+    call mm_seen
+    call pip_draw                   ; the pickup goes on TOP of the walls
+                                    ; and is cut by the floor line they
+                                    ; left in rc_dn
+    ld   bc,C_PIPM                  ; ...the monsters, on their own hook
+    call cost_unit                  ; because they are the biggest of the
+    xor  a                          ; "nothing drawn yet": mon_draw's
+    ld   (mon_bot),a                ; nearest-wins test compares against
+    ld   hl,mon_draw                ; it, and ONLY the draw pass may zero
+    call mon_all                    ; it -- the MOVE pass runs inside
+                                    ; game_step, before fire_edge reads
+                                    ; mon_bot, so zeroing it there meant
+                                    ; a shot could never find flesh
     ld   bc,C_PIPF                  ; ...and the shot's flash and mark
     call cost_unit
     call fx_draw
@@ -1423,7 +1488,10 @@ main_loop
     call hud_scan
     call hud_radar
     call pip_draw
-    call mon_draw
+    xor  a
+    ld   (mon_bot),a
+    ld   hl,mon_draw
+    call mon_all
     call fx_draw
     if GUN
     call gun_step
@@ -1621,9 +1689,17 @@ frame_ctr   dw 0
     ;      pad came out at 227.  MEASURED, game_end #2E94 -> #2FE6 -- the
     ;      free-bytes trick cost 123 bytes instead of saving 104.
     include "gen_spr.inc"
+    include "sprutil.asm"           ; two of pip.asm's helpers, in the pad
     if VPCOL
     include "rastcol.asm"
     endif
+    ; ---- AND THE MAZE HERE, ahead of game.asm and hud2.asm, for the
+    ;      same reason gen_spr.inc is ahead of pip.asm: rasm evaluates
+    ;      `equ` and `assert` where they stand, and hud2.asm sizes the
+    ;      monsters' RAM with NMON.  It carries almost no bytes now --
+    ;      MAZEDATA moved to RAM bank 6 and what is left is the pickup
+    ;      list, the monsters' start cells and a handful of equs.
+    include "gen_maze.inc"
     include "bg.asm"
     include "game.asm"
     include "hud2.asm"
@@ -1634,7 +1710,6 @@ frame_ctr   dw 0
     include "gun.asm"
     endif
     include "gen_slopes.inc"
-    include "gen_maze.inc"
     include "gen_snd.inc"
 
     if PACE_FRAMES>=1
@@ -2206,6 +2281,7 @@ body_len    equ game_end-start
 ;  gen_maze.inc, which main3.asm includes AFTER menu.asm -- rasm
 ;  evaluates an assert where it stands, the same trap PLR_HPMAX's assert
 ;  documents at the foot of hud2.asm.
+    assert C_PIPP == 5000 + C_MMSEEN
     assert NAMMO + 1 <= 9           ; ...the +1 is the monster
 
 ; THE MAP MUST FIT THE DOOR LIST.  game_init registers at most MAXDOORS

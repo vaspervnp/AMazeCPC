@@ -5,6 +5,13 @@
 HUD_CXB      equ 40   ; dial centre: byte BOUNDARY x ...
 HUD_CY       equ 150   ; ... and scanline y
 HUD_NDOT     equ 4   ; blocks in the needle
+HUD_MMX      equ 59   ; the map, byte x ...
+HUD_MMY      equ 134   ; ... and scanline y
+HUD_MMCH     equ 2   ; scanlines a cell
+HUD_MMN      equ 16   ; cells a side
+HUD_MMSEEN   equ #3C   ; a cell the flood has reached
+HUD_MMPLR    equ #FF   ; ... and the one you are in
+HUD_MMBG     equ #00   ; ... and one it has not
 HUD_NW       equ 2   ; every block is this many bytes
 
 HUD_AMX      equ 4   ; first ammo pip, byte x

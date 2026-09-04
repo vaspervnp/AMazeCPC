@@ -82,19 +82,12 @@ def load_solid():
     packing, see march.asm.
     """
     path = os.path.join(_E2, "src", "gen_maze.inc")
-    packed, seen = [], False
+    # ---- ONE PARSER, in genaux.py.  The bytes are in RAM bank 6 and
+    #      gen_maze.inc carries them as a comment; parsing that here as
+    #      well as there is two readings of one map.
+    import genaux
     mon = _equ("MONSTART", None, "gen_maze.inc")
-    for line in open(path):
-        s = line.split(";")[0].strip()
-        if s.startswith("MAZEDATA"):
-            seen = True
-            continue
-        if seen and s.startswith("db "):
-            for b in s[3:].split(","):
-                packed.append(int(b.strip().replace("#", "0x"), 0))
-        elif seen and packed and not s.startswith("db "):
-            seen = False
-    assert len(packed) == 64, f"{len(packed)} packed bytes, expected 64"
+    packed = genaux.packed_maze()
     solid = []
     for b in packed:
         for sh in (0, 2, 4, 6):

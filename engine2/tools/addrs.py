@@ -32,6 +32,7 @@ _WHERE = {
     "BUCKETS": "march.asm",
     "BUCKHI": "march.asm",
     "BUCKSZ": "march.asm",
+    "BUCK0": "march.asm",
     "MSTKBOT": "march.asm",
     "MSTKTOP": "march.asm",
     "QUADS": "memmap.inc",
@@ -56,13 +57,46 @@ _WHERE = {
     "MAXDOORS": "game.asm",
     "DOOR_SHUT": "game.asm",
     "DOOR_OPEN": "game.asm",
+    # The minimap's bits and the monsters' table.  Both are `equ`s on a
+    # base plus an offset rather than literals -- see _read -- because
+    # they share one hole in the free RAM and writing four literals is
+    # four chances to overlap.
+    "MMVARS": "hud2.asm",
+    "MMBITS": "hud2.asm",
+    "MONTAB": "hud2.asm",
 }
 
-_EQU = r"^\s*%s\s+equ\s+(#?[0-9A-Fa-f]+)\s*(?:;.*)?$"
+_EQU = r"^\s*%s\s+equ\s+(#?[0-9A-Za-z_]+(?:\s*\+\s*\d+)?)\s*(?:;.*)?$"
 
 
-def _num(tok):
-    return int(tok[1:], 16) if tok.startswith("#") else int(tok)
+def _num(tok, path=None):
+    """A hex literal, a decimal one, or SYMBOL+offset.
+
+    THE THIRD FORM IS WHY THIS IS A FUNCTION.  MONTAB is `equ MMVARS+50`
+    and MMBITS is `equ MMVARS+0`: they share one hole in the free RAM, so
+    they are written as offsets from its base and a harness that wanted a
+    literal would have to keep its own copy of the arithmetic.  One level
+    of indirection is all the sources use and all this resolves.
+    """
+    tok = tok.strip()
+    if "+" in tok:
+        base, off = (t.strip() for t in tok.split("+", 1))
+        return _num(base, path) + int(off)
+    if tok.startswith("#"):
+        return int(tok[1:], 16)
+    if tok.isdigit():
+        return int(tok)
+    return _read_in(path, tok)
+
+
+def _read_in(path, name):
+    """The same parse, in a file already chosen -- for the recursion."""
+    pat = re.compile(_EQU % re.escape(name), re.MULTILINE | re.IGNORECASE)
+    with open(path) as f:
+        m = pat.search(f.read())
+    if not m:
+        raise KeyError(f"{name} is not an `equ` in {os.path.basename(path)}")
+    return _num(m.group(1), path)
 
 
 def _read(name):
@@ -78,7 +112,7 @@ def _read(name):
         m = pat.search(f.read())
     if not m:
         raise KeyError(f"{name} is not an `equ` in src/{_WHERE[name]} any more")
-    return _num(m.group(1))
+    return _num(m.group(1), path)
 
 
 _CACHE = {}

@@ -18,6 +18,7 @@ while the game is running.
 """
 
 import os
+import re
 import addrs
 import struct
 import sys
@@ -107,6 +108,26 @@ def a_run(dx, dy, need=2):
 
 
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
+
+# WHERE THE TELEPORT STUB GOES, AND IT IS NOT A LITERAL ANY MORE.
+#
+# It was #39C0, which was inside march.asm's FTAB -- 256 bytes of L1
+# tables the flood refills EVERY frame -- so the stub survived until the
+# flood reached that far and then set_pc jumped into an L1 ramp.  The
+# answer at the time was to rewrite the seven bytes before every jump,
+# which works and is still done below.
+#
+# THEN THE WORKING RAM MOVED UP A PAGE and #39C0 stopped being FTAB and
+# started being the FLOOD STACK, which grows down from #3A00 -- so the
+# same seven bytes were now 64 bytes inside a stack, overwritten sooner
+# and more often.  A literal that means "somewhere in the march's RAM"
+# is wrong every time that RAM moves.
+#
+# BUCK0 is the one page that cannot be wrong.  march.asm keeps it as a
+# DELIBERATELY DEAD page under the buckets -- "never filed into, never
+# read" -- so a stub there is not borrowing anything, and it moves with
+# the rest of the map when the map moves.
+STUB = addrs.BUCK0
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
 SOLID = addrs.SOLID                          # the kernel's live 16x16 map
 
@@ -208,6 +229,23 @@ HUD_HPPEN = _gh("HUD_HPPEN")
 #  moves takes its test with it.
 import genmenu as _GMENU                                    # noqa: E402
 MN_GH, MN_O_FONT = _GMENU.GH, _GMENU.blob()[1]["FONT"]
+
+
+def _menubuf():
+    """menu.asm's MENUBUF, read out of the source.  It moved from SOLID
+    to the back buffer when the code segment ran out of room; a copy of
+    the address here would have gone stale silently."""
+    src = open(os.path.join(_E2, "src", "menu.asm")).read()
+    m = re.search(r"^MENUBUF\s+equ\s+(\w+)", src, re.M)
+    name = m.group(1)
+    if name.startswith("#"):
+        return int(name[1:], 16)
+    m2 = re.search(r"^%s\s+equ\s+#([0-9A-Fa-f]+)" % name,
+                   open(os.path.join(_E2, "src", "main3.asm")).read(), re.M)
+    return int(m2.group(1), 16)
+
+
+MENUBUF = _menubuf()
 P_TEXT = _GMENU.PENS.index(_GMENU.P_TEXT)
 
 
@@ -272,9 +310,9 @@ class Game:
         self.c.write_ram(self.s["PLR_X"], struct.pack("<H", x))
         self.c.write_ram(self.s["PLR_Y"], struct.pack("<H", y))
         self.c.poke(self.s["PLR_A"], a)
-        self.c.write_ram(0x39C0, bytes([0xF3, 0x31, 0xF0, 0x3F, 0xC3])
+        self.c.write_ram(STUB, bytes([0xF3, 0x31, 0xF0, 0x3F, 0xC3])
                          + struct.pack("<H", self.s["MAIN_LOOP"]))
-        self.c.set_pc(0x39C0)
+        self.c.set_pc(STUB)
         self.c.run_frames(settle)
 
     def hold(self, key, frames):
@@ -302,7 +340,12 @@ def main():
     # runs the earlier sections have spent forty rounds and walked the
     # whole map -- so reading it there tests nothing about game_init.
     # First attempt did exactly that and read #FF.
-    mon_at_boot = c.peek(g.s["MONCELL"])
+    montab = addrs.MONTAB           # an `equ`, so not in the .sym; addrs.py
+    nmon = _gm("NMON")
+    # WHERE THE MAP PUT MONSTER 0, read from MONTAB and not from
+    # MONCELL: MONCELL is whichever one mon_all last swapped in, and
+    # its tail deliberately leaves the NEAREST there for the radar.
+    mon_at_boot = c.peek(montab)
     # ...AND THEN TAKEN OFF THE MAP FOR SECTIONS 1-9.
     #
     #  It hunts now.  Section 7 walks the player onto all six pickups and
@@ -316,6 +359,16 @@ def main():
     #  #FF is a legal map -- mon_draw, mon_scan and mon_move all test for
     #  it -- so this is not a special mode, it is the no-monster map.
     #  Section 10 puts it back, because that is the section about it.
+    #
+    #  AND IT IS MONTAB THAT HAS TO BE CLEARED, NOT MONCELL.  There are
+    #  four of them now and MONCELL is only the one game.asm's mon_all
+    #  has swapped in; poking it takes a monster off the board for
+    #  exactly as long as it takes the wrapper to load the next one from
+    #  MONTAB.  MEASURED: with only MONCELL poked, section 4b read the
+    #  same step vector at all 72 headings, because the player was dead
+    #  and gframe() was timing out against a stopped frame loop.
+    for i in range(nmon):
+        c.poke(montab + 2 * i, 0xFF)
     c.poke(g.s["MONCELL"], 0xFF)
 
     def check(cond, what, detail):
@@ -749,7 +802,10 @@ def main():
 
     # =================================================================
     print("\n10 THE MONSTER (it walks at you, and three rounds kill it)")
-    mc, mhp, mtk = g.s["MONCELL"], g.s["MON_HP"], g.s["MON_TICK"]
+    # THE MONSTER IS MONTAB[0].  MONCELL and mon_hp are the single-
+    # monster state game.asm's mon_all swaps each of the four
+    # through, so poking them lasts exactly until the next pass.
+    mc, mhp, mtk = addrs.MONTAB, addrs.MONTAB + 1, g.s["MON_TICK"]
 
     # ---- (a) PURSUIT, against engine2/tools/monmodel.py's replay of the
     #      same rule.  Not against a description of it: the model steps
@@ -843,7 +899,10 @@ def main():
 
     # =================================================================
     print("\n11 HEALTH, THE BITE, AND THE DEATH SCREEN")
-    php, mc, mtk = g.s["PLR_HP"], g.s["MONCELL"], g.s["MON_TICK"]
+    # MONTAB AGAIN, for the reason section 10 gives: MONCELL is the copy
+    # mon_all swaps each monster through, so poking it lasts one pass.
+    php, mc, mtk = g.s["PLR_HP"], addrs.MONTAB, g.s["MON_TICK"]
+    mhp = addrs.MONTAB + 1
 
     # ---- (a) THE BAR IS READ OFF THE SCREEN, not off the variable.
     #      A readout that agrees with the byte it was handed proves
@@ -855,7 +914,7 @@ def main():
 
     MX, MY, PX, PY = 3, 12, 4, 12       # adjacent: L1 == 1, so it bites
     c.poke(mc, MY * 16 + MX)
-    c.poke(g.s["MON_HP"], 99)           # unkillable, so the test is the
+    c.poke(mhp, 99)                     # unkillable, so the test is the
     c.poke(mtk, 99)                     # bite and nothing else
     c.poke(php, PLR_HPMAX)
     g.place(PX * 256 + 128, PY * 256 + 128, 36)
@@ -904,10 +963,10 @@ def main():
     x, y, _ = g.player()
     solid_now = c.read_ram(SOLID, 256)
     check(c.peek(g.s["PLR_AMMO"]) == AMMO_MAX
-          and c.peek(mc) != 0xFF and c.peek(g.s["MON_HP"]) == MON_HPMAX,
+          and c.peek(mc) != 0xFF and c.peek(mhp) == MON_HPMAX,
           "SPACE re-arms the player AND puts the monster back",
           f"plr_hp {c.peek(php)}, plr_ammo {c.peek(g.s['PLR_AMMO'])}, "
-          f"MONCELL {c.peek(mc)}, mon_hp {c.peek(g.s['MON_HP'])}")
+          f"MONCELL {c.peek(mc)}, mon_hp {c.peek(mhp)}")
     check((x >> 8, y >> 8) == START and solid_now[(y >> 8) * 16 + (x >> 8)] == 0,
           "...and REBUILDS THE MAP the death screen wrote over",
           f"player at ({x>>8},{y>>8}), START {START}, "
@@ -924,15 +983,20 @@ def main():
     #      taken.  It did not before: plr_a was 0, due east, with the
     #      monster two cells west, and a 180-degree turn is 36 frames
     #      against a bite every 6 from frame 12.
+    # ---- (d) AND THE ROOM YOU START IN IS EMPTY.  It used to hold the
+    #      monster, two cells west, and the first thing a new game did
+    #      was get bitten -- the check here was that three rounds could
+    #      kill it first.  tools/world.py puts one monster in each of the
+    #      other eight rooms now and NONE in this one, so the check is
+    #      the other way round: nothing reaches the player while he
+    #      stands still long enough to look around.
     g2 = Game()
-    for _ in range(MON_HPMAX):
-        g2.c.key_down(ord('z'))
-        g2.c.run_frames(PACE_N + 5)
-        g2.c.key_up(ord('z'))
-        g2.c.run_frames(PACE_N + 5)
-    check(g2.c.peek(g2.s["MONCELL"]) == 0xFF
-          and g2.c.peek(g2.s["PLR_HP"]) == PLR_HPMAX,
-          "from a COLD BOOT, three rounds kill it before it touches you",
+    g2.c.run_frames(12 * PACE_N)        # twelve game frames, no keys
+    nearest = min(abs((v % 16) - START[0]) + abs((v // 16) - START[1])
+                  for v in (g2.c.peek(addrs.MONTAB + 2 * i)
+                            for i in range(_gm("NMON"))) if v != 0xFF)
+    check(g2.c.peek(g2.s["PLR_HP"]) == PLR_HPMAX and nearest >= 2,
+          "from a COLD BOOT the starting room is empty and nothing reaches you",
           f"MONCELL #{g2.c.peek(g2.s['MONCELL']):02X}, "
           f"plr_hp {g2.c.peek(g2.s['PLR_HP'])} of {PLR_HPMAX}, "
           f"START_A {_gm('START_A')}")
@@ -949,12 +1013,20 @@ def main():
     base = g3.c.peek(scr)
     check(base == MN_G0, "a life starts at score zero",
           f"scr_g = {base}, MN_G0 = {MN_G0} ('0')")
-    for _ in range(MON_HPMAX):          # the opening kills the monster
+    # THE OPENING NO LONGER HAS A MONSTER IN IT.  tools/world.py leaves
+    # the room the player starts in empty, so the kill is set up here
+    # rather than walked into: one monster, three cells west, in view.
+    for i in range(_gm("NMON")):
+        g3.c.poke(addrs.MONTAB + 2 * i, 0xFF)
+    g3.c.poke(addrs.MONTAB, 12 * 16 + 1)
+    g3.c.poke(addrs.MONTAB + 1, MON_HPMAX)
+    g3.place(4 * 256 + 128, 12 * 256 + 128, 36)
+    for _ in range(MON_HPMAX):
         g3.c.key_down(ord('z'))
         g3.c.run_frames(PACE_N + 5)
         g3.c.key_up(ord('z'))
         g3.c.run_frames(PACE_N + 5)
-    check(g3.c.peek(g3.s["MONCELL"]) == 0xFF
+    check(g3.c.peek(addrs.MONTAB) == 0xFF
           and g3.c.peek(scr) == MN_G0 + 1,
           "killing the monster scores one",
           f"scr_g {base} -> {g3.c.peek(scr)}")
@@ -997,10 +1069,15 @@ def main():
     #      FONT.  Checking (scr_g) only proves the game counted; this
     #      proves menu.asm's mn_char substitution actually drew the right
     #      glyph.  The font is readable because the win screen IS the
-    #      blob: menu.asm LDIRs it down over SOLID, so MENUBUF+MN_O_FONT
+    #      blob: menu.asm LDIRs it into MENUBUF, so MENUBUF+MN_O_FONT
     #      holds the same rows the blitter just used.
+    #
+    #      MENUBUF IS PARSED, NOT ASSUMED.  It was SOLID and is the back
+    #      buffer now -- see menu.asm -- and this line read SOLID, so it
+    #      compared the screen against 24 bytes of the live MAP and
+    #      called the glyph wrong.
     got = g3.c.peek(scr)
-    font = g3.c.read_ram(SOLID + MN_O_FONT + got * MN_GH, MN_GH)
+    font = g3.c.read_ram(MENUBUF + MN_O_FONT + got * MN_GH, MN_GH)
     want = [gm_nib(n, P_TEXT) for n in font]     # two mode-0 bytes a row
     seen = []
     for r in range(MN_GH):

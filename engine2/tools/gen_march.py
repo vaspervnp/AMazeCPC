@@ -113,18 +113,26 @@ def emit_maze(f, solid, sx, sy, mon):
     #  the lowest bits, so the unpacker shifts right and never has to
     #  count backwards.
     assert all(0 <= v <= 3 for v in solid), "SOLID no longer fits two bits"
-    f.write("MAZEDATA        ; 16x16 cells, two bits each, low cell low bits\n")
+    # ---- THE BYTES ARE IN RAM BANK 6, NOT HERE.  engine2/tools/genaux.py
+    #      reads them out of this file and gen_aux.inc names the address:
+    #      64 bytes read once, by maze_unpack, when new_game rebuilds the
+    #      world -- exactly what bank 6 is for.  They are still WRITTEN
+    #      here, commented out, because this generator owns the map and a
+    #      packing this file cannot show is a packing nobody can check.
+    f.write("; MAZEDATA is in RAM bank 6 -- see gen_aux.inc and genaux.py.\n")
+    f.write("; The bytes, for reading: 16x16 cells, two bits each, low cell\n")
+    f.write("; in the low bits.\n")
     for i in range(0, 256, 32):
         row = []
         for j in range(i, i + 32, 4):
             row.append(solid[j] | (solid[j + 1] << 2)
                        | (solid[j + 2] << 4) | (solid[j + 3] << 6))
-        f.write("    db " + ",".join("#%02X" % b for b in row)
+        f.write(";   " + ",".join("#%02X" % b for b in row)
                 + "   ; cells %d-%d\n" % (i, i + 31))
 
 
-def emit_monster(f, cell):
-    """Where the one monster STARTS, as a MAZEDATA cell index.
+def emit_monster(f, cells):
+    """Where the monsters START, as MAZEDATA cell indices.
 
     TWO SYMBOLS FOR ONE NUMBER, AND THAT IS THE POINT.  MONCELL is a
     BYTE and it MOVES: game.asm's mon_move writes a new cell into it
@@ -137,11 +145,22 @@ def emit_monster(f, cell):
 
     #FF in either puts no monster on the map.
     """
-    n = "#FF" if cell is None else "%d" % (cell[1] * 16 + cell[0])
-    where = "" if cell is None else "   ; %d,%d" % cell
-    f.write("\nMONSTART    equ %s%s   ; where the map puts the monster\n"
-            % (n, where))
-    f.write("MONCELL     db  MONSTART   ; ...and where it is NOW, y*16+x\n")
+    #  AND THERE ARE SEVERAL NOW.  MONSTARTS is the list the map wrote;
+    #  game.asm's MONTAB is where they are NOW, in RAM, two bytes each --
+    #  cell and hit points.  The pair MONSTART/MONCELL is kept for the
+    #  single-monster state the drawing and the radar still use: the
+    #  wrapper in game.asm swaps each monster through it in turn.
+    f.write("\nNMON    equ %d   ; monsters the map puts out\n" % len(cells))
+    if not cells:
+        f.write("MONSTART    equ #FF   ; ...none on this layout\n")
+        f.write("MONSTARTS   db #FF\n")
+    else:
+        f.write("MONSTART    equ %d   ; %d,%d -- the first of them\n"
+                % (cells[0][1] * 16 + cells[0][0], cells[0][0], cells[0][1]))
+        f.write("MONSTARTS               ; y*16+x, one a room\n")
+        f.write("    db " + ",".join("%d" % (y * 16 + x) for x, y in cells)
+                + "   ; " + " ".join("%d,%d" % c for c in cells) + "\n")
+    f.write("MONCELL     db  MONSTART   ; the one being worked on now\n")
 
 
 def emit_ammo(f, cells):
@@ -184,10 +203,11 @@ def main(outdir):
     with open(os.path.join(outdir, "gen_mtab.inc"), "w") as f:
         emit_mtab(f)
     with open(os.path.join(outdir, "gen_maze.inc"), "w") as f:
-        mon = world.monster_cell(grid, sx, sy)
+        mons = world.monster_cells(grid, sx, sy)
+        mon = mons[0] if mons else None
         emit_maze(f, solid, sx, sy, mon)
         emit_ammo(f, world.ammo_cells(grid, sx, sy))
-        emit_monster(f, mon)
+        emit_monster(f, mons)
         emit_exit(f, world.exit_cell(grid, sx, sy))
     print("wrote gen_slopes.inc, gen_mtab.inc, gen_maze.inc to", outdir)
 

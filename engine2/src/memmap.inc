@@ -12,8 +12,8 @@
 ;  Include this, do not copy out of it.
 ; =====================================================================
 
-QUADS       equ #3C00           ; the geometry kernel's output list; see
-NQUAD       equ 56              ; kernel.asm for the record layout and
+QUADS       equ #3D00           ; the geometry kernel's output list; see
+NQUAD       equ 24              ; kernel.asm for the record layout and
                                 ; main3.asm for the map it sits in.
 ;
 ;  IT HELD 120 RECORDS FOR A MEASURED MAXIMUM OF NINE.  Sampling 8000

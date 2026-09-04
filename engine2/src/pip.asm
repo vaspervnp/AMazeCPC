@@ -198,9 +198,15 @@ MON_HW      equ SPR_MON_HW  ; half width in column PAIRS, so five pairs.
                             ; claimed and could not enforce while the two
                             ; were separate literals.
 
+; THE "NOTHING THERE" ZERO IS THE CALLER'S NOW.  This began with
+; `xor a / ld (mon_bot),a`, which was right while there was one monster
+; and silently wrong the moment game.asm's mon_all called it four times
+; in a row: monster 0 would draw and set mon_bot, and the three dead ones
+; behind it each zeroed it again before returning on the #FF test.  A
+; shot could never find flesh, and every check in emu_verify3's section
+; 10 failed with the monster standing in plain sight.  main3.asm zeroes
+; it once, ahead of the pass.
 mon_draw
-    xor  a
-    ld   (mon_bot),a                ; nothing there unless it draws
     ld   a,(MONCELL)                ; where the map put it, y*16+x
     cp   #FF
     ret  z                          ; ...or nowhere, if the map has none
@@ -285,8 +291,19 @@ mn_yp
 mn_cp
     cp   MON_HW+1
     ret  nc                         ; drawn, but not over the middle pair
-    ld   a,(bx_bot)                 ; ...and leave its foot for fx_fire
-    ld   (mon_bot),a
+    ; ---- AND ONLY IF IT IS THE NEAREST ONE OVER THE CROSSHAIR.  Four
+    ;      monsters are drawn in a row through the same state and the
+    ;      last to write mon_bot would otherwise win.  A row IS a depth,
+    ;      so the one with the LOWEST foot on screen is the nearest, and
+    ;      that is the one a shot should hit.  mon_all zeroes mon_bot
+    ;      before the pass.
+    ld   a,(bx_bot)
+    ld   hl,mon_bot
+    cp   (hl)
+    ret  c                          ; one already drawn is nearer
+    ld   (hl),a                     ; ...and leave its foot for fx_fire
+    ld   a,(mon_cur)                ; ...and WHICH one it was, for mon_hit
+    ld   (mon_idx),a
     ret
 
 
@@ -700,49 +717,8 @@ sd_skip
     jr   sd_rec
 
 
-; --- A = a band index -> A = the viewport row it starts at.
-spr_row
-    push hl
-    ld   l,a
-    ld   h,0
-    ld   de,spr_rt
-    add  hl,de
-    ld   a,(hl)
-    pop  hl
-    ret
-
-
-; --- A = a column pair BIASED BY 4 -> carry set if the sprite is visible
-;     there.  Reads (bx_bot), not the record's own foot: the cut is the
-;     same question for every part of one sprite, because a row is a
-;     depth and the sprite stands at one depth.
-;
-;     AND IT IS ALL OR NOTHING, NOT A CLIP.  Clipping the head to rc_dn is
-;     right for a thing lying ON the floor and wrong for anything that
-;     stands up: a monster NEARER than the wall reaches ABOVE the wall's
-;     foot on screen, and cutting it there left a five-row stump at its
-;     ankles.  The comparison is already the whole answer, because a row
-;     IS a depth: the box's foot at or below the wall's foot means the box
-;     is nearer, and a nearer box is drawn whole.
-;
-;     Preserves BC.  Clobbers AF DE HL.
-spr_vis
-    sub  4
-    jr   c,sv_no                    ; off the left edge of the viewport
-    cp   CNPAIR
-    jr   nc,sv_no                   ; ...or the right
-    ld   e,a
-    ld   d,0
-    ld   hl,rc_dn
-    add  hl,de
-    ld   a,(bx_bot)
-    cp   (hl)
-    jr   c,sv_no                    ; the wall's foot is BELOW the box's:
-    scf                             ; the wall is nearer, so nothing here
-    ret                             ; carry SET means visible
-sv_no
-    or   a
-    ret
+; spr_row and spr_vis live in engine2/src/sprutil.asm, ahead of
+; rastcol.asm -- see the note there.
 
 ; --- ONE VIEW AXIS.  IN HL = the seed at the player's cell corner,
 ;     IX -> that axis's (step in i, step in j).  OUT HL = the view

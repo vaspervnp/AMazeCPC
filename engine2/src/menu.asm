@@ -35,14 +35,31 @@ MN_KBIT     equ 7           ; game.asm reads -- see scan_keys.
 ; ---------------------------------------------------------------------
 ;  menu_show -- IN nothing.  Clobbers everything.
 ; ---------------------------------------------------------------------
-; WHERE THE BLOCK IS COPIED TO, and why it is safe.  main3.asm calls
-; menu_show BEFORE maze_unpack, march_init and game_init, so SOLID,
-; MARK and the quad list are all still uninitialised -- 960 bytes of RAM
-; that nothing has a claim on yet and everything overwrites the moment
-; the game starts.  The menu borrows the front of it and never touches
-; it again.
-MENUBUF     equ SOLID
-    assert MN_BLOB <= QUADS+NQUAD*QRECSZ-MENUBUF
+; WHERE THE BLOCK IS COPIED TO.  IT WAS SOLID, AND THAT COST MORE THAN
+; IT SAVED.  The argument was that main3.asm calls menu_show before
+; maze_unpack, so the map, MARK and the quad list are uninitialised --
+; 960 bytes nothing has a claim on yet.  True, and the consequences ran
+; a long way:
+;
+;   * painting a screen DESTROYED THE WORLD, so a death or a win could
+;     not resume and new_game had to rebuild everything.  main3.asm
+;     still explains that at length.
+;   * engine2/tools/emu_pace.py teleports back into main_loop, BELOW
+;     new_game, so from the first win onward it measured a machine whose
+;     map was the menu's pen tables.  That took a bisect to find.
+;   * and it pinned SOLID at #3A00: the assert here demanded 739 bytes
+;     between the map and the end of the quad list, which is what stopped
+;     the march's working RAM moving up a page when the code segment ran
+;     out.
+;
+; THE BACK BUFFER IS FREE AND IS 16K.  new_game clears both buffers, then
+; paints the menu into the FRONT one; nothing reads the back until the
+; first game frame, and bg_fill clears the viewport of it before it does.
+; hud_static covers the top of it with the panel.  So the block lives
+; there, none of the above is true any more, and NQUAD is free to shrink
+; for reasons of its own rather than to satisfy a menu.
+MENUBUF     equ SCR_BACK
+    assert MN_BLOB <= #4000
 
 MNPENS      equ MENUBUF+MN_O_PENS
 MNFONT      equ MENUBUF+MN_O_FONT

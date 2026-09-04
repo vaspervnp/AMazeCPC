@@ -128,10 +128,10 @@
 ; MEASURES 14 entries at its worst -- 8 with every door shut, 14 with
 ; every door open (engine2/tools/roomcost.py, exhaustive).  512 bytes was
 ; 51 entries, still three and a half times the worst ever seen.
-MSTKBOT     equ #3800       ; flood stack, grows DOWN from MSTKTOP
-MSTKTOP     equ #3900       ; 256 bytes = 25 entries of 10, against a
+MSTKBOT     equ #3900       ; flood stack, grows DOWN from MSTKTOP
+MSTKTOP     equ #3A00       ; 256 bytes = 25 entries of 10, against a
                             ; MEASURED worst of 14.
-FTAB        equ #3900       ; L1 tables + bucket write pointers
+FTAB        equ #3A00       ; L1 tables + bucket write pointers
 O_LX1       equ #C0         ; 16 bytes, |cx - pcx|
 O_LY1       equ #D0         ; 16 bytes, |cy - pcy|
 O_BPTR      equ #E0         ; 8 BYTES, bucket write offset within its page
@@ -144,10 +144,10 @@ DOORMOV     equ 3           ; a door part way through its run:
                             ; player out of it.  Opacity and solidity are
                             ; different questions; this is the code that
                             ; separates them.
-SOLID       equ #3A00       ; 256 bytes, idx = cy*16 + cx
+SOLID       equ #3B00       ; 256 bytes, idx = cy*16 + cx
                             ;   0 = open, 1 = wall, 2 = shut door,
                             ;   3 = door in motion (see DOORMOV)
-MARK        equ #3B00       ; 256 bytes, flood "already pushed" flags
+MARK        equ #3C00       ; 256 bytes, flood "already pushed" flags
 
 ; BUCKET 0 IS A REAL PAGE AND IT MUST NOT BE CODE.  A bucket's page is
 ; BUCKHI + k, so k = 0 addresses the page BELOW BUCKETS -- and O_BPTR is
@@ -167,11 +167,11 @@ MARK        equ #3B00       ; 256 bytes, flood "already pushed" flags
 ;
 ; So BUCKETS keeps a spare page under it, deliberately, and the assert at
 ; the foot of main3.asm guards THAT page rather than the first bucket.
-BUCK0       equ #3000       ; bucket 0: never filed into, never read, and
+BUCK0       equ #3100       ; bucket 0: never filed into, never read, and
                             ; deliberately not code.  `assert game_end <=
                             ; BUCK0` in main3.asm is what keeps it so.
-BUCKHI      equ #30         ; bucket k (k = 1..7) is the page BUCKHI+k,
-BUCKETS     equ #3100       ; i.e. #3100 (k=1) .. #3700 (k=7).
+BUCKHI      equ #31         ; bucket k (k = 1..7) is the page BUCKHI+k,
+BUCKETS     equ #3200       ; i.e. #3200 (k=1) .. #3800 (k=7).
 BUCKSZ      equ 16          ; face record; 16 per page, 15 usable
                             ; (measured worst bucket occupancy: 8)
 
@@ -805,6 +805,13 @@ mf_tail                             ; A = i0 of endpoint A
 ;  bits, so this only ever shifts right.  Clobbers AF BC DE HL.
 ; ---------------------------------------------------------------------
 maze_unpack
+    ; ---- MAZEDATA IS IN RAM BANK 6, so page it in for the sixteen
+    ;      instructions below and put bank 4 back after.  Safe because
+    ;      this reads nothing else and writes SOLID at #3A00, below the
+    ;      window -- and because it runs from new_game and not from a
+    ;      frame.  See engine2/tools/genaux.py for the rule.
+    ld bc,#7F00+AUXCFG
+    out (c),c
     ld hl,MAZEDATA
     ld de,SOLID
     ld b,64
@@ -823,6 +830,8 @@ mu_cell
     djnz mu_cell
     pop bc
     djnz mu_byte
+    ld bc,#7FC4                     ; ...and bank 4 back for everything
+    out (c),c                       ; else
     ret
 
 

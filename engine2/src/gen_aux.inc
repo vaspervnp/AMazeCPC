@@ -7,7 +7,8 @@
 ;  on the frame path may live here -- see genaux.py for the rule.
 ; ---------------------------------------------------------------------
 AUXCFG      equ #C6              ; OUT (&7Fxx),this pages bank 6
-HUDRECTS    equ #4000          ; 71 x (db x, y, w, h, byte)
-HUD_NRECT   equ 71              ; ...and how many
-HUDNDL      equ #4163          ; the needle: 19 headings x 4 x (dx, dy)
-AUXEND      equ #41FB
+HUDRECTS    equ #4000          ; 67 x (db x, y, w, h, byte)
+HUD_NRECT   equ 67              ; ...and how many
+HUDNDL      equ #414F          ; the needle: 19 headings x 4 x (dx, dy)
+MAZEDATA    equ #41E7          ; 16x16 cells, two bits each
+AUXEND      equ #4227

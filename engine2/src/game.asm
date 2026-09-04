@@ -319,8 +319,36 @@ ammo_arm
     ;      restart runs it holds wherever the thing died -- which is
     ;      nowhere.  MONSTART is the map's own equ, which nothing can
     ;      overwrite; gen_march.py emits the pair for exactly this.
+    ; ---- ALL OF THEM, back where the map put them.
+    ld   hl,MONSTARTS
+    ld   de,MONTAB
+    ld   b,NMON
+aa_mon
+    ld   a,(hl)
+    inc  hl
+    ld   (de),a                     ; the cell...
+    inc  de
+    ld   a,MON_HPMAX
+    ld   (de),a                     ; ...and a full set of hit points
+    inc  de
+    djnz aa_mon
+    ; ---- AND THE INDEX mon_hit USES.  It is set by mon_draw and read by
+    ;      fx_fire, and mon_all zeroes mon_bot before every draw pass so
+    ;      the two cannot get out of step -- but nothing had ever WRITTEN
+    ;      it before the first pass, and mon_hit uses it to index MONTAB.
+    ;      Garbage there writes 2*mon_idx bytes past the table.
+    xor  a
+    ld   (mon_idx),a
+    ld   (mon_cur),a
     ld   a,MONSTART
     ld   (MONCELL),a
+    ; ---- and the map starts blank.  new_game rebuilds the world after
+    ;      a death or a win and the player has seen none of the next one.
+    ld   hl,MMBITS
+    ld   de,MMBITS+1
+    ld   bc,HUD_MMN*HUD_MMN/8-1
+    ld   (hl),0
+    ldir
     ld   a,MON_HPMAX
     ld   (mon_hp),a
     ld   a,MON_RATE
@@ -698,14 +726,106 @@ MON_HPMAX   equ 3           ; rounds it takes.  Three of a magazine of
                             ; been silence.  AMMO_MAX / plr_ammo is the
                             ; same pairing and the same reason.
 
+; ---------------------------------------------------------------------
+;  mon_all -- run HL for every monster in turn.
+;
+;  THE ROUTINES STAY SINGLE-MONSTER AND THE STATE IS SWAPPED THROUGH
+;  THEM.  mon_move, mon_draw and mon_scan all read (MONCELL) and
+;  (mon_hp) and there is a lot of them; making each one take an index
+;  would have been a bigger change than the feature.  So MONTAB holds
+;  the cell and the hit points of each, and this walks it, copying one
+;  in, calling, and copying the result back.
+;
+;  (mon_cur) is the index while the call runs, which is how mon_draw
+;  tells mon_hit WHICH monster the crosshair was on -- see there.
+;
+;  IN  HL = the routine.  Clobbers everything.
+; ---------------------------------------------------------------------
+mon_all
+    ld   (ma_jp+1),hl
+    ld   ix,MONTAB
+    ld   b,NMON
+    xor  a
+    ld   (mon_cur),a
+ma_l
+    push bc
+    ld   a,(ix+0)
+    ld   (MONCELL),a
+    ld   a,(ix+1)
+    ld   (mon_hp),a
+    ; ---- AND IX HAS TO GO ON THE STACK.  Both routines this calls
+    ;      reach hud_rect eventually -- mon_draw through box_draw,
+    ;      mon_move through mon_bite and the health bar -- and hud_rect
+    ;      loads IX with its own return vector.  The write-back below
+    ;      then aimed at whatever hud_rect had left there and `inc ix`
+    ;      walked on from it, filling RAM with the pen pattern it had
+    ;      been pushing.  MEASURED: the body came back as #B9,#8B
+    ;      repeating, and plr_hp, nl_screen and MONTAB all read it.
+    push ix
+ma_jp
+    call 0                          ; patched above
+    pop  ix
+    ld   a,(MONCELL)
+    ld   (ix+0),a
+    ld   a,(mon_hp)
+    ld   (ix+1),a
+    inc  ix
+    inc  ix
+    ld   hl,mon_cur
+    inc  (hl)
+    pop  bc
+    djnz ma_l
+    ; ---- and leave the NEAREST live one loaded, because mon_scan and
+    ;      the radar read (MONCELL) and one blip cannot show four.
+    ld   ix,MONTAB
+    ld   b,NMON
+    ld   c,#FF                      ; best L1 so far
+    ld   e,#FF                      ; ...and its cell
+ma_near
+    ld   a,(ix+0)
+    inc  a
+    jr   z,ma_nx                    ; #FF: dead
+    dec  a
+    push bc
+    push de
+    ld   c,a
+    call as_l1                      ; A = L1, C untouched by the caller
+    pop  de
+    pop  bc
+    cp   c
+    jr   nc,ma_nx
+    ld   c,a
+    ld   e,(ix+0)
+ma_nx
+    inc  ix
+    inc  ix
+    djnz ma_near
+    ld   a,e
+    ld   (MONCELL),a
+    ret
+
+
+; IT HITS THE ONE THE CROSSHAIR WAS ON, and that is (mon_idx), not
+; whichever monster happens to be loaded.  mon_draw sets it while the
+; wrapper has that monster swapped in; by the time fx_fire gets here the
+; wrapper has moved on and left the NEAREST one in MONCELL, which is a
+; different question and usually a different monster.
 mon_hit
-    ld   hl,mon_hp
+    ld   a,(mon_idx)
+    add  a,a
+    ld   e,a
+    ld   d,0
+    ld   hl,MONTAB
+    add  hl,de
+    inc  hl                         ; -> its hit points
     dec  (hl)
     ld   a,SFX_SHOT_FLESH
     ret  nz                         ; still standing
-    ld   a,#FF
-    ld   (MONCELL),a                ; off the map, for everything that
-    ld   (mon_blip),a               ; reads either byte
+    dec  hl
+    ld   (hl),#FF                   ; off the map, for everything that
+    ld   a,#FF                      ; reads MONTAB...
+    ld   (MONCELL),a                ; ...and the copy the radar reads
+    ld   (mon_blip),a
     ld   hl,scr_g                   ; ...and it is worth the same point a
     inc  (hl)                       ; pickup is
     ld   a,SFX_MONDIE
@@ -766,14 +886,16 @@ MON_RATE    equ 6           ; game frames per cell.  THE PLAYER'S OWN
                             ; the worst in-room chase above is 5 steps =
                             ; 6.0 s to cross the room and reach you.
 
+; THE TICK IS THE FRAME'S, NOT THE MONSTER'S, and it moved OUT of here.
+; mon_all calls this once per monster, so a `dec (mon_tick)` in the body
+; ran NMON times a frame and every monster walked four times too fast --
+; MEASURED as a bite the verifier could not reproduce, because the tick
+; never sat still long enough to reach mon_bite's branch.  game_step
+; ticks once and calls the wrapper only on the frames the tick fires.
 mon_move
     ld   a,(MONCELL)
     inc  a
     ret  z                          ; #FF: dead, or a map with none on it
-    ld   hl,mon_tick
-    dec  (hl)
-    ret  nz                         ; not its frame
-    ld   (hl),MON_RATE
 
     ld   a,(MONCELL)
     ld   c,a                        ; as_l1 wants the cell in C and leaves
@@ -1087,7 +1209,13 @@ gs_walked
 
     call ammo_scan                  ; --- collect the pickup we are on,
                                     ;     else say where the nearest is
-    call mon_move                   ; --- the monster takes its step...
+    ld   hl,mon_tick                ; --- every monster takes its step,
+    dec  (hl)                       ;     and they take it TOGETHER: one
+    jr   nz,gs_nomon                ;     tick a frame, not one a monster
+    ld   (hl),MON_RATE
+    ld   hl,mon_move
+    call mon_all
+gs_nomon
     call mon_scan                   ; --- ...and THEN says where it is.
                                     ;     This order, because the radar is
                                     ;     drawn from the last scan: scan

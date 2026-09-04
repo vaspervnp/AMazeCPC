@@ -210,6 +210,210 @@ hst_l
     ret
 
 
+
+; ---------------------------------------------------------------------
+;  THE MAP, in the right-hand well -- the part of the maze you have seen.
+;
+;  mm_seen   fold an EIGHTH of this frame's flood into MMBITS, and draw
+;            the cells that are new -- into both buffers, once, for ever.
+;
+;  THERE IS NO REPAINT.  The first version rebuilt the whole picture from
+;  MMBITS every frame and cost 9985 us; a quarter of it a frame still
+;  cost 2533, and the frame could not carry it -- MEASURED with
+;  pacemodel.py over 600 states, an extra 2500 us on the frame leaves 0
+;  states over budget and an extra 3000 puts 1.67% over, and the 7500 the
+;  full repaint wanted shifted EVERY state up by one wait.
+;
+;  A cell is discovered ONCE.  Drawing it then, into both buffers, and
+;  never touching it again costs nothing on the frames where nothing is
+;  found -- which is nearly all of them.
+;
+;  IT REPAINTS EVERY FRAME AND THAT IS THE CHEAP ANSWER, not the lazy
+;  one.  Painting only on the frames the flood found a new cell needs a
+;  dirty flag AND a count of buffers still to paint -- there are two of
+;  them and only the viewport is cleared between -- and the two together
+;  cost more BYTES than the repaint costs microseconds it has to spare.
+;  The code segment is the scarce thing here, not the budget: C_MMAP is
+;  8000 us against 18178 of headroom at the worst charged frame.
+;
+;  ONE BYTE A CELL, AND THAT IS WHY THIS IS NOT hud_rect.  hud_rect fills
+;  in TWO-byte units -- the run is an unrolled block of PUSH DE, which is
+;  why genhud.py asserts every width it is given is even -- so the
+;  narrowest cell it can draw is two bytes, and sixteen of those is 32
+;  bytes against the 20 the well has.  A byte a cell fits, and at this
+;  size a straight write is cheaper than a rectangle call anyway: 87 us
+;  of call overhead against 16 bytes of LDIR.
+;
+;  IT FITS, SO IT DOES NOT SCROLL.  genhud.py's map_slot() asserts the
+;  whole 16x16 lands inside the well; a map that outgrows it fails the
+;  build rather than silently showing a corner of itself.
+;
+;  MARK IS A GENERATION STAMP, NOT A FLAG.  march.asm clears it once
+;  every 255 frames and writes (m_gen) into it, so "the flood reached
+;  this cell THIS frame" is `== m_gen` and not `!= 0`.  Reading it as a
+;  flag would have discovered the whole maze on the 255th frame.
+; ---------------------------------------------------------------------
+mm_seen
+    ; ---- ONE EIGHTH OF THE MAP A FRAME, AND THE PHASE IS SHARED WITH
+    ;      hud_map, which runs straight after and paints the SAME eighth.
+    ;      So a cell the flood reaches is folded in and painted in the
+    ;      same frame; what lags by up to eight frames is only the eighth
+    ;      that is not this one's.
+    ;
+    ;      WHY AN EIGHTH AND NOT ALL OF IT.  A full fold is 4026 us and a
+    ;      full paint 9985, and the frame cannot absorb them: MEASURED
+    ;      with pacemodel.py over the same 600 states, an extra 2500 us
+    ;      on the frame leaves 0 over budget and an extra 3000 puts
+    ;      1.67% over -- and 7500 shifted EVERY state up by exactly one
+    ;      wait.  The whole distribution moved; it was not a few states
+    ;      tipping.  An eighth of each is ~505 + ~1250 against a headroom
+    ;      of 2500.
+    ;
+    ;      hm_ph counts 0,4,8..28 -- the phase ALREADY MULTIPLIED -- and
+    ;      that one number is all three offsets: MMBITS + ph, MARK +
+    ;      ph*8, and HUD_MMY + ph.  Keeping it scaled is what makes the
+    ;      two routines share it for nothing.
+    ld   a,(hm_ph)
+    add  a,4
+    and  28
+    ld   (hm_ph),a
+    ; ---- BOTH POINTERS BY THEIR LOW BYTES.  MMBITS and MARK are on
+    ;      known pages and the offsets are 28 and 224 at most, so neither
+    ;      carries out of the low byte and neither needs a 16-bit add.
+    ld   l,a                        ; keep the phase
+    add  a,MMBITS&255
+    ld   e,a
+    ld   d,MMBITS>>8                ; DE -> this eighth of the bits
+    ld   a,l
+    add  a,a
+    add  a,a
+    add  a,a                        ; ph*8 = 32 cells in
+    ld   l,a
+    ld   h,MARK/256                 ; HL -> them
+    ld   a,(m_gen)                  ; PATCHED INTO THE COMPARE, because
+    ld   (ms_g+1),a                 ; every register is spoken for and the
+    ld   b,4                        ; accumulator has to have one
+ms_byte
+    push bc
+    ld   b,8
+    ld   c,0                        ; ...this one
+ms_bit
+    ld   a,(hl)
+    inc  hl
+    ; ---- "is this cell's stamp m_gen" AS A CARRY, without a branch.
+    ;      SUB leaves 0 exactly when they match, and SUB 1 then borrows
+    ;      exactly when the operand is zero -- so carry is the answer.
+ms_g
+    sub  0
+    sub  1
+    rr   c                          ; cell 0 ends up in bit 0
+    djnz ms_bit
+    ld   a,(de)                     ; ---- which of these eight are NEW
+    cpl
+    and  c
+    call nz,mm_cells                ; ...and only those are drawn
+    ld   a,(de)                     ; a cell once seen stays seen
+    or   c
+    ld   (de),a
+    inc  de
+    pop  bc
+    djnz ms_byte
+    ret
+
+; --- A = the eight NEW cells of the byte DE points at: draw each one.
+;     Called only when A is non-zero, which is rare -- a cell is
+;     discovered once and then never again.
+mm_cells
+    ; ---- C IS THE CALLER'S AND HAS TO COME BACK.  mm_seen holds this
+    ;      byte's eight flags in C and ORs them into MMBITS the moment
+    ;      this returns; borrowing C for the walk below left it 0 and the
+    ;      write-back stored the OLD byte.  MEASURED: the map stayed
+    ;      empty for a whole walk of the maze -- 0 cells discovered --
+    ;      while every cell was being DRAWN correctly on the way past.
+    push bc
+    ld   c,a                        ; the new-cell bits
+    ld   a,e
+    sub  MMBITS&255
+    add  a,a
+    add  a,a
+    add  a,a                        ; the first cell this byte covers
+    ld   b,8
+mc_l
+    srl  c
+    jr   nc,mc_next
+    push af
+    push bc
+    push de
+    push hl
+    call mm_cell
+    pop  hl
+    pop  de
+    pop  bc
+    pop  af
+mc_next
+    inc  a
+    djnz mc_l
+    pop  bc
+    ret
+
+; --- A = a cell 0..255: put its block in BOTH buffers.
+;     BOTH, because only the viewport is cleared between frames, so a
+;     block written to one buffer is missing from the other for ever.
+;     They are &4000 apart, which is one bit of the high byte.
+;
+;     ONE LINETAB LOOKUP AND NOT TWO.  A cell is HUD_MMCH = 2 scanlines
+;     and HUD_MMY is even, so a cell never straddles a character row --
+;     and inside a character row the next scanline is +&800.  The assert
+;     at the foot of this file is what keeps that true.
+mm_cell
+    ld   c,a
+    and  #0F
+    add  a,HUD_MMX
+    ld   b,a                        ; B = the byte column
+    ld   a,c
+    and  #F0                        ; cy*16, with the low bits already 0
+    rrca
+    rrca
+    rrca                            ; ...so this is cy*HUD_MMCH
+    add  a,HUD_MMY
+    ld   l,a
+    ld   h,0
+    add  hl,hl
+    ld   de,LINETAB
+    add  hl,de
+    ld   e,(hl)
+    inc  hl
+    ld   d,(hl)                     ; DE = LINETAB[y], in the &C000 frame
+    ld   a,b
+    add  a,e
+    ld   e,a
+    ld   a,d
+    adc  a,0
+    ld   d,a
+    ld   h,d
+    ld   l,e
+    inc  h
+    inc  h
+    inc  h
+    inc  h
+    inc  h
+    inc  h
+    inc  h
+    inc  h                          ; HL = DE + &800, the next scanline
+    ld   a,HUD_MMSEEN
+    ld   (de),a
+    ld   (hl),a
+    ld   a,d                        ; ...and the other buffer
+    xor  #40
+    ld   d,a
+    ld   a,h
+    xor  #40
+    ld   h,a
+    ld   a,HUD_MMSEEN
+    ld   (de),a
+    ld   (hl),a
+    ret
+
 ; ---------------------------------------------------------------------
 ;  hud_rect -- (hr_x) (hr_y) (hr_w) (hr_h) (hr_pen) -> the current buffer.
 ;
@@ -1071,6 +1275,25 @@ hr_w        db 0
 hr_h        db 0
 hr_pen      db 0
 hr_rows        db 0                    ; rows left
+
+; ---- THE MAP'S RAM, in the hole between rastcol.asm's scratch and the
+;      harness emu_pacefit.py assembles at #3F00.  MMBITS is one bit a
+;      cell, 32 bytes for 256 cells; mm_row is one cell row of the
+;      picture, built once and written to every scanline of the row.
+MMVARS      equ #3EC0
+MMBITS      equ MMVARS+0
+mm_row      equ MMVARS+32
+hm_y        equ MMVARS+48
+hm_ph       equ MMVARS+49           ; which eighth is next, x4
+; ---- AND THE MONSTERS' OWN STATE, in the same hole.  Two bytes each,
+;      cell and hit points; see game.asm's mon_all for why they live in
+;      RAM rather than being swapped in and out of the code segment.
+MONTAB      equ MMVARS+50           ; NMON x (cell, hp)
+mon_cur     equ MMVARS+50+NMON*2    ; the index mon_all is working on
+mon_idx     equ MMVARS+51+NMON*2    ; ...and the one the crosshair was on
+    assert MMVARS >= #3EBC          ; clear of pip.asm's FXVARS...
+    assert mon_idx+1 <= #3F00
+    assert HUD_MMN == 16 && HUD_MMCH == 2   ; hud_map's x8 assumes both       ; ...and of emu_pacefit's harness
 hr_cy       db 0                    ; row being painted
 hr_xw       db 0                    ; x + w, where the backwards run starts
 hr_sp       dw 0

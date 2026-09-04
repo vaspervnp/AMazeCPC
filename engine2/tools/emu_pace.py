@@ -36,6 +36,26 @@ import bootdisc                                              # noqa: E402
 import cpc as cpcmod                                         # noqa: E402
 
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
+
+# WHERE THE TELEPORT STUB GOES, AND IT IS NOT A LITERAL ANY MORE.
+#
+# It was #39C0, which was inside march.asm's FTAB -- 256 bytes of L1
+# tables the flood refills EVERY frame -- so the stub survived until the
+# flood reached that far and then set_pc jumped into an L1 ramp.  The
+# answer at the time was to rewrite the seven bytes before every jump,
+# which works and is still done below.
+#
+# THEN THE WORKING RAM MOVED UP A PAGE and #39C0 stopped being FTAB and
+# started being the FLOOD STACK, which grows down from #3A00 -- so the
+# same seven bytes were now 64 bytes inside a stack, overwritten sooner
+# and more often.  A literal that means "somewhere in the march's RAM"
+# is wrong every time that RAM moves.
+#
+# BUCK0 is the one page that cannot be wrong.  march.asm keeps it as a
+# DELIBERATELY DEAD page under the buckets -- "never filed into, never
+# read" -- so a stub there is not borrowing anything, and it moves with
+# the rest of the map when the map moves.
+STUB = addrs.BUCK0
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
 SOLID = addrs.SOLID
 DOORTAB = addrs.DOORTAB         # door_idx / door_st / door_tg, MAXDOORS each
@@ -197,7 +217,7 @@ class Rig:
     #  Seven bytes a teleport is nothing, and it is correct whoever
     #  overwrites the address in between.
     def _stub(self):
-        self.c.write_ram(0x39C0, bytes([0xF3, 0x31, 0xF0, 0x3F, 0xC3])
+        self.c.write_ram(STUB, bytes([0xF3, 0x31, 0xF0, 0x3F, 0xC3])
                          + struct.pack("<H", self.s["MAIN_LOOP"]))
 
     def ctr(self):
@@ -320,7 +340,7 @@ class Rig:
         self.c.write_ram(self.s["PLR_Y"], struct.pack("<H", py))
         self.c.poke(self.s["PLR_A"], a)
         self._stub()                    # the march may have eaten it
-        self.c.set_pc(0x39C0)
+        self.c.set_pc(STUB)
         self.c.run_frames(settle)
 
     def ended(self):
