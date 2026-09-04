@@ -657,7 +657,6 @@ def write_inc(path, rects, tab):
     L.append("; The HUD's furniture and its compass needle.  See that file")
     L.append("; for what every table means and what is asserted about it.")
     L.append("")
-    L.append(f"HUD_NRECT    equ {len(rects)}   ; static furniture rectangles")
     L.append(f"HUD_CXB      equ {cxb}   ; dial centre: byte BOUNDARY x ...")
     L.append(f"HUD_CY       equ {cy}   ; ... and scanline y")
     L.append(f"HUD_NDOT     equ {len(NDL_DOTS)}   ; blocks in the needle")
@@ -753,10 +752,14 @@ def write_inc(path, rects, tab):
         L.append(f"    db {x:3d},{y:4d},{w:3d},{h:3d},#{b:02X}")
 
     L.append("")
-    L.append("; ---- static furniture: db x, y, w, h, byte ----")
-    L.append("HUDRECTS")
-    for (x, y, w, h, b) in rects.r:
-        L.append(f"    db {x:3d},{y:4d},{w:3d},{h:4d},#{b:02X}")
+    # ---- THE FURNITURE IS NOT HERE ANY MORE.  It was 71 records of five
+    #      bytes emitted straight into the code segment, and the code
+    #      segment had 22 bytes left.  engine2/tools/genaux.py puts the
+    #      same records in RAM bank 6 and gen_aux.inc names them, so
+    #      HUDRECTS and HUD_NRECT come from there now -- read genaux.py
+    #      for why bank 6 exists and what else may go in it.  This file
+    #      still OWNS the geometry; it just no longer owns the storage.
+    L.append("; ---- static furniture: see gen_aux.inc, RAM bank 6 ----")
     L.append("")
     L.append("; ---- needle: per-block height and pen ----")
     for d, (_f, h, _p) in enumerate(NDL_DOTS):

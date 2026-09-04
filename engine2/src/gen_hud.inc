@@ -2,7 +2,6 @@
 ; The HUD's furniture and its compass needle.  See that file
 ; for what every table means and what is asserted about it.
 
-HUD_NRECT    equ 71   ; static furniture rectangles
 HUD_CXB      equ 40   ; dial centre: byte BOUNDARY x ...
 HUD_CY       equ 150   ; ... and scanline y
 HUD_NDOT     equ 4   ; blocks in the needle
@@ -70,79 +69,7 @@ TICKTAB                     ; db x, y, w, h, resting byte
     db  26, 149,  2,  3,#3C
     db  30, 119,  2,  3,#3C
 
-; ---- static furniture: db x, y, w, h, byte ----
-HUDRECTS
-    db   0,   0, 16,  96,#CF
-    db  64,   0, 16,  96,#CF
-    db   0, 100, 80, 100,#CF
-    db  16,   0,  2,  96,#00
-    db  62,   0,  2,  96,#3C
-    db   0,  96, 80,   2,#3C
-    db   0,  98, 80,   2,#00
-    db   2, 112, 22,  22,#3C
-    db   3, 114, 20,  18,#00
-    db   2, 139, 22,  22,#3C
-    db   3, 141, 20,  18,#00
-    db   2, 166, 22,  22,#3C
-    db   3, 168, 20,  18,#00
-    db  56, 112, 22,  22,#3C
-    db  57, 114, 20,  18,#00
-    db  56, 139, 22,  22,#3C
-    db  57, 141, 20,  18,#00
-    db  56, 166, 22,  22,#3C
-    db  57, 168, 20,  18,#00
-    db  10, 141,  6,   5,#CF
-    db  17, 141,  6,   5,#CF
-    db  17, 147,  6,   5,#CF
-    db  17, 153,  6,   5,#CF
-    db  10, 153,  6,   5,#CF
-    db   3, 153,  6,   5,#CF
-    db   3, 147,  6,   5,#CF
-    db   3, 141,  6,   5,#CF
-    db  10, 147,  6,   5,#FF
-    db  37, 114,  6,   1,#3C
-    db  36, 115,  8,   2,#3C
-    db  35, 117, 10,   1,#3C
-    db  34, 118, 12,   3,#3C
-    db  33, 121, 14,   2,#3C
-    db  32, 123, 16,   4,#3C
-    db  31, 127, 18,   5,#3C
-    db  30, 132, 20,   7,#3C
-    db  29, 139, 22,  23,#3C
-    db  30, 162, 20,   7,#3C
-    db  31, 169, 18,   5,#3C
-    db  32, 174, 16,   4,#3C
-    db  33, 178, 14,   2,#3C
-    db  34, 180, 12,   3,#3C
-    db  35, 183, 10,   1,#3C
-    db  36, 184,  8,   2,#3C
-    db  37, 186,  6,   1,#3C
-    db  38, 117,  4,   1,#00
-    db  37, 118,  6,   1,#00
-    db  36, 119,  8,   1,#00
-    db  35, 120, 10,   2,#00
-    db  34, 122, 12,   3,#00
-    db  33, 125, 14,   3,#00
-    db  32, 128, 16,   5,#00
-    db  31, 133, 18,   7,#00
-    db  30, 140, 20,  21,#00
-    db  31, 161, 18,   7,#00
-    db  32, 168, 16,   5,#00
-    db  33, 173, 14,   3,#00
-    db  34, 176, 12,   3,#00
-    db  35, 179, 10,   2,#00
-    db  36, 181,  8,   1,#00
-    db  37, 182,  6,   1,#00
-    db  38, 183,  4,   1,#00
-    db  38, 105,  4,   5,#FF
-    db  48, 119,  2,   3,#3C
-    db  52, 149,  2,   3,#3C
-    db  48, 179,  2,   3,#3C
-    db  39, 192,  2,   3,#3C
-    db  30, 179,  2,   3,#3C
-    db  26, 149,  2,   3,#3C
-    db  30, 119,  2,   3,#3C
-    db  39, 149,  2,   3,#FF
+; ---- static furniture: see gen_aux.inc, RAM bank 6 ----
 
 ; ---- needle: per-block height and pen ----
 HUD_H0       equ 5   ; block 0 is this many scanlines

@@ -72,6 +72,7 @@ GEN := engine2/tools/gentab.py engine2/tools/genhud.py \
        engine2/tools/gentex.py engine2/tools/colmodel.py \
        engine2/tools/gen_march.py engine2/tools/genmenu.py \
        engine2/tools/gensnd.py engine2/tools/marchmodel.py \
+       engine2/tools/genaux.py \
        tools/world.py
 
 .PHONY: all amaze test verify rast pace gun hud enemy shots clean
@@ -95,6 +96,10 @@ amaze: $(SRC) $(ART) $(GEN) engine2/src/amaze.bas
 	$(PYTHON) engine2/tools/gentex.py
 	@# the HUD's furniture and needle, derived from the same vpcfg.inc
 	$(PYTHON) engine2/tools/genhud.py
+	@# ...and RAM bank 6, which the HUD's furniture moved into when the
+	@# code segment got down to 22 free bytes.  It imports genhud, so it
+	@# has to run after it.  See engine2/tools/genaux.py.
+	$(PYTHON) engine2/tools/genaux.py
 	@# the title screen's font and words, and the AY's effect tables
 	$(PYTHON) engine2/tools/genmenu.py
 	$(PYTHON) engine2/tools/gensnd.py
@@ -103,6 +108,7 @@ amaze: $(SRC) $(ART) $(GEN) engine2/src/amaze.bas
 	mv $(BUILD)/e3/GAME3.bin $(BUILD)/e3/GAME3.BIN
 	cp engine2/build/TABLES.BIN $(BUILD)/e3/TABLES.BIN
 	cp engine2/build/TEX.BIN $(BUILD)/e3/TEX.BIN
+	cp engine2/build/AUX.BIN $(BUILD)/e3/AUX.BIN
 	@# AMSDOS reads ASCII BASIC with CR line endings; LF alone reads as one
 	@# enormous line and BASIC rejects it.
 	sed 's/$$/\r/' engine2/src/amaze.bas > $(BUILD)/e3/AMAZE.BAS
@@ -114,6 +120,7 @@ amaze: $(SRC) $(ART) $(GEN) engine2/src/amaze.bas
 	$(IDSK) $(BUILD)/amaze.dsk -i $(BUILD)/e3/GAME3.BIN  -t 1 -c 7000 -e 7000 -f
 	$(IDSK) $(BUILD)/amaze.dsk -i $(BUILD)/e3/TABLES.BIN -t 1 -c 7000 -e 7000 -f
 	$(IDSK) $(BUILD)/amaze.dsk -i $(BUILD)/e3/TEX.BIN    -t 1 -c 7000 -e 7000 -f
+	$(IDSK) $(BUILD)/amaze.dsk -i $(BUILD)/e3/AUX.BIN    -t 1 -c 7000 -e 7000 -f
 	@$(IDSK) $(BUILD)/amaze.dsk -l
 
 # the game layer's unit tests: collision, sliding, doors, turning

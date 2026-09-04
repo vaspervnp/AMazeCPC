@@ -88,11 +88,13 @@
 
 ; Needs from vpcfg.inc:   VP_BX VP_BW VP_Y VP_H
 ; Needs from tab_equ.inc: LINETAB
-; Needs from gen_hud.inc: HUDRECTS HUD_NRECT HUDNDL HUDDESC HUD_H0..H3 HUD_BG
+; Needs from gen_hud.inc: HUDNDL HUDDESC HUD_H0..H3 HUD_BG
+; ...and from gen_aux.inc: HUDRECTS HUD_NRECT AUXCFG -- RAM bank 6
 ;                         HUD_CXB HUD_CY HUD_NDOT HUD_NW
 ; Needs from march.asm:   plr_a          (the heading, 0..71)
 
     include "gen_hud.inc"
+    include "gen_aux.inc"           ; RAM bank 6: HUDRECTS, HUD_NRECT, AUXCFG
 
 HR_N        equ 40                  ; the widest run the fill can do, in
                                     ; PUSH DE pairs: 80 bytes = the screen
@@ -151,7 +153,7 @@ hs_front
 ; ---------------------------------------------------------------------
 ;  hud_static -- paint the furniture into the current buffer.
 ;
-;  HUDRECTS is 62 rectangles of db x, y, w, h, byte, back to front: the
+;  HUDRECTS is 71 rectangles of db x, y, w, h, byte, back to front, and
 ;  plates, the bevel around the viewport, six readout slots, then the dial
 ;  (an ellipse cut into bands of equal half-width, so 74 scanlines of
 ;  circle are 24 rectangles), its ticks and its hub.  Startup only --
@@ -161,11 +163,26 @@ hs_front
 ;  22-byte average run cannot amortise the way a 40-byte one does.  It runs
 ;  twice, at startup, so it is left alone.
 ; ---------------------------------------------------------------------
+;  THE TABLE IS IN RAM BANK 6 AND THE DRAWING NEEDS BANK 4.  355 bytes
+;  of furniture used to sit in the code segment, which had 22 bytes left
+;  in it -- see engine2/tools/genaux.py.  So each record is fetched with
+;  bank 6 paged over &4000 and bank 4 is put straight back, because
+;  hud_rect reads LINETAB out of bank 4 and would otherwise index into
+;  the furniture table itself.
+;
+;  TWO OUTs A RECORD, 142 of them, against a routine that already costs
+;  101 ms -- which is why this is a per-record fetch and not a copy to
+;  scratch RAM.  A copy would need 355 contiguous free bytes below
+;  &4000, and the whole reason this table moved is that there are none.
 hud_static
     ld   hl,HUDRECTS
     ld   b,HUD_NRECT
 hst_l
     ld   (hst_p),hl
+    push bc                         ; B is the record count; the OUTs
+    ld   bc,#7F00+AUXCFG            ; below need BC
+    out  (c),c
+    ld   hl,(hst_p)
     ld   a,(hl)
     inc  hl
     ld   (hr_x),a
@@ -180,7 +197,8 @@ hst_l
     ld   (hr_h),a
     ld   a,(hl)
     ld   (hr_pen),a
-    push bc
+    ld   bc,#7FC4                   ; ...and bank 4 back for LINETAB
+    out  (c),c
     call hud_rect
     pop  bc
     ld   hl,(hst_p)
