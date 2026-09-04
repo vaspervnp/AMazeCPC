@@ -344,6 +344,10 @@ aa_mon
     ld   (MONCELL),a
     ; ---- and the map starts blank.  new_game rebuilds the world after
     ;      a death or a win and the player has seen none of the next one.
+    ld   a,HUD_MMSEEN               ; mm_cell's default pen, and no
+    ld   (mm_pen),a                 ; player marker painted yet
+    ld   a,#FF
+    ld   (mm_plc),a
     ld   hl,MMBITS
     ld   de,MMBITS+1
     ld   bc,HUD_MMN*HUD_MMN/8-1

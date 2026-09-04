@@ -106,9 +106,9 @@ N_BLIP = 8           # how many of C_BLIP the worst frame pays for, and
                      # square and drawing its new one.  units() emits
                      # this many cost_adds; the number lives here so the
                      # scans cannot each pick their own.
-C_MMSEEN = 900      # the minimap: the flood folded into MMBITS, and
-C_PIPP = 5600       # pip.asm's three world drawers, on three separate
-C_PIPM = 7600        # hooks now -- see main3.asm for why one hook at 8200
+C_MMSEEN = 1350      # the minimap: the flood folded into MMBITS, and
+C_PIPP = 6050       # pip.asm's three world drawers, on three separate
+C_PIPM = 7100        # hooks now -- see main3.asm for why one hook at 8200
 C_PIPF = 1000        # was not a bound.  The pickup on the
                      # floor, the monster, and the shot's flash and mark.
                      # MEASURED 7902.6 us worst on the booted disc, with

@@ -400,7 +400,7 @@ mm_cell
     inc  h
     inc  h
     inc  h                          ; HL = DE + &800, the next scanline
-    ld   a,HUD_MMSEEN
+    ld   a,(mm_pen)
     ld   (de),a
     ld   (hl),a
     ld   a,d                        ; ...and the other buffer
@@ -409,9 +409,68 @@ mm_cell
     ld   a,h
     xor  #40
     ld   h,a
-    ld   a,HUD_MMSEEN
+    ld   a,(mm_pen)
     ld   (de),a
     ld   (hl),a
+    ret
+
+
+; ---------------------------------------------------------------------
+;  mm_plr -- keep the player's own cell marked on the map.
+;
+;  THE MAP IS NEVER REPAINTED -- a cell is drawn once, when it is
+;  discovered, and never touched again -- so a moving marker has to undo
+;  itself: the cell being left goes back to HUD_MMSEEN and the one being
+;  entered goes to HUD_MMPLR.  Two writes, and only on the frames the
+;  player crosses a cell boundary, which at 24/256 of a cell a frame is
+;  about one frame in eleven.
+;
+;  IT RUNS AFTER mm_seen, and that order matters: on the frame the
+;  player's own cell is first discovered, mm_seen paints it SEEN and
+;  this paints it back.  The other way round the marker would flicker
+;  off for a frame every time the flood reached a new cell underfoot.
+;
+;  Clobbers AF BC DE HL.
+; ---------------------------------------------------------------------
+mm_plr
+    ld   a,(plr_y+1)                ; the cell is y*16 + x
+    add  a,a
+    add  a,a
+    add  a,a
+    add  a,a
+    ld   hl,plr_x+1
+    add  a,(hl)
+    ld   hl,mm_plc
+    cp   (hl)
+    ret  z                          ; still in the same cell
+    ld   c,a                        ; C = the cell being entered
+    ld   a,(hl)
+    ld   (hl),c
+    cp   #FF
+    jr   z,mp_new                   ; nothing marked yet
+    push bc
+    ld   b,HUD_MMSEEN               ; the one being left is just seen
+    call mp_paint
+    pop  bc
+mp_new
+    ld   a,c
+    ld   b,HUD_MMPLR
+    ; fall through
+
+; --- A = the cell, B = the pen.  Paints it and leaves mm_pen as mm_seen
+;     expects to find it, because mm_seen is who reads it next.
+;
+;     THE CELL COMES IN A AND NOT C.  It read C first, which holds the
+;     cell being ENTERED -- so the "put the old one back" call painted
+;     the new one twice and the marker left a trail behind it.
+mp_paint
+    push af
+    ld   a,b
+    ld   (mm_pen),a
+    pop  af
+    call mm_cell
+    ld   a,HUD_MMSEEN
+    ld   (mm_pen),a
     ret
 
 ; ---------------------------------------------------------------------
@@ -1293,8 +1352,10 @@ mon_cur     equ MMVARS+50+NMON*2    ; the index mon_all is working on
 mon_idx     equ MMVARS+51+NMON*2    ; ...and the one the crosshair was on
 mon_bl1     equ MMVARS+52+NMON*2    ; the nearest L1 seen this pass
 mon_bc      equ MMVARS+53+NMON*2    ; ...and that monster's cell
+mm_pen      equ MMVARS+54+NMON*2    ; what mm_cell paints with
+mm_plc      equ MMVARS+55+NMON*2    ; the cell the player marker is on
     assert MMVARS >= #3EBC          ; clear of pip.asm's FXVARS...
-    assert mon_bc+1 <= #3F00
+    assert mm_plc+1 <= #3F00
     assert HUD_MMN == 16 && HUD_MMCH == 2   ; hud_map's x8 assumes both       ; ...and of emu_pacefit's harness
 hr_cy       db 0                    ; row being painted
 hr_xw       db 0                    ; x + w, where the backwards run starts

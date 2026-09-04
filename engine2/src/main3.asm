@@ -669,7 +669,7 @@ C_SND       equ 2200        ; THE SOUND DRIVER, all nine ticks of a frame.
                             ; come out of the interval that follows the
                             ; edge, which is exactly the interval the
                             ; accumulator is budgeting.
-C_TAIL      equ 4600        ; THE TAIL: everything between pace_drain and
+C_TAIL      equ 4200        ; THE TAIL: everything between pace_drain and
                             ; the next frame's first cost_unit -- flip,
                             ; game_step, and the head of main_loop.  It is
                             ; added to (cost_acc) at the TOP of the frame,
@@ -960,7 +960,7 @@ C_RNEEDLE   equ 750         ; ...and putting the needle back on top when
                             ; moving, and the monster being painted again
                             ; where it already is when a pickup's erase
                             ; may have wiped it -- see hud_radar.
-C_MMSEEN    equ  900        ; THE MAP.  Not a hook of its own: it is
+C_MMSEEN    equ 1350        ; THE MAP.  Not a hook of its own: it is
                             ; added into C_PIPP below and the two share
                             ; one cost_unit.
                             ;
@@ -977,15 +977,25 @@ C_MMSEEN    equ  900        ; THE MAP.  Not a hook of its own: it is
                             ; away, so every extra hook is another chance
                             ; to throw one away.
                             ;
-                            ; MEASURED 804.9 us with every cell the flood
-                            ; reaches NEW -- which is its worst, because
-                            ; a new cell is the only thing it draws -- and
-                            ; 602.5 with none.  It was 14010.8 when the
+                            ; MEASURED 899.1 us with MMBITS ZEROED BEFORE
+                            ; EVERY CALL, so every cell the flood reaches
+                            ; is new and gets drawn, and 602.5 with none.
+                            ; The first figure here was 804.9 and it was
+                            ; not a worst case at all: the bench loop sets
+                            ; the bits on its first pass and measures the
+                            ; steady state for ever after.  Zeroing them
+                            ; in the prelude is what makes the reading a
+                            ; bound.
+                            ;
+                            ; AND IT COVERS mm_plr TOO -- 255.1 us worst,
+                            ; two mm_cell calls, on the frames the player
+                            ; crosses a cell boundary.  899.1 + 255.1 =
+                            ; 1154.2, which 900 did not bound.  It was 14010.8 when the
                             ; map was rebuilt from MMBITS every frame; it
                             ; is drawn once per cell now, into both
                             ; buffers, and never repainted.  See
                             ; hud2.asm:mm_seen.
-C_PIPP      equ 5600        ; THE MAP AND THE PICKUP, on one hook: 5000
+C_PIPP      equ 6050        ; THE MAP AND THE PICKUP, on one hook: 5000
                             ; for pip_draw and C_MMSEEN above.
                             ;
                             ; A LITERAL, WITH THE SUM AS AN ASSERT, and
@@ -999,7 +1009,7 @@ C_PIPP      equ 5600        ; THE MAP AND THE PICKUP, on one hook: 5000
                             ; exists to prevent.  The assert does the job
                             ; the expression was for.
                             ; THE WORLD-SPACE OVERLAY, and it is THREE
-C_PIPM      equ 7600        ; hooks now, not one: pip_draw (the pickup on
+C_PIPM      equ 7100        ; hooks now, not one: pip_draw (the pickup on
 C_PIPF      equ 1000        ; the floor), mon_draw (the monster) and
                             ; fx_draw (the muzzle flash and the shot's
                             ; mark) are charged and yielded on separately.
@@ -1013,7 +1023,7 @@ C_PIPF      equ 1000        ; the floor), mon_draw (the monster) and
                             ;
                             ;   pip_draw, pickup 1 cell     4669.4
                             ;   mon_draw, monster 1 cell    6736.7
-                            ;   mon_all, TWO of them         7355.4
+                            ;   mon_all, the one there is    6850.6
                             ;   fx_draw, a shot in flight       802.7
                             ;
                             ; THE MARGINS ARE THIN ON PURPOSE.  Four
@@ -1463,6 +1473,7 @@ main_loop
     ld   bc,C_PIPP
     call cost_unit
     call mm_seen
+    call mm_plr                     ; ...and where the player is standing
     call pip_draw                   ; the pickup goes on TOP of the walls
                                     ; and is cut by the floor line they
                                     ; left in rc_dn

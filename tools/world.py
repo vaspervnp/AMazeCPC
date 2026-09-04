@@ -151,7 +151,7 @@ AMMO_CELLS = [(2, 2), (8, 3), (13, 2),
 #  is the most expensive thing in the frame at close range (6736.7 us
 #  measured, one cell away) and C_PIPM has to bound all of them together.
 #  See main3.asm.
-#  TWO, AND THE NUMBER IS THE FRAME'S TO SET, NOT THE DESIGN'S.  Each
+#  ONE, AND THE NUMBER IS THE FRAME'S TO SET, NOT THE DESIGN'S.  Each
 #  extra monster costs ~500 us in game_step -- mon_all runs mon_move for
 #  every one -- and C_TAIL bounds the whole frame tail.  MEASURED with
 #  emu_holes.py:
@@ -167,7 +167,7 @@ AMMO_CELLS = [(2, 2), (8, 3), (13, 2),
 #  whole spare capacity at about 2500 us before every state gains a
 #  period -- which the minimap and the second monster's drawing have
 #  already spent most of.
-MONSTER_CELLS = [(12, 3), (2, 7)]
+MONSTER_CELLS = [(2, 7)]
 MONSTER_CELL = MONSTER_CELLS[0]     # ...for the exit's assert
 
 # ---- THE WAY OUT ---------------------------------------------------
