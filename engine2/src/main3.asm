@@ -669,7 +669,7 @@ C_SND       equ 2200        ; THE SOUND DRIVER, all nine ticks of a frame.
                             ; come out of the interval that follows the
                             ; edge, which is exactly the interval the
                             ; accumulator is budgeting.
-C_TAIL      equ 4000        ; THE TAIL: everything between pace_drain and
+C_TAIL      equ 4600        ; THE TAIL: everything between pace_drain and
                             ; the next frame's first cost_unit -- flip,
                             ; game_step, and the head of main_loop.  It is
                             ; added to (cost_acc) at the TOP of the frame,
@@ -985,7 +985,7 @@ C_MMSEEN    equ  900        ; THE MAP.  Not a hook of its own: it is
                             ; is drawn once per cell now, into both
                             ; buffers, and never repainted.  See
                             ; hud2.asm:mm_seen.
-C_PIPP      equ 5900        ; THE MAP AND THE PICKUP, on one hook: 5000
+C_PIPP      equ 5600        ; THE MAP AND THE PICKUP, on one hook: 5000
                             ; for pip_draw and C_MMSEEN above.
                             ;
                             ; A LITERAL, WITH THE SUM AS AN ASSERT, and
@@ -999,7 +999,7 @@ C_PIPP      equ 5900        ; THE MAP AND THE PICKUP, on one hook: 5000
                             ; exists to prevent.  The assert does the job
                             ; the expression was for.
                             ; THE WORLD-SPACE OVERLAY, and it is THREE
-C_PIPM      equ 8800        ; hooks now, not one: pip_draw (the pickup on
+C_PIPM      equ 7600        ; hooks now, not one: pip_draw (the pickup on
 C_PIPF      equ 1000        ; the floor), mon_draw (the monster) and
                             ; fx_draw (the muzzle flash and the shot's
                             ; mark) are charged and yielded on separately.
@@ -1013,7 +1013,7 @@ C_PIPF      equ 1000        ; the floor), mon_draw (the monster) and
                             ;
                             ;   pip_draw, pickup 1 cell     4669.4
                             ;   mon_draw, monster 1 cell    6736.7
-                            ;   mon_all, FOUR of them        8632.6
+                            ;   mon_all, TWO of them         7355.4
                             ;   fx_draw, a shot in flight       802.7
                             ;
                             ; THE MARGINS ARE THIN ON PURPOSE.  Four
@@ -2284,7 +2284,7 @@ body_len    equ game_end-start
 ;  gen_maze.inc, which main3.asm includes AFTER menu.asm -- rasm
 ;  evaluates an assert where it stands, the same trap PLR_HPMAX's assert
 ;  documents at the foot of hud2.asm.
-    assert C_PIPP == 5000 + C_MMSEEN
+    assert C_PIPP >= 4700 + C_MMSEEN   ; pip_draw 4669.4 + the map
     assert NAMMO + 1 <= 9           ; ...the +1 is the monster
 
 ; THE MAP MUST FIT THE DOOR LIST.  game_init registers at most MAXDOORS

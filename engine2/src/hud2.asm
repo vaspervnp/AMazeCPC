@@ -214,7 +214,7 @@ hst_l
 ; ---------------------------------------------------------------------
 ;  THE MAP, in the right-hand well -- the part of the maze you have seen.
 ;
-;  mm_seen   fold an EIGHTH of this frame's flood into MMBITS, and draw
+;  mm_seen   fold a SIXTEENTH of this frame's flood into MMBITS, and draw
 ;            the cells that are new -- into both buffers, once, for ever.
 ;
 ;  THERE IS NO REPAINT.  The first version rebuilt the whole picture from
@@ -274,9 +274,9 @@ mm_seen
     ;      ph*8, and HUD_MMY + ph.  Keeping it scaled is what makes the
     ;      two routines share it for nothing.
     ld   a,(hm_ph)
-    add  a,4
-    and  28
-    ld   (hm_ph),a
+    add  a,2                        ; A SIXTEENTH, not an eighth: 900 us a
+    and  30                         ; frame was more than the packing had
+    ld   (hm_ph),a                  ; to give -- see C_MMSEEN
     ; ---- BOTH POINTERS BY THEIR LOW BYTES.  MMBITS and MARK are on
     ;      known pages and the offsets are 28 and 224 at most, so neither
     ;      carries out of the low byte and neither needs a 16-bit add.
@@ -1291,8 +1291,10 @@ hm_ph       equ MMVARS+49           ; which eighth is next, x4
 MONTAB      equ MMVARS+50           ; NMON x (cell, hp)
 mon_cur     equ MMVARS+50+NMON*2    ; the index mon_all is working on
 mon_idx     equ MMVARS+51+NMON*2    ; ...and the one the crosshair was on
+mon_bl1     equ MMVARS+52+NMON*2    ; the nearest L1 seen this pass
+mon_bc      equ MMVARS+53+NMON*2    ; ...and that monster's cell
     assert MMVARS >= #3EBC          ; clear of pip.asm's FXVARS...
-    assert mon_idx+1 <= #3F00
+    assert mon_bc+1 <= #3F00
     assert HUD_MMN == 16 && HUD_MMCH == 2   ; hud_map's x8 assumes both       ; ...and of emu_pacefit's harness
 hr_cy       db 0                    ; row being painted
 hr_xw       db 0                    ; x + w, where the backwards run starts

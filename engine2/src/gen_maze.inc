@@ -20,10 +20,10 @@ NAMMO   equ 6
 AMMOTAB
     db 34,56,45,131,124,215   ; 2,2 8,3 13,2 3,8 12,7 7,13
 
-NMON    equ 4   ; monsters the map puts out
+NMON    equ 2   ; monsters the map puts out
 MONSTART    equ 60   ; 12,3 -- the first of them
 MONSTARTS               ; y*16+x, one a room
-    db 60,114,119,204   ; 12,3 2,7 7,7 12,12
+    db 60,114   ; 12,3 2,7
 MONCELL     db  MONSTART   ; the one being worked on now
 
 EXIT_CELL   equ 29   ; 13,1   ; walk onto this and the level ends

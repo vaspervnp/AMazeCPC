@@ -775,41 +775,9 @@ ma_jp
     inc  (hl)
     pop  bc
     djnz ma_l
-    ; ---- and leave the NEAREST live one loaded, because mon_scan and
-    ;      the radar read (MONCELL) and one blip cannot show four.
-    ld   ix,MONTAB
-    ld   b,NMON
-    ld   c,#FF                      ; best L1 so far
-    ld   e,#FF                      ; ...and its cell
-ma_near
-    ld   a,(ix+0)
-    inc  a
-    jr   z,ma_nx                    ; #FF: dead
-    dec  a
-    push bc
-    push de
-    ld   c,a
-    call as_l1                      ; A = L1, C untouched by the caller
-    pop  de
-    pop  bc
-    cp   c
-    jr   nc,ma_nx
-    ld   c,a
-    ld   e,(ix+0)
-ma_nx
-    inc  ix
-    inc  ix
-    djnz ma_near
-    ld   a,e
-    ld   (MONCELL),a
     ret
 
 
-; IT HITS THE ONE THE CROSSHAIR WAS ON, and that is (mon_idx), not
-; whichever monster happens to be loaded.  mon_draw sets it while the
-; wrapper has that monster swapped in; by the time fx_fire gets here the
-; wrapper has moved on and left the NEAREST one in MONCELL, which is a
-; different question and usually a different monster.
 mon_hit
     ld   a,(mon_idx)
     add  a,a
@@ -900,6 +868,20 @@ mon_move
     ld   a,(MONCELL)
     ld   c,a                        ; as_l1 wants the cell in C and leaves
     call as_l1                      ; it there; (as_tdx)/(as_tdy) come out
+    ; ---- AND THE NEAREST FALLS OUT OF THIS FOR FREE.  The radar shows
+    ;      one blip and there is more than one monster, so somebody has
+    ;      to pick; it used to be a second pass (mon_near) calling as_l1
+    ;      all over again, once per monster per tick frame.  The answer
+    ;      is already in A here.
+    push af
+    ld   hl,mon_bl1
+    cp   (hl)
+    jr   nc,mm_nb
+    ld   (hl),a
+    ld   a,(MONCELL)
+    ld   (mon_bc),a
+mm_nb
+    pop  af
     cp   2                          ; signed, cell MINUS player
     jr   c,mon_bite                 ; L1 0 or 1: it is on you.  See the note
 
@@ -1213,8 +1195,13 @@ gs_walked
     dec  (hl)                       ;     and they take it TOGETHER: one
     jr   nz,gs_nomon                ;     tick a frame, not one a monster
     ld   (hl),MON_RATE
+    ld   a,#FF
+    ld   (mon_bl1),a                ; no monster considered yet
+    ld   (mon_bc),a
     ld   hl,mon_move
     call mon_all
+    ld   a,(mon_bc)                 ; ...and the radar wants the nearest
+    ld   (MONCELL),a
 gs_nomon
     call mon_scan                   ; --- ...and THEN says where it is.
                                     ;     This order, because the radar is

@@ -151,7 +151,23 @@ AMMO_CELLS = [(2, 2), (8, 3), (13, 2),
 #  is the most expensive thing in the frame at close range (6736.7 us
 #  measured, one cell away) and C_PIPM has to bound all of them together.
 #  See main3.asm.
-MONSTER_CELLS = [(12, 3), (2, 7), (7, 7), (12, 12)]
+#  TWO, AND THE NUMBER IS THE FRAME'S TO SET, NOT THE DESIGN'S.  Each
+#  extra monster costs ~500 us in game_step -- mon_all runs mon_move for
+#  every one -- and C_TAIL bounds the whole frame tail.  MEASURED with
+#  emu_holes.py:
+#
+#      one    tail 3813.9    (C_TAIL 4000, the shipped margin)
+#      two    tail ~4400
+#      three  tail 4889.0    C_TAIL 4000 -- margin -889.0
+#      four   tail 5091.9    C_TAIL 4000 -- margin -1091.9
+#
+#  and "EVERY CONSTANT A ONE-SIDED UPPER BOUND: False" is the one thing
+#  this design cannot ship.  Covering three or four means raising C_TAIL
+#  by 900-1100 us on EVERY frame, and pacemodel.py measures the frame's
+#  whole spare capacity at about 2500 us before every state gains a
+#  period -- which the minimap and the second monster's drawing have
+#  already spent most of.
+MONSTER_CELLS = [(12, 3), (2, 7)]
 MONSTER_CELL = MONSTER_CELLS[0]     # ...for the exit's assert
 
 # ---- THE WAY OUT ---------------------------------------------------
