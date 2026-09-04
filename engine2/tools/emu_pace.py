@@ -38,6 +38,7 @@ import cpc as cpcmod                                         # noqa: E402
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
 SOLID = addrs.SOLID
+DOORTAB = addrs.DOORTAB         # door_idx / door_st / door_tg, MAXDOORS each
 VSYNC_MS = 19.968                       # 312 lines x 64 us
 # HOW OFTEN THE PERIOD IS SAMPLED, and the resolution every tolerance
 # below is derived from.  One number, because a tolerance written as a
@@ -49,6 +50,20 @@ SAMPLE_US = 250
 PLR_HPMAX = int([l.split()[2] for l in open(os.path.join(_E2, "src",
                                                          "game.asm"))
                  if l.startswith("PLR_HPMAX")][0])
+
+
+def _maze_equ(name):
+    return int([l.split()[2] for l in open(os.path.join(_E2, "src",
+                                                        "gen_maze.inc"))
+                if l.startswith(name + " ")][0])
+
+
+# THE WAY OUT, AND WHY A PACING SWEEP HAS TO KNOW WHERE IT IS.  Stand on
+# this cell and game_step returns 2, main_loop leaves for player_won, and
+# the win screen paints itself over the map -- see Rig.place().  There is
+# no steady-state frame on the exit to measure, so the sweep keeps off
+# it, and says so rather than quietly sampling around it.
+EXIT_X, EXIT_Y = _maze_equ("EXIT_X"), _maze_equ("EXIT_Y")
 
 # main3.asm's PACE_FRAMES, read from the source so this file cannot drift
 # from the disc it is measuring.
@@ -148,7 +163,21 @@ class Rig:
         self.c.type_text('RUN"DISC\n')
         self.c.run_frames(500)
         bootdisc.start(self.c)   # past the title screen -- see bootdisc.py
+        # THE BOOT MAP, AND IT IS NOW TWO JOBS.  It has always been the
+        # map `reachable()` picks states against; place() also writes it
+        # BACK now, because the end screens paint over the live one.
         self.solid = self.c.read_ram(SOLID, 256)
+        # ...AND THE DOOR TABLES WITH IT, or the two disagree.  SOLID is
+        # where a door's passability lives, but door_st / door_tg are the
+        # animation state and they are at #3DC0, past the 739 bytes the
+        # menu writes -- so they SURVIVE a win screen that eats the map.
+        # Putting back a shut SOLID under a door_st that still says OPEN
+        # would be a fresh inconsistency of my own making, in exchange
+        # for fixing someone else's.  Both, or neither.
+        self.doortab = self.c.read_ram(DOORTAB, 3 * addrs.MAXDOORS)
+        self.door_n = self.c.peek(self.s["DOOR_N"])
+        self.door_anim = self.c.peek(self.s["DOOR_ANIM"])
+        self.nended = 0                 # walk steps that ended the level
         self._stub()
 
     # ---- DI / LD SP,#3FF0 / JP main_loop.  See place() for what it is for.
@@ -242,12 +271,74 @@ class Rig:
         # only at a teleport, which is not something a player does
         # anyway.  Same discipline as emu_holes.py's preludes.
         self.c.poke(self.s["PLR_HP"], PLR_HPMAX)
+        # ---- ...AND PUT THE MAP BACK, BECAUSE THE END SCREENS EAT IT.
+        #
+        # THIS IS THE SAME BUG AS THE HP LINE ABOVE AND IT WAS ONLY HALF
+        # FIXED.  `MENUBUF equ SOLID` (menu.asm:44): painting menu_win or
+        # menu_dead LDIRs MN_BLOB = 739 bytes straight over the live map,
+        # the flood's MARK array and the front of the quad list.  The
+        # GAME survives that because player_won / player_died jump to
+        # new_game, which rebuilds the world -- but THIS HARNESS re-enters
+        # at main_loop, below new_game, so the rebuild never runs and
+        # every frame from the first win onward marches a map made out of
+        # the menu's pen tables.
+        #
+        # MEASURED, on the disc, one line of evidence each:
+        #   * walked(90)'s step 5 starts on EXIT_CELL (13,1) and wins.
+        #     85 of its 90 steps end with (nl_screen) != menu_show.  So
+        #     the map is already destroyed before the first MEASURED
+        #     state, deterministically, at seed 11.
+        #   * SOLID differs from its boot copy in 214 of 256 bytes after
+        #     that prelude; solid cells go 112 -> 211.
+        #   * The states the sweep then reports as 24, 34, 46 vsyncs read
+        #     a locked 10 on a fresh boot.  Three of the twelve it named
+        #     decode to positions INSIDE WALL CELLS.
+        #   * Restore SOLID alone and leave (nl_screen) at menu_win: all
+        #     14 states go back to 10 vsyncs.  Restore (nl_screen) alone
+        #     and leave the map: byte-identical failure.  So it is the
+        #     MAP, not the screen -- the frame loop never actually
+        #     leaves, it just floods garbage.
+        #   * The whole sweep, with only this undone: 4800 game frames of
+        #     4800 at 10 vsyncs, LOCKED: True, against 448 frames and 62
+        #     bad states as-is.
+        #
+        # THE MAP AND THE DOORS, NOT ALL 739 BYTES.  SOLID is static
+        # map data -- the
+        # doors are the only thing that writes it in play -- so putting
+        # the boot copy back is defined and it is also what makes the
+        # measured map agree with `self.solid`, which is the map the
+        # state pool was chosen against.  MARK and the quad list are in
+        # the blob too and they are rebuilt every frame, which is why
+        # restoring 256 bytes was measured to be sufficient; restoring
+        # boot-time MARK bytes on top of a generation scheme I have not
+        # read would be a new bug in exchange for nothing.
+        self.c.write_ram(SOLID, self.solid)
+        self.c.write_ram(DOORTAB, self.doortab)
+        self.c.poke(self.s["DOOR_N"], self.door_n)
+        self.c.poke(self.s["DOOR_ANIM"], self.door_anim)
         self.c.write_ram(self.s["PLR_X"], struct.pack("<H", px))
         self.c.write_ram(self.s["PLR_Y"], struct.pack("<H", py))
         self.c.poke(self.s["PLR_A"], a)
         self._stub()                    # the march may have eaten it
         self.c.set_pc(0x39C0)
         self.c.run_frames(settle)
+
+    def ended(self):
+        """Did the level END since the last place() -- won, or died?
+
+        (nl_screen) is main3.asm's pointer to the screen new_game will
+        paint.  It is menu_show at boot and player_won / player_died are
+        the only things that move it.
+
+        IT IS THE ONLY OUTWARD SIGN, which is what made this expensive to
+        find.  main_loop does not call nl_call -- only new_game does --
+        and this harness re-enters at main_loop, so a machine that has
+        won the level goes on counting frames at a perfectly steady
+        cadence.  There is no hang to notice; the frames are just drawn
+        from a map that is now the menu's pen tables.
+        """
+        got = struct.unpack("<H", self.c.read_ram(self.s["NL_SCREEN"], 2))[0]
+        return got != self.s["MENU_SHOW"]
 
     def periods(self, nframes=8, step=SAMPLE_US):
         """-> [RAW MILLISECONDS] between successive (frame_ctr) increments.
@@ -293,14 +384,27 @@ class Rig:
 
     def walked(self, n=90, seed=11):
         """States reached by ACTUALLY HOLDING KEYS from random starts --
-        the only sampler that cannot miss a lattice."""
+        the only sampler that cannot miss a lattice.
+
+        IT USED TO WALK ONTO THE EXIT AND KEEP GOING.  85 of these 90
+        steps ended with the level won, starting at step 5, whose random
+        start cell IS the exit -- and the positions it then recorded were
+        read off a player walking around a map that the win screen had
+        overwritten.  Three of the twelve states the sweep went on to
+        name decode to positions INSIDE WALL CELLS, which is the tell.
+        place() puts the map back now, so the damage no longer outlives
+        one step, but the SAMPLE from a step that ended the level is
+        still meaningless and is dropped here.
+        """
         import random
         rnd = random.Random(seed)
         pool = [((cx << 8) | 128, (cy << 8) | 128, a)
                 for cy in range(16) for cx in range(16)
                 for a in range(0, 72, 3)
-                if reachable(self.solid, (cx << 8) | 128, (cy << 8) | 128)]
+                if reachable(self.solid, (cx << 8) | 128, (cy << 8) | 128)
+                and (cx, cy) != (EXIT_X, EXIT_Y)]
         out = []
+        self.nended = 0
         for _ in range(n):
             px, py, a = rnd.choice(pool)
             self.place(px, py, a, settle=10)
@@ -314,6 +418,9 @@ class Rig:
                 self.c.run_frames(rnd.randint(2, 20))
                 self.c.key_up(k2)
             self.c.run_frames(4)
+            if self.ended():
+                self.nended += 1        # walked onto the exit; see above
+                continue
             out.append((
                 struct.unpack("<H", self.c.read_ram(self.s["PLR_X"], 2))[0],
                 struct.unpack("<H", self.c.read_ram(self.s["PLR_Y"], 2))[0],
@@ -340,6 +447,12 @@ def reachable(solid, px, py, rad=64):
     return True
 
 
+def periods_window_ms(nframes=8, step=SAMPLE_US):
+    """How long periods() waits before it gives up, in ms.  Kept next to
+    the caller that prints it so the two cannot drift."""
+    return (int(nframes * 260000 / step) + 400) * step / 1000.0
+
+
 def sweep(n=1400, seed=8191, nwalk=90):
     import random
     g = Rig()
@@ -348,24 +461,43 @@ def sweep(n=1400, seed=8191, nwalk=90):
     pool = [((cx << 8) | ox, (cy << 8) | oy, a)
             for cy in range(16) for cx in range(16)
             for ox in offs for oy in offs for a in range(72)
-            if reachable(g.solid, (cx << 8) | ox, (cy << 8) | oy)]
+            if reachable(g.solid, (cx << 8) | ox, (cy << 8) | oy)
+            and (cx, cy) != (EXIT_X, EXIT_Y)]
     named = ([((cx << 8) | 128, (cy << 8) | 128, a) for cx, cy, a in OUTLIERS]
              + list(OFFGRID) + list(SPILL) + list(OVERBUDGET))
     walk_states = g.walked(nwalk)
     states = named + walk_states + rnd.sample(
         pool, max(0, n - len(named) - len(walk_states)))
     print(f"{len(offs)} sub-cell offsets on the 24/256 movement lattice -> "
-          f"{len(pool)} reachable states (0.25-cell box x 72 headings)")
+          f"{len(pool)} reachable states (0.25-cell box x 72 headings), "
+          f"exit cell ({EXIT_X},{EXIT_Y}) excluded")
     print(f"MEASURING {len(states)}: {len(named)} named bad states, "
           f"{len(walk_states)} reached by HOLDING KEYS, the rest sampled")
+    if g.nended:
+        print(f"    ({g.nended} walk steps ended the level and were dropped)")
     print("period read at 250 us and NOT rounded to vsyncs\n")
 
     hist = collections.Counter()
     bad = []
+    # A STATE THAT YIELDS NO PERIODS IS THE WORST RESULT THERE IS, and
+    # this used to `continue` past it.  periods() gives up after ~2.18 s
+    # of emulated time, so an empty list means the frame loop produced
+    # fewer than two counter increments in eleven times the budget: the
+    # machine is wedged, or every frame is seconds long.  Dropping those
+    # silently meant the WORSE the build, the FEWER states got scored --
+    # MEASURED, a run that reported "47 states off" had quietly thrown
+    # away 523 of its 600 states, and the "k/n states" progress line sat
+    # after the same continue, so its absence was the only hint.
+    dead = []
     for k, (px, py, a) in enumerate(states):
         g.place(px, py, a)
         per = g.periods()
         if not per:
+            dead.append((px, py, a))
+            print(f"  ({px:04X},{py:04X}) a={a:2d}  "
+                  f"{'named' if k < len(named) else 'sampled':10s} "
+                  f"NO FRAMES IN {periods_window_ms():.0f} ms"
+                  f"{'  (LEVEL ENDED)' if g.ended() else ''}")
             continue
         for p in per:
             hist[round(p, 1)] += 1
@@ -389,8 +521,17 @@ def sweep(n=1400, seed=8191, nwalk=90):
         # the failure an uncharged unit produces.  The period has to be
         # PACE_N, not just steady.
         onpace = all(round(p / VSYNC_MS) == PACE_N for p in per)
+        # ...AND THE LEVEL MUST STILL BE RUNNING.  A state that wins or
+        # dies inside its own eight frames measured the end screen for
+        # part of them; place() puts the map back before the NEXT state,
+        # so this no longer poisons the run, but the reading is still
+        # not a reading of the renderer.  The pool excludes the exit, so
+        # if this ever fires it is a named state or a new way to die.
+        if g.ended():
+            grid = same = onpace = False
         if k < len(named) or not (grid and same and onpace):
             note = ("" if grid and same and onpace
+                    else "  <-- LEVEL ENDED MID-MEASUREMENT" if g.ended()
                     else "  <-- NOT A VSYNC MULTIPLE" if not grid
                     else "  <-- MIXED" if not same
                     else "  <-- %d VSYNCS, NOT %d"
@@ -417,22 +558,38 @@ def sweep(n=1400, seed=8191, nwalk=90):
     vs = collections.defaultdict(list)
     for p, c in hist.items():
         vs[int(round(p / VSYNC_MS))] += [p] * c
+    if not tot:
+        print("    NO FRAMES AT ALL -- every state was wedged.")
     for v in sorted(vs):
         raw = vs[v]
+        # ...AND `v` CAN BE ZERO, WHICH USED TO CRASH THE REPORT.  A torn
+        # frame_ctr read (see ctr()) or a genuinely sub-vsync gap buckets
+        # to 0 and `1000.0/(v*VSYNC_MS)` raised ZeroDivisionError -- so
+        # the sweep died without printing its verdict EXACTLY when the
+        # pacing was at its worst.  MEASURED: that is how the run at
+        # 6087ec8 ended, on state (0C97,077A) a=69 with a 1.2 ms gap.
+        fps = "  n/a" if v == 0 else f"{1000.0/(v*VSYNC_MS):5.2f}"
         print(f"    {v} vsyncs = {v*VSYNC_MS:6.2f} ms = "
-              f"{1000.0/(v*VSYNC_MS):5.2f} fps   {len(raw):6d}  "
+              f"{fps} fps   {len(raw):6d}  "
               f"{100.0*len(raw)/tot:6.2f}%   "
               f"(raw {min(raw):.1f}..{max(raw):.1f} ms)")
-    locked = len(vs) == 1 and sorted(vs)[0] == PACE_N and not bad
+    locked = (len(vs) == 1 and sorted(vs)[0] == PACE_N
+              and not bad and not dead)
     print(f"\n    LOCKED: {locked}"
           + ("" if locked else f"  -- {len(vs)} different periods, "
-                               f"{len(bad)} states off {PACE_N} vsyncs"))
+                               f"{len(bad)} states off {PACE_N} vsyncs, "
+                               f"{len(dead)} states with NO frames at all"))
     if bad:
-        print("    states to name in SPILL / OFFGRID at the head of this "
-              "file:")
+        print(f"    states to name in SPILL / OFFGRID at the head of this "
+              f"file ({len(bad)} bad, showing up to 20):")
         for px, py, a, per in bad[:20]:
             print(f"      (0x{px:04X}, 0x{py:04X}, {a}),   "
                   f"{sorted(set(round(p,1) for p in per))} ms")
+    if dead:
+        print(f"    ...and {len(dead)} states produced NO FRAMES in "
+              f"{periods_window_ms():.0f} ms each (showing up to 20):")
+        for px, py, a in dead[:20]:
+            print(f"      (0x{px:04X}, 0x{py:04X}, {a}),")
     return 0 if locked else 1
 
 

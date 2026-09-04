@@ -308,10 +308,29 @@ def main(nstates=40, pick="random"):
         # frame is the only one the slack figure is about.
         #
         # engine2/tools/pacescan.py leaves the EXHAUSTIVE top forty in
-        # engine2/build/pacescan_top.json -- the most expensive states
-        # there are, not the most expensive ones a scan happened to see.
-        # Fall back to emu_pace3's sampled search if it has not been run.
-        top = os.path.join(SCRATCH, "pacescan_top.json")
+        # engine2/build/pacescan_top_shut.json -- the most expensive
+        # states there are, not the most expensive ones a scan happened
+        # to see.  Fall back to emu_pace3's sampled search if it has not
+        # been run.
+        #
+        # THE NAME WENT STALE AND THE FALLBACK HID IT.  pacescan.py wrote
+        # one pacescan_top.json; when it grew the five door
+        # configurations it started writing pacescan_top_<config>.json
+        # and this line was never changed.  os.path.exists() has returned
+        # False ever since, so `make pace` has been benching a SAMPLED
+        # forty and printing a PASS -- the exhaustive worst states, the
+        # only ones the slack figure is about, were never put on the
+        # machine at all.
+        #
+        # SHUT is the right configuration, because the disc under test
+        # has the map as it loads.  And the fallback SAYS SO now: a
+        # branch that quietly does less work is how this survived a
+        # rename in the first place.
+        top = os.path.join(SCRATCH, "pacescan_top_shut.json")
+        if not os.path.exists(top):
+            print(f"    !! {os.path.basename(top)} is not there -- these "
+                  f"are NOT the exhaustive worst states.\n"
+                  f"       Run engine2/tools/pacescan.py to write it.")
         if os.path.exists(top):
             rows_top = json.load(open(top))
             states = [(px, py, a) for _c, px, py, a in rows_top][:nstates]
@@ -437,27 +456,42 @@ def main(nstates=40, pick="random"):
 
     # ---- the fits ----------------------------------------------------
     print("\n=== LEAST SQUARES against the Z80's own counters")
-    co, rms, r2, _w = ef.lstsq([[1.0, float(r["vis"])] for r in rows],
-                               [r["march"] for r in rows])
+
+    # THE FITS ARE DIAGNOSTICS; THE ONE-SIDED TABLE BELOW IS THE TEST.
+    # A regressor that is CONSTANT across the state list makes the normal
+    # equations singular and ef.lstsq divides by zero.  That was guarded
+    # for the projector's fit alone, on the day a sampled list happened
+    # to trip it -- and the moment `worst` started reading pacescan's
+    # EXHAUSTIVE top forty it tripped the march fit instead: the forty
+    # most expensive states in the maze are, by construction, the same
+    # shape of state (vis 8, 6 faces, 5 quads, 3 clips, all forty), so
+    # `[1, vis]` has rank one.  The traceback landed before the check
+    # that matters had printed, which turned a diagnostic into a red
+    # `make pace`.  So: every fit degrades to zeros and says why, and
+    # the test below always runs.
+    def fit(X, y, m):
+        try:
+            return ef.lstsq(X, y)
+        except ZeroDivisionError:
+            print("  (fit skipped: a regressor is constant over these "
+                  "%d states -- singular)" % len(y))
+            return (0.0,) * m, 0.0, 0.0, 0.0
+
+    co, rms, r2, _w = fit([[1.0, float(r["vis"])] for r in rows],
+                          [r["march"] for r in rows], 2)
     print("  march = %.0f + %.1f*cells                     R^2 %.4f "
           "rms %.0f" % (co[0], co[1], r2, rms))
-    try:
-        co, rms, r2, _w = ef.lstsq(
-            [[float(r["nq"]), float(r["nrej"]), float(r["nclip"])]
-             for r in rows],
-            [r["proj"] for r in rows])
-    except ZeroDivisionError:
-        # a state list where every frame has the same face mix makes the
-        # projector's three regressors collinear.  The fit is a diagnostic;
-        # the ONE-SIDED table below is the test, so do not lose it to this.
-        co, rms, r2 = (0.0, 0.0, 0.0), 0.0, 0.0
+    co, rms, r2, _w = fit(
+        [[float(r["nq"]), float(r["nrej"]), float(r["nclip"])]
+         for r in rows],
+        [r["proj"] for r in rows], 3)
     print("  proj  = %.0f*quad + %.0f*rejected + %.0f*clip    R^2 %.4f "
           "rms %.0f" % (co[0], co[1], co[2], r2, rms))
-    co, rms, r2, _w = ef.lstsq(
+    co, rms, r2, _w = fit(
         [[float(len(r["per"])), float(sum(j for _, j, _ in r["per"])),
           float(sum(h - j for _, j, h in r["per"])),
           float(sum(b * (j + h) for b, j, h in r["per"]))] for r in rows],
-        [r["rast"] for r in rows])
+        [r["rast"] for r in rows], 4)
     print("  rast  = %.0f*quad + %.2f*jlo + %.2f*wl2 + %.4f*bw*(jlo+jhi)"
           "   R^2 %.4f rms %.0f" % (co[0], co[1], co[2], co[3], r2, rms))
 
