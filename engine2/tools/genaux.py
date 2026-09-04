@@ -58,11 +58,25 @@ def build():
     #  genhud.py owns the geometry and this file owns where it lives, the
     #  same split gentex.py and genmenu.py have.  Importing it rather
     #  than re-deriving it is what stops the two from drifting.
-    rects, _tab = genhud.build()
+    rects, tab = genhud.build()
     at["HUDRECTS"] = BANK_BASE + len(blob)
     for (x, y, w, h, b) in rects.r:
         blob += bytes((x, y, w, h, b))
     at["HUD_NRECT"] = len(rects.r)
+
+    # ---- the compass needle's 19 headings -------------------------
+    #  152 bytes, and it IS read every frame -- which the rule above
+    #  forbids, so it is read the way the rule allows: hud_needle pages
+    #  bank 6 in, copies the EIGHT bytes for the heading it is drawing
+    #  into scratch, and pages bank 4 back before it touches LINETAB.
+    #  Two OUTs and an eight-byte copy against a hud_update that is
+    #  already 1423 us, and it buys 152 bytes of a code segment that had
+    #  none.
+    at["HUDNDL"] = BANK_BASE + len(blob)
+    for a in range(19):
+        for (dx, dy) in tab[a * genhud.HUD_NDOT:(a + 1) * genhud.HUD_NDOT]:
+            blob += bytes((dx & 0xFF, dy & 0xFF))
+    at["HUD_NDOT"] = genhud.HUD_NDOT
 
     assert len(blob) <= BANK_SIZE, (
         f"bank 6 overflows: {len(blob)} > {BANK_SIZE}")
@@ -81,6 +95,7 @@ INC = """; ---------------------------------------------------------------------
 AUXCFG      equ #{ramcfg:02X}              ; OUT (&7Fxx),this pages bank 6
 HUDRECTS    equ #{hudrects:04X}          ; {nrect} x (db x, y, w, h, byte)
 HUD_NRECT   equ {nrect}              ; ...and how many
+HUDNDL      equ #{hudndl:04X}          ; the needle: 19 headings x {ndot} x (dx, dy)
 AUXEND      equ #{auxend:04X}
 """
 
@@ -92,7 +107,7 @@ def main():
     open(os.path.join(out, "AUX.BIN"), "wb").write(blob)
     open(os.path.join(_E2, "src", "gen_aux.inc"), "w").write(INC.format(
         ramcfg=RAMCFG, hudrects=at["HUDRECTS"], nrect=at["HUD_NRECT"],
-        auxend=at["AUXEND"]))
+        hudndl=at["HUDNDL"], ndot=at["HUD_NDOT"], auxend=at["AUXEND"]))
     print(f"bank 6: {len(blob)} of {BANK_SIZE} bytes, "
           f"{BANK_SIZE - len(blob)} free")
     print(f"  HUDRECTS  #{at['HUDRECTS']:04X}  {at['HUD_NRECT']} rectangles, "

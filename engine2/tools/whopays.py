@@ -117,7 +117,8 @@ def main(lifts):
             ("hud readouts + radar",
              P.C_AMMO + P.C_SCAN + P.C_HP + P.C_SWEEP
              + P.N_BLIP * P.C_BLIP + P.C_RNEEDLE),
-            ("pip_draw", P.C_PIP),
+            ("pip_draw + mon_draw + fx_draw",
+             P.C_PIPP + P.C_PIPM + P.C_PIPF),
         ]
         table(f"dlift {dl:3d}", parts, sum(v for _, v in parts))
 

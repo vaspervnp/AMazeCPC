@@ -67,6 +67,9 @@ import cpchw as cpc                                             # noqa: E402
 import gentab                                                   # noqa: E402
 import pal                                                      # noqa: E402
 
+HUD_NDOT = 4        # blocks in the needle; genaux.py reads this name
+
+
 def rnd(v):
     """Round half AWAY FROM ZERO, and do it symmetrically.
 
@@ -771,11 +774,11 @@ def write_inc(path, rects, tab):
         f"{h},#{SOLID[p]:02X}" for (_f, h, p) in NDL_DOTS))
     L.append("")
     L.append("; ---- needle, headings 0..18: db dx (bytes), dy (lines) ----")
-    L.append("HUDNDL")
-    for a in range(19):
-        row = tab[a * len(NDL_DOTS):(a + 1) * len(NDL_DOTS)]
-        L.append("    db " + ",".join(f"{dx:4d},{dy:4d}" for dx, dy in row)
-                 + f"   ; heading {a}")
+    # ---- THE NEEDLE TABLE IS NOT HERE EITHER.  Like the furniture, it
+    #      is in RAM bank 6 now -- engine2/tools/genaux.py -- because the
+    #      code segment ran out.  This file still derives it and asserts
+    #      it; genaux.py stores it.
+    L.append("; ---- needle table: see gen_aux.inc, RAM bank 6 ----")
     L.append("")
     open(path, "w").write("\n".join(L) + "\n")
 

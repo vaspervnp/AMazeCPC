@@ -877,6 +877,22 @@ hn_idx
     add  hl,hl
     ld   de,HUDNDL
     add  hl,de
+    ; ---- FETCH THE EIGHT BYTES OUT OF BANK 6, and page bank 4 straight
+    ;      back.  The needle table is 152 bytes and the code segment had
+    ;      none of them to spare -- see engine2/tools/genaux.py -- but
+    ;      everything below this draws, and drawing reads LINETAB, which
+    ;      is in bank 4 UNDERNEATH bank 6.  So the read and the drawing
+    ;      cannot both have their bank paged in: the read wins, briefly,
+    ;      and copies what it needs down.  HUD_NDOT * 2 bytes, once a
+    ;      frame, against a hud_update measured at 1423 us.
+    ld   bc,#7F00+AUXCFG
+    out  (c),c
+    ld   de,hn_dot4
+    ld   bc,HUD_NDOT*2
+    ldir
+    ld   bc,#7FC4
+    out  (c),c
+    ld   hl,hn_dot4
     ld   (hn_tp),hl
     ld   a,HUD_NDOT
     ld   (hn_dn),a
@@ -1062,7 +1078,9 @@ hr_sp       dw 0
 hud_rp      dw hud_rows             ; -> the current buffer's record
 hud_rows    defs HUD_NDOT*2*2       ; 4 block addresses, per buffer
 
-hn_tp       dw 0                    ; walks HUDNDL
+hn_tp       dw 0                    ; walks hn_dot4
+hn_dot4     ds HUD_NDOT*2           ; the heading's dots, copied down out
+                                    ; of bank 6 -- see hud_needle
 hn_dp       dw 0                    ; walks the descriptor (height, byte)
 hn_dn       db 0                    ; blocks left
 hn_h        db 0

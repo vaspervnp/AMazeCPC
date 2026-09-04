@@ -106,7 +106,9 @@ N_BLIP = 8           # how many of C_BLIP the worst frame pays for, and
                      # square and drawing its new one.  units() emits
                      # this many cost_adds; the number lives here so the
                      # scans cannot each pick their own.
-C_PIP = 8200         # pip.asm's three world drawers -- the pickup on the
+C_PIPP = 5000        # pip.asm's three world drawers, on three separate
+C_PIPM = 7000        # hooks now -- see main3.asm for why one hook at 8200
+C_PIPF = 1500        # was not a bound.  The pickup on the
                      # floor, the monster, and the shot's flash and mark.
                      # MEASURED 7902.6 us worst on the booted disc, with
                      # the monster a cell away.  Charged unconditionally
@@ -195,7 +197,7 @@ GUN_CHARGED = _equ("GUN_CHARGED", 1)
 # wrong in the same way.  A model that keeps its own copy of a constant
 # cannot catch that; one that reads the disc's can only be wrong if the
 # disc is.
-for _n in ("C_TAIL", "C_DOORACT", "C_AMMO", "C_HP", "C_SCAN", "C_PIP", "C_SND", "C_SWEEP", "C_BLIP", "C_RNEEDLE", "C_DANIM", "C_BG", "C_MSETUP", "C_CELL",
+for _n in ("C_TAIL", "C_DOORACT", "C_AMMO", "C_HP", "C_SCAN", "C_PIPP", "C_PIPM", "C_PIPF", "C_SND", "C_SWEEP", "C_BLIP", "C_RNEEDLE", "C_DANIM", "C_BG", "C_MSETUP", "C_CELL",
            "C_FACE",
            "C_REJ", "C_CLIP", "C_HUD", "C_GUN",
            "C_QSET", "C_BLINE", "C_WPAIR", "C_CHUNK", "C_PMUL", "C_WSTEP",
@@ -521,7 +523,10 @@ def units(ncell, faces, quads, cyh, dlift=0):
     u.append((3, 0, C_SWEEP))
     u += [(3, 0, C_BLIP)] * N_BLIP
     u.append((3, 0, C_RNEEDLE))
-    u.append((0, C_PIP, C_PIP))     # main3.asm:pip_draw, room then charge
+    # main3.asm: three hooks, room then charge, one per drawer
+    u.append((0, C_PIPP, C_PIPP))
+    u.append((0, C_PIPM, C_PIPM))
+    u.append((0, C_PIPF, C_PIPF))
     if GUN and GUN_CHARGED:
         u.append((0, C_GUN, C_GUN))     # main3.asm:gun_paced, room then charge
     return u

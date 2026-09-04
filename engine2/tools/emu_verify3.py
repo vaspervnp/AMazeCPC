@@ -162,12 +162,23 @@ MON_RATE = _equ("MON_RATE")
 _PIP = open(os.path.join(_E2, "src", "pip.asm")).read().split("\n")
 
 
-def _pe(name):
-    for line in _PIP:
+# ...and it is an `equ` of ANOTHER equ now: MON_HW is SPR_MON_HW, which
+# engine2/tools/genspr.py emits from the monster's own art, so widening
+# the sprite widens the aim cone by construction instead of by somebody
+# remembering to change a second literal.  So this follows one hop into
+# the generated file rather than demanding a number.
+_SPR = open(os.path.join(_E2, "src", "gen_spr.inc")).read().split("\n")
+
+
+def _pe(name, where=None):
+    for line in (where or _PIP):
         p = line.split()
         if len(p) >= 3 and p[0] == name and p[1] == "equ":
-            return int(p[2])
-    raise SystemExit(f"{name} not found in pip.asm")
+            try:
+                return int(p[2])
+            except ValueError:
+                return _pe(p[2], _SPR)      # one hop, into gen_spr.inc
+    raise SystemExit(f"{name} not found in pip.asm or gen_spr.inc")
 
 
 MON_HW = _pe("MON_HW")

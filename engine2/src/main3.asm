@@ -960,41 +960,49 @@ C_RNEEDLE   equ 750         ; ...and putting the needle back on top when
                             ; moving, and the monster being painted again
                             ; where it already is when a pickup's erase
                             ; may have wiped it -- see hud_radar.
-C_PIP       equ 8200        ; THE WORLD-SPACE OVERLAY: pip.asm's three
-                            ; drawers together -- pip_draw (the pickup on
-                            ; the floor), mon_draw (the monster) and
+C_PIPP      equ 5000        ; THE WORLD-SPACE OVERLAY, and it is THREE
+C_PIPM      equ 7000        ; hooks now, not one: pip_draw (the pickup on
+C_PIPF      equ 1500        ; the floor), mon_draw (the monster) and
                             ; fx_draw (the muzzle flash and the shot's
-                            ; mark).  ONE hook in front of all three.
+                            ; mark) are charged and yielded on separately.
                             ;
-                            ; MEASURED on the booted disc, the player
-                            ; teleported through main_loop's restart stub
-                            ; so the march state is real:
+                            ; IT WAS ONE HOOK, C_PIP, AT 8200, AND THE
+                            ; BOUND WAS NOT ONE.  The 8200 was fitted
+                            ; against "monster 1 cell away 7902.6" and
+                            ; "the pickup alone 2142.9" -- two states,
+                            ; never the state that is BOTH.  Measured
+                            ; with the drawers benched separately:
                             ;
-                            ;   monster 1 cell away      7902.6
-                            ;   monster 2 cells, offset  6797.5
-                            ;   monster 2 cells          6278.6
-                            ;   monster 3 cells          5298.2
-                            ;   the pickup alone         2142.9
-                            ;   nothing in view           533.0
+                            ;   pip_draw, pickup 1 cell     4669.4
+                            ;   mon_draw, monster 1 cell    6736.7
+                            ;   fx_draw, a shot in flight       802.7
                             ;
-                            ; 297 us of margin.  IT WAS 1800 AND COVERED
-                            ; ONLY pip_draw: adding the monster took the
-                            ; interval to 11691 us -- 59% of a whole
-                            ; vsync period in ONE interval -- before
-                            ; MON_HMAX capped it.  hud_rect costs ~70 us
-                            ; a ROW, so a tall box is nearly all rows.  A 2-byte by
-                            ; 12-row rectangle is the shape hud_rect is
-                            ; worst at -- ~70 us a row and 2 us a byte --
-                            ; so almost all of it is the twelve rows.
+                            ; and the map puts an ammo cell at (1,12),
+                            ; which is where the monster starts -- so
+                            ; 11429 us in one interval against a charge
+                            ; of 8200 is not contrived, it is the second
+                            ; room.  The old figures never caught
+                            ; pip_draw DRAWING: benched at the states
+                            ; that comment names it reads 422.7, which
+                            ; is its early-out.
+                            ;
+                            ; SPLITTING IS THE FIX AND plan.md ALREADY
+                            ; NAMED IT -- "after C_BG the biggest is
+                            ; C_PIP at 8200 ... splitting it three ways
+                            ; is the same move RQ_SPLIT is in raster.asm
+                            ; ... not done".  It does two things at once:
+                            ; every drawer is bounded by its own
+                            ; measurement instead of by the sum, and the
+                            ; largest single unit in the frame drops from
+                            ; 8200 to 7000, which is less for cost_unit's
+                            ; greedy packing to throw away when it yields.
                             ;
                             ; CHARGED UNCONDITIONALLY, unlike C_AMMO and
                             ; C_SCAN.  Those repaint on an EVENT and are
-                            ; silent for fifty frames at a time; this one
-                            ; draws on every frame a pickup is in view,
+                            ; silent for fifty frames at a time; these
+                            ; draw on every frame the thing is in view,
                             ; which is a stretch of frames rather than an
-                            ; instant, so cost_unit's room-then-charge is
-                            ; the right hook: it can yield BEFORE the work
-                            ; instead of carrying it into the next frame.
+                            ; instant.
 C_GUN       equ 3400        ; THE WEAPON, gun_step + gun_draw + this hook.
                             ; MEASURED on the booted disc, emu_gun.py:
                             ; gun_draw 2404.4-3088.2 us over all 45 bob
@@ -1393,11 +1401,15 @@ main_loop
     call hud_radar                  ; ...and the dial's blips and sweep
     ld   a,(plr_hp)                 ; ...and the health bar, which charges
     call hud_health                 ; C_HP and only when it moves
-    ld   bc,C_PIP                   ; the pickup on the floor: it goes on
+    ld   bc,C_PIPP                  ; the pickup on the floor: it goes on
     call cost_unit                  ; TOP of the walls and is cut by the
     call pip_draw                   ; floor line they left in rc_dn
-    call mon_draw                   ; ...and the monster, likewise
-    call fx_draw                    ; ...and the shot's flash and mark
+    ld   bc,C_PIPM                  ; ...the monster, on its own hook
+    call cost_unit                  ; because it is the biggest of the
+    call mon_draw                   ; three and they can all draw at once
+    ld   bc,C_PIPF                  ; ...and the shot's flash and mark
+    call cost_unit
+    call fx_draw
     if GUN
     call gun_paced                  ; the weapon goes on TOP of the finished
     endif                           ; view; bg_fill erases it next frame
@@ -1596,6 +1608,19 @@ frame_ctr   dw 0
     include "march.asm"
     include "project.asm"
     include "raster.asm"
+    ; ---- THE SPRITES GO HERE, AND THE POSITION IS MEASURED, NOT TIDY.
+    ;      They have to be ahead of pip.asm, because rasm evaluates
+    ;      `assert` where it stands and pip.asm asserts its band scratch
+    ;      is big enough for SPR_MON_NB -- every other generated .inc is
+    ;      included at the FOOT of this file, where that would fail.
+    ;
+    ;      They must NOT be ahead of rastcol.asm, which is where they
+    ;      were first put, on the theory that its `align 256` pad would
+    ;      absorb them for nothing.  The pad was 104 bytes and this is
+    ;      133: it OVERFLOWED, COLBLK moved to the next page, and the new
+    ;      pad came out at 227.  MEASURED, game_end #2E94 -> #2FE6 -- the
+    ;      free-bytes trick cost 123 bytes instead of saving 104.
+    include "gen_spr.inc"
     if VPCOL
     include "rastcol.asm"
     endif

@@ -9,4 +9,5 @@
 AUXCFG      equ #C6              ; OUT (&7Fxx),this pages bank 6
 HUDRECTS    equ #4000          ; 71 x (db x, y, w, h, byte)
 HUD_NRECT   equ 71              ; ...and how many
-AUXEND      equ #4163
+HUDNDL      equ #4163          ; the needle: 19 headings x 4 x (dx, dy)
+AUXEND      equ #41FB

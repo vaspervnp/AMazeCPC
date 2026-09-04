@@ -81,24 +81,5 @@ HUD_BG       equ #00   ; ... and is erased with this byte
 HUDDESC      db 5,#FF,3,#FF,3,#FF,3,#C3
 
 ; ---- needle, headings 0..18: db dx (bytes), dy (lines) ----
-HUDNDL
-    db    0, -30,   0, -22,   0, -14,   0,  14   ; heading 0
-    db    1, -30,   1, -22,   0, -14,   0,  13   ; heading 1
-    db    2, -30,   1, -21,   1, -14,  -1,  13   ; heading 2
-    db    2, -29,   2, -21,   1, -13,  -1,  13   ; heading 3
-    db    3, -28,   2, -20,   1, -13,  -1,  13   ; heading 4
-    db    4, -27,   3, -20,   2, -13,  -2,  12   ; heading 5
-    db    5, -26,   3, -19,   2, -12,  -2,  12   ; heading 6
-    db    5, -25,   4, -18,   2, -11,  -2,  11   ; heading 7
-    db    6, -23,   4, -17,   3, -11,  -3,  10   ; heading 8
-    db    6, -21,   5, -15,   3, -10,  -3,  10   ; heading 9
-    db    7, -19,   5, -14,   3,  -9,  -3,   9   ; heading 10
-    db    7, -17,   5, -12,   3,  -8,  -3,   8   ; heading 11
-    db    8, -15,   6, -11,   4,  -7,  -4,   7   ; heading 12
-    db    8, -13,   6,  -9,   4,  -6,  -4,   6   ; heading 13
-    db    8, -10,   6,  -7,   4,  -5,  -4,   5   ; heading 14
-    db    9,  -8,   6,  -6,   4,  -4,  -4,   3   ; heading 15
-    db    9,  -5,   6,  -4,   4,  -2,  -4,   2   ; heading 16
-    db    9,  -3,   6,  -2,   4,  -1,  -4,   1   ; heading 17
-    db    9,   0,   6,   0,   4,   0,  -4,   0   ; heading 18
+; ---- needle table: see gen_aux.inc, RAM bank 6 ----
 
