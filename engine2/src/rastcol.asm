@@ -1948,17 +1948,42 @@ ru_neg
     djnz ru_l
     ret
 
-; A = k, DE = m -> HL = k*m, low 16 bits.
+; A = multiplier, DE = multiplicand -> HL = A*DE.  Clobbers AF HL; C and
+; DE survive, which rc_slide and rc_charge both rely on.
+;
+;  IT IS UNROLLED, AND IT IS NOT "THE SAME TRICK rc_charge USED".
+;  rc_charge's two multiplies became six shifts because its multiplier is
+;  the CONSTANT 21 -- x*21 is x*16 + x*4 + x, and a constant compiles to
+;  a fixed shift chain.  Both of rc_slide's multipliers are RUNTIME
+;  values, (rc_dlift) and d, so there is no chain to compile: the eight
+;  partial products have to happen.
+;
+;  What CAN go is the loop control.  djnz is 16 T-states on the CPC's
+;  4 T grid and it ran eight times a call for nothing but counting; the
+;  unrolled form is the same eight partial products with the counting
+;  deleted.  MEASURED effect on the overlay pair, which pays for two of
+;  these: the shortfall over its charge went 659 -> 477 us, so C_COLSO
+;  came down 800 -> 600 and a door run went
+;
+;    [13, 13, 12, 12, 11, 10, 10]  ->  [13, 12, 12, 11, 11, 10, 10]
+;
+;  periods against a budget of 10.  TWO PERIODS OF THE RUN, and the run
+;  is still late.  DO NOT COME BACK HERE EXPECTING MORE: on that frame
+;  the column renderer is 73% of the charge, and inside it the overlay
+;  is 8.3%.  C_COLS (one drawn pair, 37%) and C_COLR (one row, 35%) are
+;  where the remaining three periods are.
+;
+;  31 BYTES, AND THEY COST NOTHING.  The `align 256` before COLBLK below
+;  absorbs them, exactly as it absorbed rc_charge's lift arithmetic.
 rc_mul8
     ld   hl,0
-    ld   b,8
-rm8_l
+    repeat 8
     add  hl,hl
     add  a,a
-    jr   nc,rm8_n
+    jr   nc,@rm8_n
     add  hl,de
-rm8_n
-    djnz rm8_l
+@rm8_n
+    rend
     ret
 
 

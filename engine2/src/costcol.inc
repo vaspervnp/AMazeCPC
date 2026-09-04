@@ -151,7 +151,7 @@ C_COLS      equ 1800        ; ONE DRAWN PAIR, fixed part: rc_column's
                             ; that arithmetic runs INSIDE the interval it
                             ; is charging for, so it was paying for
                             ; itself twice over.
-C_COLSO     equ 800         ; ...AND WHAT AN OVERLAY PAIR COSTS ON TOP.
+C_COLSO     equ 600         ; ...AND WHAT AN OVERLAY PAIR COSTS ON TOP.
                             ; Charged only when (rc_over) is set, which
                             ; is only while a door is part way through
                             ; its run -- six frames of a game, and none
@@ -169,13 +169,29 @@ C_COLSO     equ 800         ; ...AND WHAT AN OVERLAY PAIR COSTS ON TOP.
                             ;
                             ; MEASURED, emu_rcol.py's atomic with the new
                             ; `moving` flag, 6 states x the six lifts, 90
-                            ; overlay pair hooks: the shortfall runs 263
-                            ; to 659 us and the worst is 659 at dlift 42.
-                            ; The SLOPE was never wrong -- fitting
-                            ; measured against charged rows gives 20.35
-                            ; against C_COLR's 21 -- it is the per-pair
-                            ; INTERCEPT that was short.  800 clears 659
-                            ; by 141, the margin C_HP carries.
+                            ; overlay pair hooks.  The SLOPE was never
+                            ; wrong -- fitting measured against charged
+                            ; rows gives 20.35 against C_COLR's 21 -- it
+                            ; is the per-pair INTERCEPT that was short.
+                            ;
+                            ;   with rc_mul8 a LOOP      worst 659
+                            ;   with rc_mul8 UNROLLED    worst 477
+                            ;
+                            ; 182 us a pair, and the arithmetic agrees.
+                            ; The loop spent 7 taken djnz (16 T) + 1 not
+                            ; taken (8 T) + its ld b,8 = ~32 us a CALL on
+                            ; nothing but counting, and FIVE rc_mul8
+                            ; calls can land inside one overlay pair's
+                            ; interval -- rcc_rok's lift, rc_slide twice
+                            ; (rastcol.asm:1132 and :1320), rc_dnmul and
+                            ; rc_ed1.  5 x 32 = 160 against 182 measured,
+                            ; which is as close as a worst-case fit gets.
+                            ;
+                            ; 600 clears 477 by 123, the margin C_HP
+                            ; carries.  Re-fit it if rc_mul8 changes
+                            ; again: engine2/tools/emu_rcol.py atomic
+                            ; n <dlift> 1 is what measures it, and
+                            ; engine2/tools/overfit.py prints the floor.
                             ;
                             ; IT WENT UNSEEN BECAUSE atomic HAD NEVER
                             ; DRAWN A MOVING FACE.  _atomic_states emits

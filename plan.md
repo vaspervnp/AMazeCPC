@@ -65,9 +65,10 @@ zero, is the headroom the monster's pursuit was then spent out of:
 `C_TAIL` went 3700 → 3900 for `mon_move` the same day, and at
 `PACE_FRAMES` 9 that alone would have put states back over.
 
-**Doors open is still 0.199%** — one frame in 500 — and its worst frame,
-191852, is *inside* the 194560 budget. So what remains is greedy-packing
-waste, not work that does not fit. `cost_unit` yields when the next unit
+**Doors open is 0.209%** — one frame in 480; it was 0.199% before
+`C_CFRAME` went 450 → 600 for the overlay pass, which is charged on every
+frame — and its worst frame, 192002, is *inside* the 194560 budget. So
+what remains is greedy-packing waste, not work that does not fit. `cost_unit` yields when the next unit
 does not fit and throws the rest of the interval away, so waste scales
 with the biggest units; after `C_BG` the biggest is `C_PIP` at 8200, one
 hook in front of all three of `pip.asm`'s drawers. Splitting it three
@@ -241,8 +242,131 @@ invariant.
 cheaper rather than charging more for it. `rc_slide`'s two eight-iteration
 `rc_mul8` loops per pair are most of what `C_COLSO` pays for — and
 `rc_charge`'s own two `rc_mul8` loops were once replaced by six shifts,
-which is what took `C_COLS` from 1980 to 1800. Same move, same routine,
-not done.
+which is what took `C_COLS` from 1980 to 1800.
+
+### Pulled. It gives two periods back, and the shift trick is not why.
+
+The two routines look like the same problem and they are not.
+`rc_charge` multiplies by the **constant** 21, and `x*21 = x*16 + x*4 +
+x` compiles to six `ADD HL` with no multiply left. `rc_slide`'s two
+multipliers are `(rc_dlift)` and `d`, both **runtime values**: there is
+no chain to compile, and the eight partial products have to happen. That
+was worth establishing before touching it rather than after.
+
+What *can* go is the loop control — `djnz` is 16 T-states on the CPC's
+4 T grid and it ran eight times a call purely to count. `rc_mul8` is
+unrolled (`repeat 8`; 31 bytes, absorbed by the `align 256` pad,
+`game_end` unmoved at 22 free):
+
+| | shortfall a pair | `C_COLSO` | the disc, per door |
+|---|---:|---:|---|
+| `rc_mul8` a loop | 659 µs | 800 | `[13, 13, 12, 12, 11, 10, 10]` |
+| `rc_mul8` unrolled | **477 µs** | **600** | `[13, 12, 12, 11, 11, 10, 10]` |
+
+Measured back to back on one build with only the constant changed, so
+the comparison is the constant and nothing else. 166/166 `emu_rcol
+verify` screens are still byte-exact (24 with a door in motion) and
+`overfit` still reports no interval over its charge.
+
+### ...and running `make pace` to check it found that the harness lies
+
+The unroll's regression run failed — `emu_pace.py 600` reported **23
+different periods and 47 states off 10 vsyncs, worst 918 ms**. Nothing in
+"delete a `djnz`, lower a charge" can lengthen a frame, so the first
+question was whether it was mine. It was, but not from this change.
+
+Bisected across the commits, whole sweeps each:
+
+| commit | | `emu_pace.py 600` |
+|---|---|---|
+| `d83a3e0` | ten periods a frame, a monster that walks | **LOCKED, 4800/4800** |
+| `7f489d1` | the monster hurts you now | **LOCKED, 4800/4800** |
+| `6087ec8` | **a way out of the maze** | 302 frames, 52 bad, then `ZeroDivisionError` |
+
+**So it was the exit, and the monster was innocent.** `MENUBUF equ SOLID`
+(`menu.asm:44`): painting `menu_win` LDIRs `MN_BLOB` = 739 bytes over the
+live map, the flood's `MARK` array and the front of the quad list. The
+*game* survives that — `player_won` jumps to `new_game`, which rebuilds
+the world — but `emu_pace`'s teleport stub re-enters at `main_loop`,
+*below* `new_game`, so the rebuild never runs. `walked(90)`'s step 5
+starts on `EXIT_CELL` (13,1) and wins; **85 of its 90 steps end with the
+level over**, deterministically, at seed 11 — before the first measured
+state. Every frame after that marches the menu's pen tables.
+
+The decisive pair, measured:
+
+```
+restore SOLID only, leave (nl_screen) at menu_win  ->  14 of 14 states back to 10 vsyncs
+restore (nl_screen) only, leave the map wrecked    ->  byte-identical failure
+```
+
+It is the **map**, not the screen. The frame loop never actually leaves —
+`main_loop` does not call `nl_call` — so there is no hang to notice; the
+frames are steady, evenly spaced, and drawn from garbage. Three of the
+twelve states it named decode to positions **inside wall cells**.
+
+With that one thing undone: **4800 of 4800 frames at 10 vsyncs, LOCKED,
+0 dropped**, on the build this section is about. `emu_pace`'s verdict has
+meant nothing since the exit landed, and I am the one who landed it
+without re-running the suite.
+
+**Three more defects fell out of the same hole**, all of them the shape
+where a check quietly does less work:
+
+- `sweep()` did `if not per: continue` — a state that yields no periods
+  is the *worst* result there is, and it was skipped without a word.
+  **523 of 600 states were being thrown away**; the progress line sat
+  after the same `continue`, so its absence was the only hint. The worse
+  the build, the fewer states got scored. It is a failure now.
+- The histogram divided by the vsync count, so a sub-vsync gap (a torn
+  `frame_ctr` read, or a genuine stall) raised `ZeroDivisionError` — the
+  sweep died *without printing its verdict* exactly when pacing was
+  worst. That is how the run at `6087ec8` ended.
+- `emu_pacefit.py` looked for `engine2/build/pacescan_top.json`;
+  `pacescan.py` writes `pacescan_top_<config>.json` since it grew the
+  five door configurations. `os.path.exists` has been False ever since,
+  so the "40 worst states" bench has silently been forty **sampled**
+  states while printing a PASS. The fallback says so out loud now.
+
+**And fixing the filename found a fourth.** The moment `emu_pacefit`
+read the *exhaustive* worst forty instead of a sampled forty, it crashed:
+all forty are the same shape of state — `vis 8, 6 faces, 5 quads, 3
+clips`, every one — so the diagnostic fit of `march` on `[1, vis]` is
+rank one and `lstsq` divided by zero, *before* the one-sided check that is
+the actual test had printed. The projector's fit already had exactly this
+guard, added the day a sampled list happened to trip it; the other two
+did not. All three degrade to zeros and say why now, and the test always
+runs. What the exhaustive forty then say: the most expensive frame in the
+maze measures **125.63 ms against a 199.68 ms budget** (render 116.95,
+tail at `C_TAIL`), slack 74 ms; every unit one-sided; estimate never
+under the truth — numbers the sampled fallback had never put on the
+machine.
+
+`make pace` still cannot go green: `pacescan` returns non-zero because
+doors-open (0.209%) and one-moving (15.29%) are over budget, which is the
+open problem this whole section is about, and `emu_atomic.py` cannot
+assemble its harness (`RASTER_QUAD`, `RC_BUF` — pre-existing, unrelated).
+Those two are the only reds left.
+
+### Where the other three periods are, so nobody digs here again
+
+The first frame of a door run charges **11.15 budgets** (11.50 on the
+`dlift 0` frames at each end of the run). `engine2/tools/whopays.py`
+decomposes it off the live constants:
+
+| the frame | | inside the column renderer | |
+|---|---:|---|---:|
+| the column renderer | 73% | `C_COLS` — one drawn pair × 33 | 37% |
+| flood, 17 cells | 6% | `C_COLR` — one row × 2657 | 35% |
+| HUD readouts + radar | 5% | `C_COLSO` — the overlay × 22 | 8% |
+| `bg_fill` + `march_setup` | 5% | `C_CFARP` — the far plane × 12 | 8% |
+| project, 4/5 faces | 5% | `C_CFACE`, `C_CEDGE`, `C_CSKIP`, … | 12% |
+| `pip_draw` | 4% | | |
+
+Deleting `C_COLSO` *entirely* would buy 13200 µs — two thirds of one
+period. The remaining three are in the 33 pairs and the 2657 rows, and
+the question that actually addresses them is whether a door one cell
+away needs 2657 charged rows.
 
 ---
 

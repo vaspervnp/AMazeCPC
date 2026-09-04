@@ -6,7 +6,7 @@ interval, measured. The rooms are 4x4 and every door in the map opens.
 
 **The period is locked for the map as it loads.** `PACE_FRAMES` is 10 —
 199.7 ms, 5.01 fps — and `pacescan.py` puts **0 of 8128512** doors-shut
-states over budget. Doors open is 0.199%.
+states over budget. Doors open is 0.209%.
 
 **And it is a game now**: a monster that hunts and hurts you, health, a
 death screen, an exit that ends the level and a score.
@@ -54,7 +54,67 @@ recorded here so it can be made deliberately. Doors-shut survives the
 cheaper instead of charging more: `rc_slide` runs two eight-iteration
 `rc_mul8` loops per pair, which is most of what `C_COLSO` pays for, and
 `rc_charge`'s own two were once replaced by six shifts — the move that
-took `C_COLS` from 1980 to 1800. Same routine, not done.
+took `C_COLS` from 1980 to 1800.
+
+**Pulled, and it gives two of the four periods back.** The shift trick
+itself does not transfer and it is worth saying why, because the two
+routines look identical: `rc_charge`'s multiplier is the *constant* 21,
+and `x*21 = x*16 + x*4 + x` compiles to six `ADD HL`. `rc_slide`'s two
+multipliers are `(rc_dlift)` and `d`, both runtime, so the eight partial
+products have to happen. What could go was the `djnz` — 16 T-states,
+eight times a call, purely counting. `rc_mul8` is unrolled (`repeat 8`,
+31 bytes, absorbed by the same `align 256` pad, `game_end` unmoved):
+
+```
+overlay shortfall over its charge   659 -> 477 us a pair
+C_COLSO                             800 -> 600
+the disc, per door                  [13,13,12,12,11]  ->  [13,12,12,11,11]
+```
+
+166/166 `emu_rcol verify` screens still byte-exact, 24 of them with a
+door in motion, and `overfit` reports no interval over its charge.
+
+**Do not come back to `rc_mul8` for the other three periods.** The first
+frame of a door run charges 11.15 budgets and it decomposes:
+
+```
+   the column renderer   73%   |   inside it:  C_COLS  pair   37%
+   flood, 17 cells        6%   |               C_COLR  rows   35%
+   HUD readouts + radar   5%   |               C_COLSO overlay 8%
+   bg_fill+march_setup    5%   |               C_CFARP far    8%
+   project, 4/5 faces     5%   |               everything else
+   pip_draw               4%   |
+```
+
+Zeroing `C_COLSO` outright would buy 13200 µs — two thirds of one
+period. The three that are left are in the 33 drawn pairs and the 2657
+charged rows, and the honest next question is whether a door one cell
+away has to be drawn as 2657 rows at all.
+`engine2/tools/whopays.py` prints both halves of that table straight off
+the current constants; run it before choosing the next lever.
+
+**And running `make pace` to check the unroll found that the harness has
+been lying since I added the exit.** `emu_pace.py 600` reported 47 states
+off 10 vsyncs, worst 918 ms — which a deleted `djnz` cannot cause. Whole
+sweeps at three commits: `d83a3e0` LOCKED 4800/4800, `7f489d1` (the
+monster gains teeth) LOCKED 4800/4800, `6087ec8` (**the exit**) 302
+frames, 52 bad, then a `ZeroDivisionError`.
+
+`MENUBUF equ SOLID`: `menu_win` LDIRs 739 bytes over the live map.
+`player_won` recovers by jumping to `new_game`, but `emu_pace`'s teleport
+stub re-enters at `main_loop`, *below* it. `walked(90)`'s step 5 starts
+on the exit cell and wins — 85 of 90 steps end the level, before the
+first measured state — so every frame after that marches the menu's pen
+tables. Restore `SOLID` alone and all 14 checked states go back to 10
+vsyncs; restore `nl_screen` alone and nothing changes. It is the map.
+**Undone, this build is LOCKED: 4800 of 4800 frames at 10 vsyncs.**
+
+Three more, all "the check quietly did less work": `sweep()` skipped
+zero-period states with a bare `continue` (**523 of 600 discarded**, and
+the progress line sat after it); the histogram divided by the vsync count
+so a sub-vsync gap killed the report exactly when pacing was worst; and
+`emu_pacefit.py` read a `pacescan_top.json` that `pacescan` stopped
+writing five configurations ago, benching a *sampled* forty under a PASS.
 
 **And the menu drew its text in colours read from arbitrary memory.**
 `mn_next` computed `MNPENS + 2*pen` and dereferenced it, where the pen
@@ -66,9 +126,10 @@ eight bands for eight rows.
 
 **The BODY is the binding constraint from here on** — `game_end` is 22
 bytes under `BUCK0` and RAM bank 5 has 51 free. The next feature has to
-pay for itself, and `rc_dlift`'s `align 256` in `rastcol.asm` leaves 173
-bytes of pure padding at #1853 that a read-only table could move into
-for nothing.
+pay for itself, and `rc_dlift`'s `align 256` in `rastcol.asm` still
+leaves 104 bytes of pure padding that a read-only table could move into
+for nothing — it was 173, and the lift arithmetic and the `rc_mul8`
+unroll have eaten 69 of them without moving `game_end` a byte.
 
 `plan.md` is the current document; this file is the renderer's own
 handoff and §1 below describes a blocker that is now closed. Read
@@ -90,13 +151,14 @@ first; every number here is written down next to the code it constrains.
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
 | `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
 | `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 over budget, worst 171082 |
-| `pacescan.py` (doors OPEN) | 17,530 of 8,792,064 = **0.199%**, worst frame 191852 of 194560 |
-| `pacescan.py` (ONE door moving) | 1,314,688 of 8,128,512 = **16.17%** — honest charge, see above |
-| the disc, while a door runs | **[13, 13, 12, 12, 11]** vsyncs against 10 |
+| `pacescan.py` (doors OPEN) | 18,344 of 8,792,064 = **0.209%**, worst frame 192002 of 194560 (`C_CFRAME` 450 → 600) |
+| `pacescan.py` (ONE door moving) | 1,243,133 of 8,128,512 = **15.29%** — honest charge, `rc_mul8` unrolled |
+| the disc, while a door runs | **[13, 12, 12, 11, 11, 10, 10]** vsyncs against 10 |
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
 | `monmodel.py` | **PASS** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs |
 | the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |
 | `emu_verify3.py` | **ALL CHECKS PASS**, period `[10]` on all six named views |
+| `emu_pace.py 600` | **LOCKED** — 4800 of 4800 frames at 10 vsyncs, 0 states dropped. Was reporting 47 bad since `6087ec8`: the harness, not the disc — see above |
 
 The span renderer is still the fallback and still locks: set
 `VPCOL equ 0` **and** `PACE_FRAMES equ 6` (an `assert` in `main3.asm`
