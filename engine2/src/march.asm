@@ -810,8 +810,23 @@ maze_unpack
     ;      this reads nothing else and writes SOLID at #3A00, below the
     ;      window -- and because it runs from new_game and not from a
     ;      frame.  See engine2/tools/genaux.py for the rule.
+    ; ...and only where there IS a bank 6.  engine2/test/tst_kern.asm
+    ; includes this file without gen_aux.inc, patches a synthetic map
+    ; straight into SOLID and never calls maze_unpack at all -- so the
+    ; OUT has to compile out for it, the same way MTBANK's does below.
+    ;
+    ; THE FLAG IS AUXBANK AND NOT `ifdef AUXCFG`, AND THAT IS MEASURED.
+    ; AUXCFG comes from gen_aux.inc, which hud2.asm includes -- AFTER
+    ; this file.  `ifdef` is answered where it stands, so it was FALSE
+    ; here and the paging compiled out of the DISC as well: maze_unpack
+    ; would have read the maze out of bank 4's tables and built a map of
+    ; noise.  It assembled, it linked, and nothing said a word.  main3
+    ; .asm defines AUXBANK before the includes, exactly as it defines
+    ; MTBANK, so a build without a bank 6 is a build that says so.
+    ifdef AUXBANK
     ld bc,#7F00+AUXCFG
     out (c),c
+    endif
     ld hl,MAZEDATA
     ld de,SOLID
     ld b,64
@@ -830,8 +845,10 @@ mu_cell
     djnz mu_cell
     pop bc
     djnz mu_byte
+    ifdef AUXBANK
     ld bc,#7FC4                     ; ...and bank 4 back for everything
     out (c),c                       ; else
+    endif
     ret
 
 

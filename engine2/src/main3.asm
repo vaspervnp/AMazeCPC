@@ -1266,6 +1266,9 @@ C_PMUL      equ 90          ; ...and what a SHORT chunk costs on top: the
 ; and is spelled out as 16*D + 4*D inside raster.asm -- see rq_wedge.
 
     if PACE_FRAMES>=1
+AUXBANK     equ 1               ; ...and maze_unpack reads MAZEDATA out
+                                ; of RAM bank 6, which only a build with
+                                ; a bank 6 can do -- see march.asm
 MTBANK      equ 1               ; march.asm reads MARCHTB out of RAM
                                 ; bank 5 -- see the note there and in
                                 ; engine2/tools/gentex.py

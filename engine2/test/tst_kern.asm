@@ -160,3 +160,20 @@ done    db 0
     include "project.asm"
     include "gen_slopes.inc"
     include "gen_maze.inc"
+    ; ---- MARCHTB IN BASE RAM.  march.asm reads it out of bank 5 when
+    ;      MTBANK is defined and out of here when it is not, and this
+    ;      harness runs AT &4000 -- paging there would swap the window
+    ;      out from under its own program counter.  The include went
+    ;      missing when the table moved to the bank; nothing noticed,
+    ;      because engine2/tools/emu_room.py is the only caller and it is
+    ;      in no make target.
+    include "gen_mtab.inc"
+
+; ---- AND ITS OWN MAP.  gen_maze.inc used to emit MAZEDATA as 64 packed
+;      bytes here; they live in RAM bank 6 on the disc now, which this
+;      harness has no way to reach.  It does not want them either:
+;      emu_room.py POKES a synthetic 256-byte SOLID in and `boot` above
+;      LDIRs it straight across, so what is needed is a writable buffer
+;      of that size and not a packed map.
+MAZEDATA
+    ds 256
