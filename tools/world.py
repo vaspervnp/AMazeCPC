@@ -209,8 +209,8 @@ MAZE_SRC_L2 = [
 
 # ---------------------------------------------------------------------
 #  THE LEVELS, and everything that is per-level is HERE and not spread
-#  across three files.  gen_march.py emits one fixed-size record each
-#  into RAM bank 6; main3.asm's level_load pulls one down.
+#  across three files.  engine2/tools/genaux.py emits one fixed-size
+#  record each into RAM bank 6; game.asm's level_load pulls one down.
 #
 #  A LEVEL IS NOT JUST A GRID.  Where you start, where the pickups are,
 #  where the monsters stand and where the way out is are all part of it,

@@ -149,8 +149,9 @@ DOOR_OPEN   equ 8           ; 8 - 2 = SIX frames to run, one step each
 ;  AMMUNITION.  Six rounds, six pips in the HUD's top-left readout, and
 ;  a magazine that only refills by walking over a pickup.
 ;
-;  THE PICKUPS ARE A LIST, NOT A MAP CODE.  gen_march.py emits AMMOTAB
-;  as NAMMO cell indices (y*16+x, the same index SOLID uses) because the
+;  THE PICKUPS ARE A LIST, NOT A MAP CODE.  level_load copies the cells
+;  out of the level record in RAM bank 6 into ammo_st -- cell indices
+;  (y*16+x, the same index SOLID uses) -- because the
 ;  alternative -- a fifth value in SOLID -- would put a test in the
 ;  march's hot loop, which reads SOLID four times a cell, for something
 ;  that is neither opaque nor solid.  ammo_scan walks NAMMO bytes once a
@@ -250,12 +251,9 @@ DOOR_REACH  equ 320         ; 1.25 cells, 8.8, for the nearest-door search
 ;  game_init -- SOLID must already hold the maze.
 ; ---------------------------------------------------------------------
 game_init
-    ld   hl,START_X*256+128         ; start in the middle of the start cell
-    ld   (plr_x),hl
-    ld   hl,START_Y*256+128
-    ld   (plr_y),hl
-    ld   a,START_A                  ; THE MAP DECIDES WHICH WAY YOU FACE,
-    ld   (plr_a),a                  ; and gen_march.py derives it as the
+    ; WHERE THE PLAYER STARTS IS level_load'S NOW, out of the level
+    ; record, and new_game calls it first.  Setting it here as well
+    ; would have put every level's player at level 0's start.
     xor  a                          ; heading from the start cell to the
     ld   (door_n),a                 ; monster's.  It was `xor a` -- due
                                     ; east -- with the monster two cells
@@ -301,7 +299,94 @@ gi_next
     inc  c
     jr   nz,gi_scan
 
-    call ammo_arm
+    jp   ammo_arm                   ; TAIL CALL, and the missing `ret` after
+                                    ; a `call` here is what fell through into
+                                    ; level_load below with A = AMMO_NODIR:
+                                    ; a level index of 255 put lv_rec 32K
+                                    ; past the records, and the garbage it
+                                    ; read as `nmon` ran ll_mon 256 times
+                                    ; and wrote 512 bytes over STACKTOP.
+
+; ---------------------------------------------------------------------
+;  level_load -- IN A = the level.  Puts that level's world in place.
+;
+;  A LEVEL IS A FIXED-SIZE RECORD IN RAM BANK 6 and the whole of it is
+;  data: the maze, where you start and which way you face, where the way
+;  out is, the pickups and the monsters.  engine2/tools/genaux.py emits
+;  them and tools/world.py checks every cell against the grid before
+;  they get there.
+;
+;  LVREC IS 128 SO THE INDEX IS A SHIFT.  `ld h,a / ld l,0 / srl h /
+;  rr l` is A*128 in four instructions; a multiply would have been a
+;  loop, and this runs where new_game runs -- once a life.
+;
+;  Clobbers AF BC DE HL.
+; ---------------------------------------------------------------------
+level_load
+    ld   (cur_level),a
+    ld   h,a
+    ld   l,0
+    srl  h
+    rr   l                          ; A * LVREC
+    ld   de,LEVELS
+    add  hl,de
+    ld   (lv_rec),hl
+    call maze_unpack                ; reads (lv_rec); pages bank 6 itself
+
+    ld   bc,#7F00+AUXCFG            ; ...and again for the rest of it
+    out  (c),c
+    ld   hl,(lv_rec)
+    ld   de,LVO_START
+    add  hl,de
+    ld   a,(hl)                     ; where you start...
+    ld   (plr_x+1),a
+    inc  hl
+    ld   a,(hl)
+    ld   (plr_y+1),a
+    inc  hl
+    ld   a,(hl)                     ; ...and which way you face
+    ld   (plr_a),a
+    inc  hl
+    ld   a,(hl)                     ; the way out, y*16+x
+    ld   (lv_exit),a
+    inc  hl
+    ld   c,(hl)                     ; the pickups
+    inc  hl
+    push hl
+    push bc
+    ld   hl,ammo_st                 ; EVERY slot gone first, so a level
+    ld   b,MAXAMMO                  ; with fewer pickups than the one
+ll_gone                             ; before cannot leave a stale cell
+    ld   (hl),AMMO_GONE             ; index in the tail
+    inc  hl
+    djnz ll_gone
+    pop  bc
+    pop  hl
+    ld   b,0
+    ld   de,ammo_st
+    ldir
+    ld   hl,(lv_rec)                ; ...and the monsters
+    ld   de,LVO_NMON
+    add  hl,de
+    ld   b,(hl)
+    inc  hl
+    ld   de,MONTAB
+    ld   a,(hl)
+    ld   (MONCELL),a                ; the radar reads this before the
+ll_mon                              ; first mon_all pass
+    ld   a,(hl)
+    inc  hl
+    ld   (de),a
+    inc  de
+    ld   a,MON_HPMAX
+    ld   (de),a
+    inc  de
+    djnz ll_mon
+    ld   bc,#7FC4                   ; bank 4 back for everything else
+    out  (c),c
+    ld   a,128                      ; the middle of the start cell
+    ld   (plr_x),a
+    ld   (plr_y),a
     ret
 
 
@@ -313,25 +398,11 @@ gi_next
 ;  consists of.
 ; ---------------------------------------------------------------------
 ammo_arm
-    ; ---- THE MONSTER IS PART OF STARTING A LIFE, and it has to be put
-    ;      back BY VALUE.  MONCELL is a byte mon_move writes every
-    ;      MON_RATE frames and mon_hit sets to #FF, so by the time a
-    ;      restart runs it holds wherever the thing died -- which is
-    ;      nowhere.  MONSTART is the map's own equ, which nothing can
-    ;      overwrite; gen_march.py emits the pair for exactly this.
-    ; ---- ALL OF THEM, back where the map put them.
-    ld   hl,MONSTARTS
-    ld   de,MONTAB
-    ld   b,NMON
-aa_mon
-    ld   a,(hl)
-    inc  hl
-    ld   (de),a                     ; the cell...
-    inc  de
-    ld   a,MON_HPMAX
-    ld   (de),a                     ; ...and a full set of hit points
-    inc  de
-    djnz aa_mon
+    ; ---- THE MONSTER IS PART OF STARTING A LIFE, and level_load below
+    ;      puts it back BY VALUE.  MONCELL and MONTAB are bytes mon_move
+    ;      writes and mon_hit sets to #FF, so by the time a restart runs
+    ;      they hold wherever the things died -- which is nowhere.  The
+    ;      level record in RAM bank 6 is what nothing can overwrite.
     ; ---- AND THE INDEX mon_hit USES.  It is set by mon_draw and read by
     ;      fx_fire, and mon_all zeroes mon_bot before every draw pass so
     ;      the two cannot get out of step -- but nothing had ever WRITTEN
@@ -340,8 +411,6 @@ aa_mon
     xor  a
     ld   (mon_idx),a
     ld   (mon_cur),a
-    ld   a,MONSTART
-    ld   (MONCELL),a
     ; ---- and the map starts blank.  new_game rebuilds the world after
     ;      a death or a win and the player has seen none of the next one.
     ld   a,HUD_MMSEEN               ; mm_cell's default pen, and no
@@ -375,16 +444,6 @@ aa_bl
     djnz aa_bl
     ld   a,AMMO_NODIR
     ld   (ammo_dir),a
-    ld   hl,ammo_st                 ; ...and every slot of the live list is
-    ld   b,MAXAMMO                  ; GONE before the map's own are copied
-aa_st                               ; over it, so a MAXAMMO bigger than
-    ld   (hl),AMMO_GONE             ; NAMMO cannot leave a stale cell index
-    inc  hl                         ; in the tail
-    djnz aa_st
-    ld   hl,AMMOTAB
-    ld   de,ammo_st
-    ld   bc,NAMMO
-    ldir
     ret
 
 
@@ -628,10 +687,10 @@ as_gotp
 ;  AND IT SEQUENCES THE GAME.  Pickups first, then the way out -- the pad
 ;  says which, and the player never has to be told.
 as_none
-    ld   a,EXIT_CELL                ; #FF = this layout has no exit, and
-    inc  a                          ; gen_march.py emits that for the
-    jr   z,as_dark                  ; Mode 2 map
-    ld   c,EXIT_CELL
+    ld   a,(lv_exit)                ; #FF = this layout has no exit, and
+    ld   c,a                        ; genaux.py writes that into the
+    inc  a                          ; record for a map without one.  C
+    jr   z,as_dark                  ; first, so the test is free
     call as_pworld
     jp   as_pack
 as_dark
@@ -1245,10 +1304,15 @@ gs_nospace
     ;      full.  A map with no exit emits #FF = (15,15), outer wall,
     ;      unstandable, so the test is simply never true.
     ld   a,(plr_x+1)                ; plr_x is 8.8: the high byte IS the
-    cp   EXIT_X                     ; cell, the same read as_l1 makes
-    jr   nz,gs_noexit
-    ld   a,(plr_y+1)
-    cp   EXIT_Y
+    ld   a,(plr_y+1)                ; the cell, y*16+x -- ONE compare
+    add  a,a                        ; against the level's own exit byte,
+    add  a,a                        ; where it used to be two against a
+    add  a,a                        ; pair of equs
+    add  a,a
+    ld   hl,plr_x+1
+    add  a,(hl)
+    ld   hl,lv_exit
+    cp   (hl)
     jr   nz,gs_noexit
     ld   a,2                        ; ...and 2 is WON.  1 is ESC, 0 is
     ret                             ; keep playing -- see the ret below
@@ -1921,6 +1985,12 @@ ammo_blip   ds MAXAMMO          ; ONE PACKED (band << 4) | WORLD SECTOR
                                 ; nose-relative for the direction pad.
 as_cur      db 0                ; the distance of the pickup being looked at
 as_ix       db 0                ; ...and its slot in ammo_blip
+cur_level   db 0                ; which level; player_won advances it and
+                                ; new_game reloads from it, so a death
+                                ; restarts the LEVEL and not the game
+lv_rec      dw 0                ; -> its record in RAM bank 6
+lv_exit     db #FF              ; the way out, y*16+x.  A byte and not a
+                                ; pair of equs, because it is per level
 mon_hp      db MON_HPMAX         ; rounds it can still take.  0 is death,
                                 ; and death is #FF in MONCELL -- see
                                 ; mon_hit

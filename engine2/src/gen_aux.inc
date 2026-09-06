@@ -10,5 +10,19 @@ AUXCFG      equ #C6              ; OUT (&7Fxx),this pages bank 6
 HUDRECTS    equ #4000          ; 67 x (db x, y, w, h, byte)
 HUD_NRECT   equ 67              ; ...and how many
 HUDNDL      equ #414F          ; the needle: 19 headings x 4 x (dx, dy)
-MAZEDATA    equ #41E7          ; 16x16 cells, two bits each
-AUXEND      equ #4227
+MAZEDATA    equ #41E7          ; level 0's maze -- the first record
+LEVELS      equ #41E7          ; 2 x LVREC, see genaux.py
+NLEVEL      equ 2
+LVREC       equ 128             ; bytes a level, a power of two
+; LVO_, not LV_.  rasm's labels are CASE-INSENSITIVE, so an offset
+; called LV_EXIT and game.asm's byte called lv_exit are one symbol and
+; the build stops with "Alias cannot override existing label" -- which
+; is the good outcome; the same collision has been walked into with
+; mon_hp/MON_HP and plr_hp/PLR_HPMAX.
+LVO_START   equ 64              ; ...and the offsets inside one
+LVO_EXIT    equ 67
+LVO_NAMMO   equ 68
+LVO_NMON    equ 77
+MAXAMMO_LV  equ 8
+MAXMON_LV   equ 4
+AUXEND      equ #42E7

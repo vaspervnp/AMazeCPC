@@ -846,10 +846,22 @@ Ordered by what unlocks the most, with the honest cost of each.
   in the map format; needs a "level complete" screen.
 - **Score.** Kills, pickups, time. The menu font is already there — a
   score line in the HUD is `menu.asm`'s blitter pointed at the HUD.
-- **More than one level.** The map is 256 bytes packed and the whole
-  engine reads it from `SOLID`. Several maps on the disc, one `LDIR`
-  apart, is nearly free — the work is the level-select and the
-  progression, not the loading.
+- ~~**More than one level.**~~ **Done** — and the prediction above was
+  right about the cost and wrong about where the difficulty was. The
+  levels are fixed-size 128-byte records in **RAM bank 6**
+  (`engine2/tools/genaux.py`): 64 bytes of packed maze, then start
+  cell + heading, exit cell, the pickups and the monsters. `LVREC` is
+  128 so `level_load` indexes them with a shift (`ld h,a / ld l,0 /
+  srl h / rr l`) instead of a multiply. `player_won` advances
+  `cur_level` and wraps at `NLEVEL`; a **death does not advance**, so
+  dying restarts the level you were on.
+
+  What actually cost the time was neither the loading nor the select:
+  it was that `level_load` had to become the **one** place a life's
+  world is set up. `game_init` set the start position and `ammo_arm`
+  copied `AMMOTAB`, and each of those would have put every level's
+  player on level 0's map. Both are gone; see the three entries this
+  added to TODO.md's Traps.
 
 ### 3. Presentation
 

@@ -20,6 +20,7 @@ while the game is running.
 import os
 import re
 import addrs
+import genaux
 import struct
 import sys
 
@@ -170,7 +171,22 @@ def _gm(name):
     raise SystemExit(f"{name} not found in gen_maze.inc")
 
 
-NAMMO = _gm("NAMMO")
+# WHERE THE PICKUP CELLS COME FROM NOW.
+#
+# They used to be AMMOTAB, a table in the code segment, and this file
+# read it off the running machine.  level_load deleted it: the pickups
+# are per-level and they live in RAM bank 6, which no harness here can
+# page in.  genaux.read_level() reads them back out of build/AUX.BIN --
+# the file the disc actually carries -- so the intent survives: a
+# generator that stopped matching its own output still fails here.
+#
+# gen_maze.inc's NAMMO is asserted against it rather than trusted, so
+# the two descriptions of level 0 cannot drift apart in silence.
+AMMOCELLS = genaux.read_level(0)["ammo"]
+NAMMO = len(AMMOCELLS)
+assert NAMMO == _gm("NAMMO"), (
+    f"level 0 has {NAMMO} pickups in AUX.BIN and {_gm('NAMMO')} in "
+    "gen_maze.inc -- one of the two generators is stale")
 START = (_gm("START_X"), _gm("START_Y"))
 MONSTART = _gm("MONSTART")      # where the map puts the monster; MONCELL
                                 # is the byte that MOVES, so a test that
@@ -286,7 +302,8 @@ def syms():
 
 
 class Game:
-    def __init__(self):
+    def __init__(self, level=0):
+        self.level = level              # the map every teleport restores
         self.s = syms()
         self.c = CPC()
         self.c.insert_disc(DSK)
@@ -306,7 +323,19 @@ class Game:
         old one, and a write between the two sends the flood past the
         seven cells it is bounded by and over its 128-entry stack.  A
         player never teleports, so it is the harness's problem; the six
-        bytes at #39C0 reset SP and re-enter main_loop."""
+        bytes at #39C0 reset SP and re-enter main_loop.
+
+        IT ALSO PUTS THE LEVEL BACK, and that is not a nicety.  A
+        teleport onto the exit cell WINS: player_won advances cur_level
+        and the next life loads the next map -- so section 5, which
+        walks into every wall in the maze from its neighbour, can swap
+        the map out from under sections 6 to 11, and every one of them
+        goes on passing against a map nobody asked for.  Nothing said
+        so; the first sign was a death restart landing the player at
+        (12,2), which is level 1's start.  So the level is checked on
+        every teleport and rebuilt when it has moved."""
+        if self.c.peek(self.s["CUR_LEVEL"]) != self.level:
+            self.relevel()
         self.c.write_ram(self.s["PLR_X"], struct.pack("<H", x))
         self.c.write_ram(self.s["PLR_Y"], struct.pack("<H", y))
         self.c.poke(self.s["PLR_A"], a)
@@ -314,6 +343,23 @@ class Game:
                          + struct.pack("<H", self.s["MAIN_LOOP"]))
         self.c.set_pc(STUB)
         self.c.run_frames(settle)
+
+    def relevel(self):
+        """Put self.level back: new_game's four world calls, no screens.
+
+        new_game itself cannot be re-entered from here -- it calls
+        nl_call, which paints the title and waits for SPACE.  These four
+        are the rest of it, and the HUD furniture they skip is the same
+        whichever level is loaded."""
+        b = bytearray([0xF3, 0x31, 0xF0, 0x3F, 0x3E, self.level])
+        for name in ("LEVEL_LOAD", "MARCH_INIT", "FRAME_INIT", "GAME_INIT"):
+            a = self.s[name]
+            b += bytes([0xCD, a & 255, a >> 8])
+        a = self.s["MAIN_LOOP"]
+        b += bytes([0xC3, a & 255, a >> 8])
+        self.c.write_ram(STUB, bytes(b))
+        self.c.set_pc(STUB)
+        self.c.run_frames(25)
 
     def hold(self, key, frames):
         self.c.key_down(key)
@@ -633,12 +679,12 @@ def main():
     print("\n7  SHOOTING AND PICKUPS (Z fires; CTRL does too, but the "
           "emulator\n       cannot press a modifier -- see game.asm's "
           "fire_edge)")
-    tab = c.read_ram(g.s["AMMOTAB"], NAMMO)
+    tab = bytes(AMMOCELLS)
     amx = g.s["PLR_AMMO"]
-    # The map's list, as cells.  Read off the RUNNING MACHINE rather than
-    # imported from world.py, so a table the build failed to emit shows up
-    # here as a wrong cell and not as a Python constant agreeing with
-    # itself.
+    # The map's list, as cells -- level 0's record out of build/AUX.BIN,
+    # the file the disc carries, so a generator that failed to emit the
+    # cells shows up here as a wrong cell and not as a Python constant
+    # agreeing with itself.  See AMMOCELLS at the top.
     cells = [(b & 15, b >> 4) for b in tab]
     def shoot():
         """One press edge, guaranteed.
@@ -734,7 +780,7 @@ def main():
     # be collected, so by here the map is stripped -- and a scanner test
     # run against an empty map is not a test: every case would compare
     # #FF against #FF and pass.  Put the map's own table back, which is
-    # exactly what game.asm's ammo_arm does.
+    # exactly what game.asm's level_load does when a life starts.
     c.write_ram(g.s["AMMO_ST"], tab)
     g.place(START[0] * 256 + 128, START[1] * 256 + 128, 0)
     live = [cell for cell, b in
@@ -947,10 +993,23 @@ def main():
     #      death screen is menu.asm waiting for SPACE, so no game frame
     #      completes at all while it is up.
     f0 = g.frames()
+    lvl0 = c.peek(g.s["CUR_LEVEL"])
     c.run_frames(4 * PACE_N)
     check(g.frames() == f0, "at zero hit points the frame loop stops",
           f"{(g.frames() - f0) & 0xFFFF} game frames in {4*PACE_N} CPC "
-          f"frames -- the death screen is up")
+          f"frames")
+    # WHICH SCREEN, AND WHICH LEVEL.  "The frame loop stopped" is true of
+    # the win screen too, so the check above cannot tell a death from a
+    # win -- and it did not, for as long as player_won sat between the
+    # plr_hp test and player_died: every death advanced the level and
+    # painted MENU_WIN, and this section passed. nl_screen names the
+    # screen and cur_level says the level did not move.
+    scr = struct.unpack("<H", c.read_ram(g.s["NL_SCREEN"], 2))[0]
+    check(scr == g.s["MENU_DEAD"] and c.peek(g.s["CUR_LEVEL"]) == lvl0,
+          "...on the DEATH screen, and the level does NOT advance",
+          f"nl_screen #{scr:04X} (menu_dead #{g.s['MENU_DEAD']:04X}, "
+          f"menu_win #{g.s['MENU_WIN']:04X}), "
+          f"cur_level {lvl0} -> {c.peek(g.s['CUR_LEVEL'])}")
 
     # ---- (c) ...AND SPACE STARTS A NEW LIFE, world and all.  MENUBUF is
     #      SOLID, so painting that screen destroyed the map: if the map
@@ -967,9 +1026,15 @@ def main():
           "SPACE re-arms the player AND puts the monster back",
           f"plr_hp {c.peek(php)}, plr_ammo {c.peek(g.s['PLR_AMMO'])}, "
           f"MONCELL {c.peek(mc)}, mon_hp {c.peek(mhp)}")
-    check((x >> 8, y >> 8) == START and solid_now[(y >> 8) * 16 + (x >> 8)] == 0,
+    # WHICH START, and it is not START any more.  A death restarts the
+    # level you died on, so the cell to expect is that level's -- and
+    # cur_level is printed either way, because a restart that came back
+    # on the WRONG level is the failure this check exists to catch.
+    lvl = c.peek(g.s["CUR_LEVEL"])
+    want = genaux.read_level(lvl)["start"]
+    check((x >> 8, y >> 8) == want and solid_now[(y >> 8) * 16 + (x >> 8)] == 0,
           "...and REBUILDS THE MAP the death screen wrote over",
-          f"player at ({x>>8},{y>>8}), START {START}, "
+          f"level {lvl}: player at ({x>>8},{y>>8}), its start {want}, "
           f"SOLID there = {solid_now[(y>>8)*16+(x>>8)]}")
     f0 = g.frames()
     c.run_frames(4 * PACE_N)
@@ -1031,7 +1096,7 @@ def main():
           "killing the monster scores one",
           f"scr_g {base} -> {g3.c.peek(scr)}")
 
-    tab = g3.c.read_ram(g3.s["AMMOTAB"], NAMMO)
+    tab = bytes(AMMOCELLS)
     for b in tab:                       # ...and every pickup scores one
         g3.place((b & 15) * 256 + 128, (b >> 4) * 256 + 128, 0)
         for _ in range(3):              # let ammo_scan see the cell
@@ -1099,6 +1164,69 @@ def main():
     check(g3.c.peek(scr) == MN_G0 and g3.frames() != f0,
           "SPACE resets the score and the world runs again",
           f"scr_g {g3.c.peek(scr)}, "
+          f"{(g3.frames() - f0) & 0xFFFF} game frames")
+
+    # ---- (d) ...ON THE NEXT LEVEL.  The whole point of the exit: the
+    #      life that follows a win is a DIFFERENT map, and the proof is
+    #      the map itself and not just the counter.  Every one of the
+    #      four is read off the running machine and compared with that
+    #      level's record in build/AUX.BIN.
+    nlv = genaux.nlevel()
+    lvl = g3.c.peek(g3.s["CUR_LEVEL"])
+    rec = genaux.read_level(lvl)
+    x, y, a = g3.player()
+    solid = g3.c.read_ram(SOLID, 256)
+    # THE MONSTER IS CHECKED ALIVE AND NOT IN PLACE: sixteen game frames
+    # have run by the time this reads it and mon_move has walked it off
+    # its start cell.  Where it started is level_load's job and section
+    # 11 already reads it one frame in; what matters here is that the
+    # new level HAS one and it has its hit points.
+    check(lvl == 1 and (x >> 8, y >> 8) == rec["start"]
+          and a == rec["heading"]
+          and g3.c.peek(g3.s["LV_EXIT"]) == rec["exit"]
+          and g3.c.peek(addrs.MONTAB) != 0xFF
+          and g3.c.peek(addrs.MONTAB + 1) == MON_HPMAX,
+          "the exit ADVANCED the level, map and all",
+          f"cur_level 0 -> {lvl} of {nlv}: player ({x>>8},{y>>8}) = its "
+          f"start {rec['start']}, heading {a} = {rec['heading']}, "
+          f"lv_exit {g3.c.peek(g3.s['LV_EXIT'])} = {rec['exit']}, "
+          f"monster at {g3.c.peek(addrs.MONTAB)} (started {rec['mon']}) "
+          f"with {g3.c.peek(addrs.MONTAB + 1)} of {MON_HPMAX} hp")
+    check(sum(1 for v in solid if v == 2) > 0 and solid[rec["exit"]] == 0,
+          "...and the NEW map is the one in SOLID",
+          f"{sum(1 for v in solid if v == 1)} walls, "
+          f"{sum(1 for v in solid if v == 2)} doors, "
+          f"its exit cell {rec['exit']} is open")
+
+    # ---- (e) ...AND THE LAST LEVEL WRAPS.  `cp NLEVEL / jr nc,pw_last`
+    #      is one branch and it had never been taken by anything: the
+    #      advance above only ever exercises the OTHER side of it.  Walk
+    #      out of level 1 as well and the game must come back to level 0
+    #      with level 0's map, not to level 2, which does not exist and
+    #      whose record would be read off the end of AUX.BIN.
+    g3.level = lvl                      # or place() would undo the win
+    ex1, ey1 = rec["exit"] & 15, rec["exit"] >> 4
+    g3.place((ex1 - 1) * 256 + 128, ey1 * 256 + 128, 0)
+    g3.c.key_down(cpcmod.KEY_UP)
+    g3.c.run_frames(40 * PACE_N)
+    g3.c.key_up(cpcmod.KEY_UP)
+    g3.c.run_frames(2 * PACE_N)
+    g3.c.key_down(cpcmod.KEY_SPACE)
+    g3.c.run_frames(PACE_N + 5)
+    g3.c.key_up(cpcmod.KEY_SPACE)
+    g3.c.run_frames(12 * PACE_N)
+    back = g3.c.peek(g3.s["CUR_LEVEL"])
+    rec0 = genaux.read_level(0)
+    x, y, a = g3.player()
+    f0 = g3.frames()
+    g3.c.run_frames(4 * PACE_N)
+    check(back == 0 and (x >> 8, y >> 8) == rec0["start"]
+          and g3.c.peek(g3.s["LV_EXIT"]) == rec0["exit"]
+          and g3.frames() != f0,
+          "walking out of the LAST level wraps to level 0, map and all",
+          f"cur_level {lvl} -> {back} of {nlv}: player ({x>>8},{y>>8}) = "
+          f"level 0's start {rec0['start']}, lv_exit "
+          f"{g3.c.peek(g3.s['LV_EXIT'])} = {rec0['exit']}, "
           f"{(g3.frames() - f0) & 0xFFFF} game frames")
     del g3
 

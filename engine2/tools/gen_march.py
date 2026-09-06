@@ -157,8 +157,9 @@ def emit_monster(f, cells):
     else:
         f.write("MONSTART    equ %d   ; %d,%d -- the first of them\n"
                 % (cells[0][1] * 16 + cells[0][0], cells[0][0], cells[0][1]))
-        f.write("MONSTARTS               ; y*16+x, one a room\n")
-        f.write("    db " + ",".join("%d" % (y * 16 + x) for x, y in cells)
+        f.write("; MONSTARTS is per LEVEL now -- see gen_aux.inc and\n")
+        f.write("; engine2/tools/genaux.py.  The cells, for reading:\n")
+        f.write(";   " + ",".join("%d" % (y * 16 + x) for x, y in cells)
                 + "   ; " + " ".join("%d,%d" % c for c in cells) + "\n")
     f.write("MONCELL     db  MONSTART   ; the one being worked on now\n")
 
@@ -171,9 +172,9 @@ def emit_ammo(f, cells):
     directly and never has to unpack a coordinate pair.
     """
     f.write("\nNAMMO   equ %d\n" % len(cells))
-    f.write("AMMOTAB\n")
+    f.write("; AMMOTAB is per LEVEL now -- see gen_aux.inc.  The cells:\n")
     if cells:
-        f.write("    db " + ",".join("%d" % (y * 16 + x) for x, y in cells)
+        f.write(";   " + ",".join("%d" % (y * 16 + x) for x, y in cells)
                 + "   ; " + " ".join("%d,%d" % c for c in cells) + "\n")
 
 

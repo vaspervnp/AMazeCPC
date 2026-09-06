@@ -160,22 +160,23 @@ first; every number here is written down next to the code it constrains.
 |---|---|
 | `VPCOL` (`engine2/src/vpcfg.inc`) | **1** — the column renderer ships |
 | `PACE_FRAMES` (`engine2/src/main3.asm`) | **10** — 199.7 ms, 5.01 fps |
-| the map (`tools/world.py`) | **nine 4x4 rooms** in a 3x3 grid, 144 floor cells |
+| the maps (`tools/world.py`) | **two**, each **nine 4x4 rooms** in a 3x3 grid, 144 floor cells; they differ only in where the twelve doors, the start and the exit are |
 | `make amaze` | OK, disc fresh (`md5` of `engine2/build/TEX.BIN` == `build/e3/TEX.BIN`) |
 | `emu_rcol.py verify` | **166/166 screens byte-exact** against `colmodel.py`, 24 of them a door IN MOTION |
 | `emu_rcol.py atomic` | **PASS** at rest AND with a moving face at every lift (`atomic n <dlift> 1`) |
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
-| `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
-| `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 over budget, worst 177032 |
-| `pacescan.py` (doors OPEN) | 18,344 of 8,792,064 = **0.209%**, worst frame 192002 of 194560 (`C_CFRAME` 450 → 600) |
-| `pacescan.py` (ONE door moving) | 1,243,133 of 8,128,512 = **15.29%** — honest charge, `rc_mul8` unrolled |
+| the levels (`tools/world.py`) | **2**, 128-byte records in RAM bank 6; the exit advances, the last wraps; a death does NOT advance |
+| `roomcost.py` | **FITS, both levels** — bucket k max **5 of 7** pages, flood depth **8 of 25** entries, over all 8,128,512 states each |
+| `pacescan.py` (doors shut) | **PASS, both levels** — 0 of 8,128,512 over budget, worst 177032. The two are **one measurement**: see below |
+| `pacescan.py` (doors OPEN) | lv0 18,344 of 8,792,064 = **0.209%** (worst 197952); lv1 32,312 = **0.367%** (worst 214412) |
+| `pacescan.py` (ONE door moving) | lv0 1,243,133 of 8,128,512 = **15.29%**; lv1 1,195,797 = **14.71%** — honest charge, `rc_mul8` unrolled |
 | the disc, while a door runs | **[13, 12, 12, 11, 11, 10, 10]** vsyncs against 10 |
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
-| `monmodel.py` | **PASS** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs |
+| `monmodel.py` | **PASS, both levels** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs each, and it RETURNS a verdict now instead of printing one for a human to read. Level 1's **own starting pair never arrives**, though: see *Also open* |
 | the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |
 | the minimap | the flood's cells, one byte each, drawn ONCE when discovered; `C_MMSEEN` 1350 against 899.1 + 255.1 measured |
 | monsters (`NMON`, `tools/world.py`) | **1**, at (2,7) — out of the room you start in. Two cost 81 states of 8128512 |
-| the code segment | `game_end` **56 bytes** under `BUCK0` #3100; RAM bank 6 has 15,833 free |
+| the code segment | `game_end` is **#3100 = `BUCK0` exactly — 0 bytes free**; `level_load` spent the last 56. RAM bank 6 has 15,641 free, so the next thing to add goes THERE or something comes out of here first |
 | `emu_verify3.py` | **ALL CHECKS PASS**, period `[10]` on all six named views |
 | `emu_pace.py 600` | **MIXED, and unresolved.** Every frame buckets to 10 vsyncs, but `ctr` spreads 198.8–200.5 ms against a 1.0 ms tolerance. `r12` — the CRTC flip register, i.e. what is on screen — reads a tight [199.5, 199.8] on every flagged state, and `pace_drain` waits for vsync before it returns, so the PERIOD is an exact multiple. The tolerance was derived from sampling error alone and the vsync pulse is ~16 scanlines wide. Not widened to make it pass |
 | `emu_atomic.py` | **DOES NOT ASSEMBLE** — `tst_rast.asm` wants `RASTER_QUAD`, `RASTER_FRAME`, `RC_BUF`, `RC_EBUF`. The rasteriser's per-chunk atomic units are UNCHECKED, and were before any of this |
@@ -453,6 +454,45 @@ of 4224 bytes — but background in column order costs 5.125 µs/byte against
 
 ## Also open
 
+**FINISHING A LEVEL AND FINISHING THE GAME LOOK IDENTICAL.** `player_won`
+paints `menu_win` whether it advanced to level 1 or wrapped back to level
+0, so the player is told "you won" halfway through and told exactly the
+same thing at the end. `menu.asm`'s word lists make a second screen
+cheap in *data*, but the code segment is at **`game_end` = `BUCK0`, zero
+bytes free**, so the `cp NLEVEL` branch that already exists in
+`player_won` cannot currently be given a second `ld hl,` to choose
+between — something has to come out first, or the word list has to move
+into RAM bank 6 the way `HUDRECTS` did.
+
+
+**LEVEL 1 OPENS WITH THE MONSTER OUT OF REACH, and that is a design
+choice nobody made on purpose.** `monmodel.py` reports the map's own
+starting pair per level: level 0 is *monster (2,7), player (3,12) → 5
+steps* with the doors shut, so the thing is on you inside six seconds.
+Level 1 is *monster (7,7), player (12,2) → **NEVER ARRIVES***: they are
+in different components until the player opens a door, so the second
+level starts silent and the monster wakes up only once you begin
+crossing the map. Both maps still reach the player on **2160/2160**
+doors-shut pairs that a walk could join — the difference is only where
+the two of them are *put*. Decide whether that is the second level's
+character or an accident of where the '@' and the monster's room landed;
+moving either is a one-character edit in `tools/world.py`.
+
+
+**`roomcost.py` sizes the flood with the doors SHUT.** It calls
+`pacescan.positions()` with the default configuration, so "bucket k <= 7,
+flood depth <= 8 over all 8,128,512 states" is a claim about the map as
+it *loads*. An opened door is transparent to the march — that is the
+whole reason `pacescan` grew its door configurations, and it moved the
+worst frame from 4.07% of states in bucket 7 to 44.25%. The same flood
+sizes the **buckets and the flood stack**, and overrunning those is not
+a dropped frame, it is faces dropped and a stack writing into the
+buckets. Sweeping `roomcost` over `CONFIGS` the way `pacescan` does is
+five times the runtime and has not been done. It now prints FITS /
+OVERRUNS against `MSTKBOT`/`MSTKTOP` read out of `march.asm`, and runs
+every level, so the gap is the door configurations and nothing else.
+
+
 **Big rooms.** `R_MAX = 6` (L1 cells, `marchmodel.py`) bounds the sight
 line; a wall further away is never marched and never drawn, so a big hall
 reads as an open field with a sliver of wall on the horizon. Raising
@@ -473,6 +513,52 @@ the same 16K bank; bank 6 is entirely unused.
 ---
 
 ## Traps — do not rediscover these
+
+**TWO GREEN SWEEPS OF TWO MAPS CAN BE ONE MEASUREMENT.** A shut door is
+opaque, exactly like a wall. Levels 0 and 1 put their twelve doors in
+*different places within the same wall ring*, so with every door shut
+they present the march with a **byte-identical opaque set** — and every
+number the ALL SHUT sweep produces is identical too: 0 of 8,128,512,
+worst frame 177032, the same `roomcost` histogram to the last decimal.
+The identical histograms are what gave it away; two independent maps do
+not agree to four significant figures. It is still worth running (it
+proves the record on the disc really is that map) but it is **not
+independent evidence**, and the configurations that actually separate
+the two are the door ones: doors open reads 0.209% on level 0 and
+**0.367%** on level 1. `pacescan.py` prints which levels collapse into
+one before it sweeps them. Same family as *score a rule on states the
+rule can reach* — here it is the input space, not the denominator, that
+was quietly the same one twice.
+
+**A LABEL INSERTED BETWEEN A TEST AND ITS FALL-THROUGH IS A REWRITTEN
+BRANCH.** `main_loop` ends `ld a,(plr_hp) / or a / jp nz,main_loop` and
+then *falls through* to `player_died`. `player_won` was added directly
+underneath — so every death advanced the level and painted the WIN
+screen. Nothing failed: both screens stop the frame loop, both restart
+the world, and `emu_verify3`'s death test only asked whether the loop had
+stopped. The tell was a restart landing the player at **(12,2)**, which
+is level 1's start. The check now reads `nl_screen` and `cur_level`.
+When a routine is reached by falling off the end of the one above it,
+inserting anything between them changes what runs — and no assembler
+will say so.
+
+**A `call` WHERE A `jp` USED TO BE, WITH NO `ret` AFTER IT.** `game_init`
+ended `call ammo_arm` and nothing else, so it fell into `level_load` with
+`A = AMMO_NODIR`: a level index of 255 put `lv_rec` 32K past the records,
+the garbage it read as `nmon` ran `ll_mon` 256 times, and 512 bytes went
+over `STACKTOP`. The machine did not hang — it wandered, `frame_ctr`
+stayed 0, and a PC histogram put **36% of samples inside a 7-byte loop**,
+which is what pointed at it. A tail `jp` is the fix and it is a byte
+cheaper.
+
+**A HARNESS THAT CAN WIN THE LEVEL CHANGES ITS OWN SUBJECT.**
+`emu_verify3`'s section 5 walks into every wall in the maze from its
+neighbour; one of those teleports lands on the exit cell, `player_won`
+advances `cur_level`, and sections 6–11 then test **level 1** while
+claiming to test level 0. Every one of them still passed. `place()`
+checks `cur_level` on every teleport now and calls `relevel()` when it
+has moved. Same family as *a check that skips its worst input*: the test
+kept reporting, on something nobody chose.
 
 **A MEASUREMENT THAT CANNOT RESOLVE ITS QUANTITY REPORTS CONFIDENT
 NONSENSE.** `bench()`'s whole-iteration quantisation was ±3500 µs on
@@ -610,7 +696,8 @@ python3 engine2/tools/emu_rcol.py atomic 8    # every INTERVAL vs its charge
 python3 engine2/tools/emu_rcol.py fit 14      # re-fit costcol.inc, MEASURED
 python3 engine2/tools/emu_march.py            # the march vs marchmodel.py
 python3 engine2/tools/roomcost.py             # what the MAP costs the march
-python3 engine2/tools/pacescan.py             # all reachable states, offline
+python3 engine2/tools/pacescan.py             # all states, offline, EVERY LEVEL
+python3 engine2/tools/pacescan.py lv1         # ...or just the one
 python3 engine2/tools/emu_holes.py 60         # the constants ARE upper bounds
 python3 engine2/tools/monmodel.py             # the monster's pursuit rule
 python3 engine2/tools/emu_verify3.py          # the disc: mode, doors, MONSTER, PERIOD

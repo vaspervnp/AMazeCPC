@@ -326,7 +326,9 @@ def main(nstates=40, pick="random"):
         # has the map as it loads.  And the fallback SAYS SO now: a
         # branch that quietly does less work is how this survived a
         # rename in the first place.
-        top = os.path.join(SCRATCH, "pacescan_top_shut.json")
+        # ...AND LEVEL 0, because that is the map the disc boots on.
+        # pacescan writes one file per level now; see emu_pace3.py.
+        top = os.path.join(SCRATCH, "pacescan_top_shut_lv0.json")
         if not os.path.exists(top):
             print(f"    !! {os.path.basename(top)} is not there -- these "
                   f"are NOT the exhaustive worst states.\n"

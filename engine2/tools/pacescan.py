@@ -34,7 +34,11 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _HERE)
+sys.path.insert(0, os.path.join(_ROOT, "tools"))
+
+import world                                                  # noqa: E402
 
 PRAD = 64                       # game.asm's collision half-width, 8.8
 NTOP = 40                       # worst-charged states kept, for benching
@@ -120,7 +124,11 @@ def positions(doors=0):
     """doors: 0 leaves them shut, None opens them, DOORMOV puts them
     part way -- which is the HEAVIEST of the three, because the flood
     goes through the doorway AND the door itself is still filed as a
-    face.  Neither of the other two sweeps covers that."""
+    face.  Neither of the other two sweeps covers that.
+
+    WHICH MAP is world's currently selected level -- see select_level().
+    In a worker that is whatever _init put there, and it has to be put
+    there explicitly: see the forkserver note in _init."""
     import emu_frame as ef
     import emu_pace as ep
     _grid, solid = ef.load()
@@ -153,9 +161,15 @@ def positions(doors=0):
 _W = {}
 
 
-def _init(ovr=None, doors=0):
+def _init(ovr=None, doors=0, level=0):
     import pacemodel as pm
     import rastermodel as rm
+    # THE LEVEL TRAVELS IN initargs FOR THE SAME REASON THE OVERRIDES DO.
+    # There is more than one map now, and select_level() rebinds module
+    # globals in world -- which a forkserver worker does not inherit.  A
+    # parent that selected level 1 and workers that did not would sweep
+    # level 0 and print level 1's name over it.
+    world.select_level(level)
     solid, _pos = positions(doors)
     # THE ONLY WAY THIS MODEL'S CONSTANTS EVER DIFFER FROM THE DISC'S.
     # pacemodel reads every C_* out of main3.asm on import; `sweep` below
@@ -329,24 +343,78 @@ def sweep(jobs=None):
     return 0 if best else 1
 
 
-def main(jobs=None):
+def main(jobs=None, level=0):
     """Sweep BOTH door configurations and fail if either misses.
 
     A door the player has opened is transparent to the march, so the
     flood pours through the doorway and the frame grows -- see
     open_doors().  Sweeping only the map's own SOLID, in which every
     door is shut, replays the LIGHT half of the game.
+
+    ONE LEVEL, NAMED.  There is more than one map in RAM bank 6 now and
+    the accumulator has to hold on every one of them, so the level is an
+    argument and it is printed with the result -- `pacescan.py lv1`.
+    all_levels() below is the whole answer.
     """
+    world.select_level(level)
     rc = 0
     for code, label in CONFIGS:
         print("\n" + "=" * 68)
-        print("DOORS " + label)
+        print(f"LEVEL {level}  DOORS " + label)
         print("=" * 68)
-        rc |= _main_one(jobs, code)
+        rc |= _main_one(jobs, code, level)
     return rc
 
 
-def _main_one(jobs=None, doors=0):
+def all_levels(jobs=None):
+    """Every level in gen_aux.inc, and fail if ANY of them misses."""
+    import genaux
+    n = genaux.nlevel()
+    _say_which_levels_differ(n)
+    rc = 0
+    for lv in range(n):
+        rc |= main(jobs, lv)
+    print("\n" + "=" * 68)
+    print(f"ALL {n} LEVELS: " + ("PASS" if not rc else "ONE OR MORE FAILED"))
+    print("=" * 68)
+    return rc
+
+
+def _say_which_levels_differ(n):
+    """WHICH OF THESE SWEEPS IS ACTUALLY A SECOND MEASUREMENT.
+
+    A shut door is opaque, exactly like a wall, so two maps whose doors
+    sit in different places within the SAME wall ring present the march
+    with the same opaque set -- and the ALL SHUT sweep of the second one
+    is the first one's arithmetic run again.  It is worth running (it
+    proves the record on the disc really is that map) but it is not
+    independent evidence, and a table that lists two green 0-of-8128512
+    lines without saying so flatters itself.  The door configurations
+    below are what tell the maps apart.
+    """
+    import genaux
+    opaque = []
+    for lv in range(n):
+        bits = []
+        for byte in genaux.read_level(lv)["maze"]:
+            for sh in (0, 2, 4, 6):
+                bits.append(1 if (byte >> sh) & 3 else 0)
+        opaque.append(bytes(bits))
+    same = [(i, j) for i in range(n) for j in range(i + 1, n)
+            if opaque[i] == opaque[j]]
+    if same:
+        print("NOTE: with every door SHUT these levels are the SAME map to "
+              "the march")
+        for i, j in same:
+            print(f"      level {i} and level {j} -- their doors sit in "
+                  "different places in the same wall ring, and a shut door "
+                  "is opaque")
+        print("      so their ALL SHUT sweeps are one measurement, not two."
+              "  The door\n      configurations below are what separate "
+              "them.")
+
+
+def _main_one(jobs=None, doors=0, level=0):
     import multiprocessing as mp
     import pacemodel as pm
     jobs = jobs or os.cpu_count()
@@ -367,7 +435,8 @@ def _main_one(jobs=None, doors=0):
              for i in range(0, len(pos), step)]
     hist = collections.Counter()
     over, tops = [], []
-    with mp.Pool(jobs, initializer=_init, initargs=(None, doors)) as p:
+    with mp.Pool(jobs, initializer=_init,
+                 initargs=(None, doors, level)) as p:
         for h, o, _w, t in p.imap_unordered(_chunk, tasks):
             hist.update(h)
             over += o
@@ -392,11 +461,12 @@ def _main_one(jobs=None, doors=0):
     import json
     json.dump([[c, px, py, a] for c, px, py, a in tops],
               open(os.path.join(os.path.dirname(_HERE), "build",
-                                "pacescan_top_%s.json"
-                                % {0: "shut", None: "open",
-                                   ONEMOV_SHUT: "onemov_shut",
-                                   ONEMOV_OPEN: "onemov_open",
-                                   DOORMOV: "moving"}[doors]), "w"))
+                                "pacescan_top_%s_lv%d.json"
+                                % ({0: "shut", None: "open",
+                                    ONEMOV_SHUT: "onemov_shut",
+                                    ONEMOV_OPEN: "onemov_open",
+                                    DOORMOV: "moving"}[doors], level)),
+              "w"))
     over.sort(reverse=True)
     print(f"\n{len(over)} states of {tot} would take "
           f"{pm.PACE_FRAMES+1} periods")
@@ -410,4 +480,7 @@ if __name__ == "__main__":
     _a = sys.argv[1:]
     _j = int([x for x in _a if x.isdigit()][0]) if any(
         x.isdigit() for x in _a) else None
-    raise SystemExit(sweep(_j) if "sweep" in _a else main(_j))
+    _lv = [int(x[2:]) for x in _a if x.startswith("lv") and x[2:].isdigit()]
+    if "sweep" in _a:
+        raise SystemExit(sweep(_j))
+    raise SystemExit(main(_j, _lv[0]) if _lv else all_levels(_j))

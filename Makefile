@@ -186,7 +186,12 @@ pace: amaze
 # WHAT EACH TOOL IN `pace` IS FOR.  These were the recipe until the loop
 # above replaced them; the reasoning is worth keeping, the duplication is
 # not, so they are comments now and the loop is the only thing that runs.
-# THE WHOLE STATE SPACE, not a sample.  pacescan.py replays the
+# EVERY LEVEL, THE WHOLE STATE SPACE, not a sample.  With no argument
+# pacescan.py now sweeps all NLEVEL maps in RAM bank 6 and fails if any
+# of them misses -- `pacescan.py lv1` does one.  A pacer that holds on
+# the map the disc boots on says nothing about the map the exit leads
+# to, and the second map is reached by playing, not by a harness.
+# pacescan.py replays the
 # accumulator's own rule for all 4055040 states a player can stand
 # in -- 56320 positions on the 24/256 movement lattice that pass
 # game.asm's collision box, times 72 headings -- and fails if ANY

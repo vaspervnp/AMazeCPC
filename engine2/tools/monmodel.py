@@ -75,19 +75,29 @@ def _equ(name, default, src="game.asm"):
     return default
 
 
-def load_solid():
-    """MAZEDATA out of gen_maze.inc -> the 256 bytes SOLID holds.
+# Levels whose doors-shut pursuit has pairs it never reaches -- filled by
+# main(), read by all_levels().  It is a list and not a bool because the
+# report has to say WHICH level and how many.
+bad = []
+
+
+def load_solid(level=0):
+    """A LEVEL's packed maze -> the 256 bytes SOLID holds, and its monster.
 
     Two bits a cell, low cell in the low bits -- maze_unpack's own
     packing, see march.asm.
+
+    IT READS THE LEVEL RECORD, not gen_maze.inc, because gen_maze.inc
+    describes level 0 and the monster has to be able to reach the player
+    on every map the exit leads to.  genaux asserts the two agree about
+    level 0, so nothing is lost by reading the one that knows them all.
     """
-    path = os.path.join(_E2, "src", "gen_maze.inc")
-    # ---- ONE PARSER, in genaux.py.  The bytes are in RAM bank 6 and
-    #      gen_maze.inc carries them as a comment; parsing that here as
-    #      well as there is two readings of one map.
+    # ---- ONE PARSER, in genaux.py.  The bytes are in RAM bank 6 and no
+    #      tool here can page it in; read_level() reads build/AUX.BIN.
     import genaux
-    mon = _equ("MONSTART", None, "gen_maze.inc")
-    packed = genaux.packed_maze()
+    rec = genaux.read_level(level)
+    mon = rec["mon"][0] if rec["mon"] else None
+    packed = list(rec["maze"])
     solid = []
     for b in packed:
         for sh in (0, 2, 4, 6):
@@ -170,9 +180,10 @@ def reachable(solid, start):
     return seen
 
 
-def main():
-    solid, mon0 = load_solid()
+def main(level=0):
+    solid, mon0 = load_solid(level)
     rate = _equ("MON_RATE", 8)
+    print(f"\n==== LEVEL {level} " + "=" * 52)
     frame_ms = 19.968 * _equ("PACE_FRAMES", 10, "main3.asm")
 
     for label, shut in (("DOORS SHUT -- the map as it loads", True),
@@ -220,17 +231,38 @@ def main():
             for m, p in stuck[:8]:
                 print(f"    monster ({m&15},{m>>4})  player ({p&15},{p>>4})")
 
-        # ---- AND THE ONE PAIR THE DISC ACTUALLY STARTS ON.
+        # ---- AND THE ONE PAIR THE LEVEL ACTUALLY STARTS ON.
+        import genaux
+        st = genaux.read_level(level)["start"]
         if mon0 is not None and s[mon0] == 0:
-            st = _equ("START_X", 3, "gen_maze.inc"), \
-                 _equ("START_Y", 12, "gen_maze.inc")
             p0 = st[1] * 16 + st[0]
             n = chase(s, mon0, p0)
             print(f"  the map's own pair: monster ({mon0&15},{mon0>>4}) "
                   f"player ({st[0]},{st[1]}) -> "
                   + (f"{n} steps" if n is not None else "NEVER ARRIVES"))
+        # ---- A VERDICT, NOT A READING.  This printed its percentages and
+        #      a human decided; that is fine for one map and no use once
+        #      a level is something a designer adds.  DOORS SHUT is the
+        #      one that has to be perfect -- it is the map as it loads,
+        #      and a monster that cannot reach the player through the
+        #      doors it is allowed to use is a level that does not work.
+        if shut and stuck:
+            bad.append((level, len(stuck), pairs))
     return 0
 
 
+def all_levels():
+    import genaux
+    rc = 0
+    for lv in range(genaux.nlevel()):
+        rc |= main(lv)
+    print("\nALL LEVELS: " + ("the pursuit reaches the player on every "
+                              "doors-shut pair" if not bad else
+                              "STUCK PAIRS: " + repr(bad)))
+    return 1 if bad else rc
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    _lv = [int(x[2:]) for x in sys.argv[1:]
+           if x.startswith("lv") and x[2:].isdigit()]
+    sys.exit(main(_lv[0]) if _lv else all_levels())

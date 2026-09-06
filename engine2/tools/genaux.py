@@ -43,8 +43,15 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(_ROOT, "tools"))
 
 import genhud                                                   # noqa: E402
+import world                                                    # noqa: E402
+import marchmodel                                               # noqa: E402
+import gen_march                                                # noqa: E402
 
 BANK_BASE = 0x4000
+LVREC = 128             # bytes a level; a power of two so the index
+                        # is a shift.  See build().
+MAXAMMO = 8             # cells a level's record has room for
+MAXMON = 4
 BANK_SIZE = 16384
 RAMCFG = 0xC6                   # OUT (&7Fxx),&C6 -> bank 6 over &4000
 
@@ -57,6 +64,11 @@ def packed_maze():
     them would put 64 bytes back in the code segment.  Three tools read
     them -- this one, monmodel.py and emu_room.py -- and three parsers
     of a commented-out table is three chances to disagree about the map.
+
+    IT IS LEVEL 0's MAP, and only that: gen_maze.inc describes one map.
+    build() packs every level straight out of world.py and then asserts
+    that level 0's record matches what this returns, so the two readings
+    cannot drift apart in silence.
     """
     src = open(os.path.join(_E2, "src", "gen_maze.inc")).read()
     body = src[src.index("; The bytes, for reading"):src.index("NAMMO")]
@@ -67,6 +79,14 @@ def packed_maze():
             out += [int(t.strip().lstrip("#"), 16) for t in m.group(1).split(",")]
     assert len(out) == 64, f"{len(out)} packed maze bytes, expected 64"
     return out
+
+
+def _maxdoors():
+    """MAXDOORS out of game.asm -- read, not copied, so it cannot drift."""
+    for ln in open(os.path.join(_E2, "src", "game.asm")):
+        if ln.startswith("MAXDOORS"):
+            return int(ln.split()[2])
+    raise KeyError("MAXDOORS not in game.asm")
 
 
 def build():
@@ -105,8 +125,77 @@ def build():
     #  of this file, exactly.  maze_unpack writes SOLID at #3A00, below
     #  the paging window, and reads nothing out of bank 4, so it can run
     #  with bank 6 in and put bank 4 back when it is done.
-    at["MAZEDATA"] = BANK_BASE + len(blob)
-    blob += bytes(packed_maze())
+    # ---- THE LEVELS ------------------------------------------------
+    #  One FIXED-SIZE record each, so main3.asm's level_load finds the
+    #  nth by a shift and not a multiply: LVREC is 128, and A*128 is
+    #  `ld h,a / ld l,0 / srl h / rr l`.
+    #
+    #  A LEVEL IS NOT JUST A GRID.  Where you start, which way you face,
+    #  where the pickups are, where the monsters stand and where the way
+    #  out is are all part of it, and all of it is checked against the
+    #  grid by tools/world.py before it gets here.
+    #
+    #      +0    64  the maze, two bits a cell
+    #      +64    3  start x, start y, start heading
+    #      +67    1  the exit cell, y*16+x, or #FF for none
+    #      +68    1  pickups, then MAXAMMO cells
+    #      +77    1  monsters, then MAXMON cells
+    at["LEVELS"] = BANK_BASE + len(blob)
+    at["NLEVEL"] = len(world.LEVELS)
+    for n in range(len(world.LEVELS)):
+        rec = bytearray(LVREC)
+        world.select_level(n)
+        grid, sx, sy = world.load_maze()
+        solid = marchmodel.solid_from_grid(grid)
+        for i in range(64):
+            b = 0
+            for k in range(4):
+                b |= solid[i * 4 + k] << (2 * k)
+            rec[i] = b
+        ex = world.exit_cell(grid, sx, sy)
+        rec[64], rec[65] = sx, sy
+        mo0 = world.monster_cells(grid, sx, sy)
+        rec[66] = gen_march.start_heading(sx, sy, mo0[0] if mo0 else None)
+        rec[67] = 0xFF if ex is None else ex[1] * 16 + ex[0]
+        am = world.ammo_cells(grid, sx, sy)
+        assert len(am) <= MAXAMMO, f"level {n}: {len(am)} pickups > {MAXAMMO}"
+        rec[68] = len(am)
+        for i, (x, y) in enumerate(am):
+            rec[69 + i] = y * 16 + x
+        # THE DOOR LIST IS A PER-LEVEL LIMIT TOO, and for the same
+        # reason: main3.asm asserts MAXDOORS >= NDOORS off gen_march's
+        # count of level 0's doors.  game_init registers doors until it
+        # has MAXDOORS of them and then SILENTLY SKIPS THE REST, so a
+        # map with more would ship with doors that never open.
+        ndoor = sum(1 for row in grid for c in row if c == world.DOOR)
+        assert ndoor <= _maxdoors(), (
+            f"level {n}: {ndoor} doors > MAXDOORS {_maxdoors()} -- "
+            "game_init would register the first few and drop the rest")
+        # THE SCORE IS ONE GLYPH, AND IT IS A PER-LEVEL LIMIT NOW.
+        # main3.asm asserts `NAMMO + 1 <= 9` off gen_maze.inc, which
+        # describes level 0 and nothing else -- so a second map with
+        # nine pickups would have rolled the score display past '9'
+        # with the build still green.  menu.asm draws scr_g as MN_G0 + n.
+        assert len(am) + 1 <= 9, (
+            f"level {n}: {len(am)} pickups + 1 monster is {len(am)+1} "
+            "points and the score is drawn as a single digit")
+        mo = mo0
+        assert len(mo) <= MAXMON, f"level {n}: {len(mo)} monsters > {MAXMON}"
+        rec[77] = len(mo)
+        for i, (x, y) in enumerate(mo):
+            rec[78 + i] = y * 16 + x
+        blob += bytes(rec)
+    world.select_level(0)
+    # ...AND THE TWO READINGS OF LEVEL 0 MUST AGREE.  packed_maze() parses
+    # the bytes gen_march.py commented into gen_maze.inc; the loop above
+    # packs them again out of world.py.  Both are still wanted -- three
+    # tools read the .inc -- but two readings of one map that nobody
+    # compares is how they drift, so compare them.
+    lv0 = blob[at["LEVELS"] - BANK_BASE:at["LEVELS"] - BANK_BASE + 64]
+    assert list(lv0) == packed_maze(), (
+        "level 0's packed maze differs between world.py and the bytes "
+        "gen_march.py wrote into gen_maze.inc -- one generator is stale")
+    at["MAZEDATA"] = at["LEVELS"]       # level 0's maze IS the first record
 
     assert len(blob) <= BANK_SIZE, (
         f"bank 6 overflows: {len(blob)} > {BANK_SIZE}")
@@ -126,9 +215,64 @@ AUXCFG      equ #{ramcfg:02X}              ; OUT (&7Fxx),this pages bank 6
 HUDRECTS    equ #{hudrects:04X}          ; {nrect} x (db x, y, w, h, byte)
 HUD_NRECT   equ {nrect}              ; ...and how many
 HUDNDL      equ #{hudndl:04X}          ; the needle: 19 headings x {ndot} x (dx, dy)
-MAZEDATA    equ #{maze:04X}          ; 16x16 cells, two bits each
+MAZEDATA    equ #{maze:04X}          ; level 0's maze -- the first record
+LEVELS      equ #{levels:04X}          ; {nlevel} x LVREC, see genaux.py
+NLEVEL      equ {nlevel}
+LVREC       equ {lvrec}             ; bytes a level, a power of two
+; LVO_, not LV_.  rasm's labels are CASE-INSENSITIVE, so an offset
+; called LV_EXIT and game.asm's byte called lv_exit are one symbol and
+; the build stops with "Alias cannot override existing label" -- which
+; is the good outcome; the same collision has been walked into with
+; mon_hp/MON_HP and plr_hp/PLR_HPMAX.
+LVO_START   equ 64              ; ...and the offsets inside one
+LVO_EXIT    equ 67
+LVO_NAMMO   equ 68
+LVO_NMON    equ 77
+MAXAMMO_LV  equ {maxammo}
+MAXMON_LV   equ {maxmon}
 AUXEND      equ #{auxend:04X}
 """
+
+
+# ---------------------------------------------------------------------
+#  READING A RECORD BACK, for the harnesses.
+#
+#  emu_verify3.py used to read the pickup cells out of the code segment
+#  at AMMOTAB, which level_load deleted: the cells are per-level now and
+#  they live in RAM bank 6, where nothing in this directory can page
+#  them in.  So the harness asks the generator, and the layout stays
+#  known in exactly one place -- the same rule packed_maze() follows.
+#
+#  It reads build/AUX.BIN and not world.py on purpose: what the game
+#  loaded is what is on the disc, so a generator that stopped matching
+#  its own output is a test failure and not an invisible agreement.
+# ---------------------------------------------------------------------
+def read_level(n, blob=None):
+    """-> dict(maze, start, heading, exit, ammo, mon) for level n."""
+    if blob is None:
+        blob = open(os.path.join(_E2, "build", "AUX.BIN"), "rb").read()
+    base = _levels_addr() - BANK_BASE + n * LVREC
+    r = blob[base:base + LVREC]
+    if len(r) != LVREC:
+        raise IndexError(f"level {n} is not in AUX.BIN ({len(blob)} bytes)")
+    return dict(maze=r[:64], start=(r[64], r[65]), heading=r[66],
+                exit=r[67], ammo=list(r[69:69 + r[68]]),
+                mon=list(r[78:78 + r[77]]))
+
+
+def _levels_addr():
+    """LEVELS out of the generated .inc -- the address the game uses."""
+    for ln in open(os.path.join(_E2, "src", "gen_aux.inc")):
+        if ln.startswith("LEVELS "):
+            return int(ln.split()[2].lstrip("#"), 16)
+    raise KeyError("LEVELS not in gen_aux.inc")
+
+
+def nlevel():
+    for ln in open(os.path.join(_E2, "src", "gen_aux.inc")):
+        if ln.startswith("NLEVEL "):
+            return int(ln.split()[2])
+    raise KeyError("NLEVEL not in gen_aux.inc")
 
 
 def main():
@@ -139,7 +283,8 @@ def main():
     open(os.path.join(_E2, "src", "gen_aux.inc"), "w").write(INC.format(
         ramcfg=RAMCFG, hudrects=at["HUDRECTS"], nrect=at["HUD_NRECT"],
         hudndl=at["HUDNDL"], ndot=at["HUD_NDOT"], maze=at["MAZEDATA"],
-        auxend=at["AUXEND"]))
+        levels=at["LEVELS"], nlevel=at["NLEVEL"], lvrec=LVREC,
+        maxammo=MAXAMMO, maxmon=MAXMON, auxend=at["AUXEND"]))
     print(f"bank 6: {len(blob)} of {BANK_SIZE} bytes, "
           f"{BANK_SIZE - len(blob)} free")
     print(f"  HUDRECTS  #{at['HUDRECTS']:04X}  {at['HUD_NRECT']} rectangles, "

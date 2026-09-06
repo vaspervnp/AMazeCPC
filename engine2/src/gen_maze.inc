@@ -17,13 +17,14 @@ NDOORS  equ 12
 ;   #01,#04,#10,#40,#55,#55,#55,#55   ; cells 224-255
 
 NAMMO   equ 6
-AMMOTAB
-    db 34,56,45,131,124,215   ; 2,2 8,3 13,2 3,8 12,7 7,13
+; AMMOTAB is per LEVEL now -- see gen_aux.inc.  The cells:
+;   34,56,45,131,124,215   ; 2,2 8,3 13,2 3,8 12,7 7,13
 
 NMON    equ 1   ; monsters the map puts out
 MONSTART    equ 114   ; 2,7 -- the first of them
-MONSTARTS               ; y*16+x, one a room
-    db 114   ; 2,7
+; MONSTARTS is per LEVEL now -- see gen_aux.inc and
+; engine2/tools/genaux.py.  The cells, for reading:
+;   114   ; 2,7
 MONCELL     db  MONSTART   ; the one being worked on now
 
 EXIT_CELL   equ 29   ; 13,1   ; walk onto this and the level ends

@@ -826,8 +826,10 @@ maze_unpack
     ifdef AUXBANK
     ld bc,#7F00+AUXCFG
     out (c),c
+    ld hl,(lv_rec)                  ; the level game.asm last selected
+    else
+    ld hl,MAZEDATA                  ; tst_kern.asm's own buffer
     endif
-    ld hl,MAZEDATA
     ld de,SOLID
     ld b,64
 mu_byte

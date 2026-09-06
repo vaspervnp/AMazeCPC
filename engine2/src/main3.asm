@@ -6,8 +6,14 @@
 ;  and driven by src/game.asm.
 ;
 ;  MEMORY MAP while playing (ROMs off, interrupts off, firmware gone)
-;    #0040-#2542  this program: top level + game + engine + HUD + gun
-;    #2543-#27FF  free.  `assert game_end <= BUCKETS` at the foot of this
+;    #0040-#30FF  this program: top level + game + engine + HUD + gun
+;                 -- and there is NOTHING left: game_end is #3100, which
+;                 is BUCK0, and `assert game_end <= BUCK0` passes with
+;                 zero bytes to spare.  level_load spent the last 56.
+;                 The next thing to add either lives in RAM bank 6 (see
+;                 genaux.py -- 15,641 bytes free there, for data the
+;                 frame path does not read) or displaces something.
+;                 `assert game_end <= BUCK0` at the foot of this
 ;                 file is the only thing standing between the next
 ;                 routine and the march's face buckets; if it fires,
 ;                 move BUCKETS and the four addresses under it up, or
@@ -31,20 +37,27 @@
 ;                 of these addresses and every one of them then read the
 ;                 page below -- see engine2/tools/addrs.py, which now
 ;                 parses them out of the source so that cannot recur.
-;    #2F00-#2FFF  BUCK0, a DELIBERATELY DEAD page -- see march.asm
-;    #3000-#36FF  march face buckets, one page per L1 distance 1..7
-;    #3700-#38FF  march flood stack (grows down from MSTKTOP #3900)
-;    #3900-#3BFF  FTAB / SOLID / MARK, one page each
-;    #3C00-#3DBF  QUADS, the geometry kernel's output.  NQUAD x 8 bytes,
-;                 and NQUAD is 56 for a MEASURED worst of nine -- it was
-;                 120, and the 512 bytes that came back are what this
-;                 code segment is now living on.  See memmap.inc.
+;    #3100-#31FF  BUCK0, a DELIBERATELY DEAD page -- see march.asm
+;    #3200-#38FF  march face buckets, one page per L1 distance 1..7
+;                 (roomcost.py MEASURES k max 5 of the 7, on every level)
+;    #3900-#39FF  march flood stack (grows down from MSTKTOP #3A00);
+;                 25 entries of 10, against a measured worst of 8
+;    #3A00-#3CFF  FTAB / SOLID / MARK, one page each
+;    #3D00-#3DBF  QUADS, the geometry kernel's output.  NQUAD x 8 bytes,
+;                 and NQUAD is 24 for a MEASURED worst of nine -- it was
+;                 120, and the bytes that came back are what this code
+;                 segment has been living on.  See memmap.inc.
 ;    #3DC0-#3DEF  DOORTAB: door_idx / door_st / door_tg, MAXDOORS each
 ;    #3DF0-#3DFF  pip.asm's scratch and as_l1's
 ;    #3E00-#3E9B  rastcol.asm's RC_COVER and RC_VARS
-;    #3E9C-#3FEF  free;  #3FF0 is the top of our stack.  engine2/tools/
+;    #3EC0-#3F0x  MMVARS: the minimap's bits and MONTAB -- see hud2.asm
+;    #3F0x-#3FEF  free;  #3FF0 is the top of our stack.  engine2/tools/
 ;                 emu_pacefit.py assembles its bench harnesses at #3F00
 ;    #4000-#7C48  RAM bank 4: the precalculated tables, permanently paged
+;                 -- EXCEPT for the few moments RAM bank 6 is swapped in
+;                 over it (HUDRECTS, the compass needle, and the level
+;                 records level_load reads).  Nothing on the frame path
+;                 may live in bank 6; see engine2/tools/genaux.py.
 ;    #8000-#BFFF  back buffer
 ;    #C000-#FFFF  front buffer
 ;
@@ -1386,10 +1399,15 @@ new_game
     ld   hl,SCR_FRONT               ; ...and then the title goes, so the
     call clear_16k                  ; HUD's furniture lands on black
 
-    call maze_unpack                ; the kernel's map lives at SOLID and
-                                    ; the doors move it about, so the
-                                    ; pristine copy stays in the code --
-                                    ; packed two bits a cell, see march.asm
+    ld   a,(cur_level)              ; ---- THE WHOLE OF A LIFE'S WORLD, out
+    call level_load                 ; of one level record in RAM bank 6:
+                                    ; the map, the start, the exit, the
+                                    ; pickups and the monsters.  The
+                                    ; kernel's map lives at SOLID and the
+                                    ; doors move it about, so the pristine
+                                    ; copy is the record -- packed two bits
+                                    ; a cell, see march.asm -- and a death
+                                    ; reloads the level it happened on.
 
     call march_init                 ; the one full MARK wipe: march_setup
                                     ; only sweeps four bytes a frame
@@ -1540,16 +1558,42 @@ main_loop
     or   a
     jp   nz,main_loop
 
+; DEATH IS THE FALL-THROUGH, AND IT HAS TO STAY THE FALL-THROUGH.  The
+; test above is `jp nz,main_loop` on plr_hp, so zero hit points arrive
+; here by running off the end of an instruction -- and player_won was
+; first put BETWEEN the two, which made every death advance the level
+; and paint the WIN screen.  Nothing caught it for a while: both screens
+; stop the frame loop and both restart the world, so the death test went
+; on passing; the tell was a restart landing the player at level 1's
+; start.  player_won goes AFTER this block, and the cost of the reorder
+; is nothing -- pw_screen's `jr pd_set` reaches backwards just as well.
+player_died
+    ld   hl,menu_dead               ; both screens destroy the map (see
+pd_set                              ; MENUBUF) and both therefore restart
+    ld   (nl_screen),hl             ; the world, which is what "the level
+    jp   new_game                   ; ends" means.  new_game resets SP,
+                                    ; repaints, and calls game_init ->
+                                    ; ammo_arm, where the player gets his
+                                    ; hit points back
+
+; THE EXIT ADVANCES THE LEVEL.  It used to be the end of the game because
+; there was one level; there are NLEVEL of them in RAM bank 6 now, and
+; the last one is still the end.  A death does NOT advance -- see above
+; -- so dying restarts the level you were on rather than the whole game.
 player_won
+    ld   a,(cur_level)
+    inc  a
+    cp   NLEVEL
+    jr   nc,pw_last
+    ld   (cur_level),a              ; on to the next one
+    jr   pw_screen
+pw_last
+    xor  a
+    ld   (cur_level),a              ; ...and back to the first for the
+pw_screen                           ; next game
     ld   hl,menu_win                ; the ONLY difference between winning
     jr   pd_set                     ; and dying is which word list gets
-player_died                         ; painted: both destroy the map (see
-    ld   hl,menu_dead               ; MENUBUF) and both therefore restart
-pd_set                              ; the world, which is what "the level
-    ld   (nl_screen),hl             ; ends" means when there is one level
-    jp   new_game                   ; which resets SP, repaints, and calls
-                                    ; game_init -> ammo_arm, where the
-                                    ; player gets his hit points back
+                                    ; painted
 
 ; --- CALL THE ROUTINE IN HL.  Three bytes, and the alternative is a
 ;     branch on a flag that means the same thing twice.
@@ -2303,7 +2347,13 @@ body_len    equ game_end-start
 ;  evaluates an assert where it stands, the same trap PLR_HPMAX's assert
 ;  documents at the foot of hud2.asm.
     assert C_PIPP >= 4700 + C_MMSEEN   ; pip_draw 4669.4 + the map
-    assert NAMMO + 1 <= 9           ; ...the +1 is the monster
+    assert NAMMO + 1 <= 9           ; ...the +1 is the monster.  This is
+                                    ; LEVEL 0 only -- gen_maze.inc knows
+                                    ; one map -- so genaux.py asserts the
+                                    ; same thing for every level record
+                                    ; it emits.  Without that a second
+                                    ; map with nine pickups would score
+                                    ; a letter with the build still green.
 
 ; THE MAP MUST FIT THE DOOR LIST.  game_init registers at most MAXDOORS
 ; doors and SILENTLY drops the rest, and a dropped door is shut for ever

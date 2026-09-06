@@ -70,7 +70,10 @@ def scan_worst(nkeep=40):
     d = os.path.join(os.path.dirname(_HERE), "build")
     out, seen = [], set()
     for tag in ("shut", "open", "moving"):
-        p = os.path.join(d, f"pacescan_top_{tag}.json")
+        # LEVEL 0, NAMED.  The disc boots on level 0, so those are the
+        # states this benches; pacescan writes one file per level and an
+        # unsuffixed name would silently read whichever it last wrote.
+        p = os.path.join(d, f"pacescan_top_{tag}_lv0.json")
         if not os.path.exists(p):
             continue
         for _c, px, py, a in json.load(open(p))[:nkeep]:
