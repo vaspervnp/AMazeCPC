@@ -9,7 +9,16 @@ interval, measured. The rooms are 4x4 and every door in the map opens.
 states over budget. Doors open is 0.209%.
 
 **And it is a game now**: a monster that hunts and hurts you, health, a
-death screen, an exit that ends the level and a score.
+death screen, an exit that ends the level, a score — and a **minimap**
+in the right-hand well showing the rooms as the flood reaches them, with
+the player's own cell marked.
+
+The monster and the pickup are **sprites** rather than solid blocks, and
+the monster count is a list (`tools/world.py`) rather than a constant.
+It is **one**, and the number was set by measurement: `mon_all` runs
+inside `game_step`, so each extra monster is ~500 µs of a frame tail
+that `C_TAIL` bounds, and two of them put 81 states of 8128512 over
+budget.
 
 **The door stutter is mostly fixed.** It was 12 vsyncs instead of 10 for
 the whole five-frame run, on 8 of 8 doors: `rc_charge` never read
@@ -124,12 +133,19 @@ never appeared on the title screen**. Found by checking the win screen's
 score digit against the font, byte for byte; fixed; the title now draws
 eight bands for eight rows.
 
-**The BODY is the binding constraint from here on** — `game_end` is 22
-bytes under `BUCK0` and RAM bank 5 has 51 free. The next feature has to
-pay for itself, and `rc_dlift`'s `align 256` in `rastcol.asm` still
-leaves 104 bytes of pure padding that a read-only table could move into
-for nothing — it was 173, and the lift arithmetic and the `rc_mul8`
-unroll have eaten 69 of them without moving `game_end` a byte.
+**The BODY WAS the binding constraint and is not any more.** It was 22
+bytes under `BUCK0`; RAM bank 6 took the HUD's furniture, the compass
+needle and the packed maze, `MENUBUF` moved to the back buffer, and the
+march's working RAM went up a page — `BUCK0` #3000 → #3100 and `NQUAD`
+56 → 24, which bought 251 bytes at a stroke. The minimap, the sprites
+and the monster wrapper have since spent most of them: **56 free**, with
+15,833 still empty in bank 6 for anything that is not read inside the
+frame.
+
+What binds now is the FRAME: about 2500 µs of spare packing capacity,
+measured, and the minimap and one monster have spent most of it. See
+plan.md, "The third bank" and "Two charges I shipped that did not bound
+their work".
 
 `plan.md` is the current document; this file is the renderer's own
 handoff and §1 below describes a blocker that is now closed. Read
@@ -150,15 +166,19 @@ first; every number here is written down next to the code it constrains.
 | `emu_rcol.py atomic` | **PASS** at rest AND with a moving face at every lift (`atomic n <dlift> 1`) |
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
 | `roomcost.py` | **PASS** — bucket k <= 7, flood depth <= 8, over all 8,128,512 states |
-| `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 over budget, worst 171082 |
+| `pacescan.py` (doors shut) | **PASS** — 0 of 8,128,512 over budget, worst 177032 |
 | `pacescan.py` (doors OPEN) | 18,344 of 8,792,064 = **0.209%**, worst frame 192002 of 194560 (`C_CFRAME` 450 → 600) |
 | `pacescan.py` (ONE door moving) | 1,243,133 of 8,128,512 = **15.29%** — honest charge, `rc_mul8` unrolled |
 | the disc, while a door runs | **[13, 12, 12, 11, 11, 10, 10]** vsyncs against 10 |
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
 | `monmodel.py` | **PASS** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs |
 | the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |
+| the minimap | the flood's cells, one byte each, drawn ONCE when discovered; `C_MMSEEN` 1350 against 899.1 + 255.1 measured |
+| monsters (`NMON`, `tools/world.py`) | **1**, at (2,7) — out of the room you start in. Two cost 81 states of 8128512 |
+| the code segment | `game_end` **56 bytes** under `BUCK0` #3100; RAM bank 6 has 15,833 free |
 | `emu_verify3.py` | **ALL CHECKS PASS**, period `[10]` on all six named views |
-| `emu_pace.py 600` | **LOCKED** — 4800 of 4800 frames at 10 vsyncs, 0 states dropped. Was reporting 47 bad since `6087ec8`: the harness, not the disc — see above |
+| `emu_pace.py 600` | **MIXED, and unresolved.** Every frame buckets to 10 vsyncs, but `ctr` spreads 198.8–200.5 ms against a 1.0 ms tolerance. `r12` — the CRTC flip register, i.e. what is on screen — reads a tight [199.5, 199.8] on every flagged state, and `pace_drain` waits for vsync before it returns, so the PERIOD is an exact multiple. The tolerance was derived from sampling error alone and the vsync pulse is ~16 scanlines wide. Not widened to make it pass |
+| `emu_atomic.py` | **DOES NOT ASSEMBLE** — `tst_rast.asm` wants `RASTER_QUAD`, `RASTER_FRAME`, `RC_BUF`, `RC_EBUF`. The rasteriser's per-chunk atomic units are UNCHECKED, and were before any of this |
 
 The span renderer is still the fallback and still locks: set
 `VPCOL equ 0` **and** `PACE_FRAMES equ 6` (an `assert` in `main3.asm`

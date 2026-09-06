@@ -21,8 +21,9 @@ So the budget is **194560 µs a frame**:
 |---|---:|---:|
 | `rastcol` — the textured column renderer | 126000–205000 | 65–75% |
 | `bg_fill` — ceiling and floor | 9320 | 4.8% |
-| the world overlay (pickup, monster, shot) | 8200 | 4.2% |
-| the tail carried into the next head (`C_TAIL`+`C_SND`+`C_DOORACT`) | 8100 | 4.2% |
+| the world overlay, on three hooks (`C_PIPP`+`C_PIPM`+`C_PIPF`) | 14150 | 7.3% |
+| the minimap (`C_MMSEEN`, inside `C_PIPP`) | 1350 | 0.7% |
+| the tail carried into the next head (`C_TAIL`+`C_SND`+`C_DOORACT`) | 8950 | 4.6% |
 | march + project | 16000–24000 | 8–12% |
 
 **Two numbers to keep in front of you:**
@@ -68,12 +69,20 @@ zero, is the headroom the monster's pursuit was then spent out of:
 **Doors open is 0.209%** — one frame in 480; it was 0.199% before
 `C_CFRAME` went 450 → 600 for the overlay pass, which is charged on every
 frame — and its worst frame, 192002, is *inside* the 194560 budget. So
-what remains is greedy-packing waste, not work that does not fit. `cost_unit` yields when the next unit
-does not fit and throws the rest of the interval away, so waste scales
-with the biggest units; after `C_BG` the biggest is `C_PIP` at 8200, one
-hook in front of all three of `pip.asm`'s drawers. Splitting it three
-ways is the same move `RQ_SPLIT` is in `raster.asm`, and like `RQ_SPLIT`
-it wants measuring before believing. Not done.
+what remains is greedy-packing waste, not work that does not fit.
+`cost_unit` yields when the next unit does not fit and throws the rest of
+the interval away, so waste scales with the biggest units; after `C_BG`
+the biggest was `C_PIP` at 8200, one hook in front of all three of
+`pip.asm`'s drawers.
+
+**It was split three ways and it did not help.** `C_PIPP` / `C_PIPM` /
+`C_PIPF` are separate hooks now — done for a different reason, that 8200
+was never a bound on all three drawing at once — and doors-open sat at
+0.209% before the split and 0.209% after it. So the biggest-unit theory
+of that 0.209% is **wrong, or at least not the whole of it**, and the
+file said "wants measuring before believing" for good reason. What the
+split DID buy is in the C_PIP section below: a bound where there was
+none.
 
 ### Doors in motion: the case that DOES occur
 
@@ -630,6 +639,108 @@ never saw this and why its results stand. Fixed by doing the same.
 
 ---
 
+## The third bank, and what it bought
+
+`assert game_end <= BUCK0` had fired fourteen times and left **22 bytes**.
+The 6128 has four 16K banks in its extra 64K and this build was using
+two — bank 4 for the precalculated tables, bank 5 for the wall textures,
+180 and 51 bytes free. **Bank 6 costs one `LOAD` in `amaze.bas` and is
+16384 bytes of nothing.**
+
+The rule for what may live there is in `engine2/tools/genaux.py` and it
+is a rule, not a list: read-only data that is **not** read inside the
+frame. Paging bank 6 in pages bank 4 *out*, and bank 4 holds `LINETAB`,
+`HTAB` and the palette. So far: the HUD's furniture (355 bytes), the
+compass needle (152, fetched eight bytes at a time), and the packed maze
+(64, read once by `maze_unpack`).
+
+### And then the menu stopped eating the world
+
+`MENUBUF` was `SOLID`. That one line cost more than it saved: painting a
+screen destroyed the map, so a death or a win could not resume;
+`emu_pace.py` measured a machine whose map was the menu's pen tables for
+a whole session before a bisect found it; and it pinned `SOLID` at
+`#3A00`, because `menu.asm` asserted 739 bytes between the map and the
+end of the quad list.
+
+The back buffer is free while a menu is up and is 16K. With `MENUBUF`
+there, the constraint disappears and the march's working RAM moves up a
+page:
+
+    BUCK0 #3000 → #3100,  NQUAD 56 → 24.   22 bytes free → 251.
+
+`NQUAD` 24 is 2.67× the largest quad list `project_all` can produce, and
+that is measured over **8.3 million states** across all three door
+configurations — worst 9 — where the 56 was justified by 8000 a
+configuration. Nothing clamps it at run time; the assert is the only
+guard and the margin is what makes it safe.
+
+## `hud_rect`'s real cost curve, and the sprites it paid for
+
+The monster and the pickup were one solid rectangle per column pair.
+They are lists of rectangles now — `engine2/tools/genspr.py` owns the
+pictures, `pip.asm`'s `spr_draw` walks them, and transparency is the
+absence of a record. The design turns on one measurement:
+
+| | | | |
+|---|---:|---|---:|
+| 2 bytes × 28 rows | 1850.7 µs | 10 bytes × 8 rows | 718.4 µs |
+| 2 bytes × 8 rows | 590.9 | 6 bytes × 8 rows | 655.5 |
+| 2 bytes × 1 row | 150.0 | 4 bytes × 8 rows | 622.8 |
+
+**87 µs a call, 63 µs a row, 0.5 µs a byte.** A row is nearly free to
+widen and expensive to repeat, so a picture drawn one pair at a time
+pays 63 µs a row for every column it is wide. One-pair records cost
+12902.7 µs for the three drawers at one cell; wide rectangles cost
+7182.3, which is less than the solid block they replaced.
+
+### `C_PIP` was never a bound
+
+8200 was fitted against "monster 1 cell away 7902.6" and "the pickup
+alone 2142.9" — two states, never the state that is **both**. Benched
+separately: `pip_draw` 4669.4, `mon_draw` 6736.7, `fx_draw` 802.7. The
+map puts an ammo cell at (1,12), which is where the monster started.
+Three hooks now, each bounded by its own measurement.
+
+## The map in the right-hand well
+
+Three empty bevelled slots became one, showing every cell the flood has
+reached, one byte a cell — not `hud_rect`, whose narrowest cell is two
+bytes because the fill is an unrolled `PUSH DE` run. The whole 16×16
+fits, so nothing scrolls, and `genhud.py`'s `map_slot()` asserts that.
+
+**It took three designs and the first two broke the invariant.**
+Rebuilding the picture from `MMBITS` every frame cost 9985 µs; a quarter
+a frame still cost 2533. `pacescan` went from 0 states over budget to
+**147159** — and reported the *same* 147159 when the charge was cut by
+7500 µs. An identical count under a very different magnitude is not a
+magnitude problem: `pacemodel` showed the whole distribution shifted up
+by exactly one wait. The frame's spare packing capacity is about
+**2500 µs**; +2500 leaves 0 states over and +3000 puts 1.67% over.
+
+A cell is discovered once. Draw it then, into both buffers, and never
+touch it again: **899.1 µs** with every cell new. `mm_plr` marks the
+player's own cell and undoes itself as he moves.
+
+## Two charges I shipped that did not bound their work
+
+Both were caught by tools, not by reading, and both are the same mistake:
+
+- **`C_TAIL`.** `mon_all` runs inside `game_step`, so four monsters put
+  the frame tail at 5091.9 µs against a charge of 4000. `emu_holes`
+  said `ONE-SIDED UPPER BOUND: False`; `emu_pace` saw the same defect as
+  a period jittering 198.0–201.2 ms. **The "0 of 8128512" reported for
+  that build was worthless** — `pacescan` replays the charges, so a sweep
+  against a charge that is 1092 µs under the truth is a sweep of a
+  machine nobody has.
+- **`C_MMSEEN`.** Fitted to 804.9 µs, which was never a worst case: the
+  bench loop sets `MMBITS` on its first pass and measures the steady
+  state for ever after. Zeroing `MMBITS` in the *prelude* reads 899.1,
+  and `mm_plr` adds 255.1 — against a charge of 900.
+
+The lesson both times: **a bench that leaves state behind measures the
+second call, not the first.** Put the reset in the prelude.
+
 ## What a complete game still needs
 
 Ordered by what unlocks the most, with the honest cost of each.
@@ -688,9 +799,12 @@ Ordered by what unlocks the most, with the honest cost of each.
   rows.
 
   Death shows `menu_dead` and restarts. `MENUBUF equ SOLID` forced that
-  and it turned out to be the right structure: painting either screen
-  writes 669 bytes over the map, so `new_game` rebuilds the world —
-  which is what starting a life needs anyway.
+  — painting either screen wrote 739 bytes over the map, so `new_game`
+  had to rebuild the world. **That is no longer true**: `MENUBUF` is the
+  back buffer, which is free while a menu is up and is 16K, so the menu
+  touches nothing. The restart stayed because starting a life wants
+  those calls anyway; it is a choice now rather than a constraint, and a
+  pause screen that resumes is no longer blocked by where a font lives.
 
 - **The opening was unsurvivable and the fix was one line of the map.**
   `game_init` set `plr_a = 0`, due east, with the monster two cells
@@ -700,13 +814,30 @@ Ordered by what unlocks the most, with the honest cost of each.
   seeing what killed you. `gen_march.py` now derives `START_A` from the
   start cell and the monster cell, so the map points you at it; from a
   cold boot, three rounds kill it before it touches you.
-- **More than one.** `mon_draw` handles a single monster from one cell
-  in `gen_maze.inc`. A list of four, like `AMMOTAB`, is the same shape —
-  but four monsters at 8200 µs of overlay is where the frame budget
-  says stop. **Budget first, then count.**
-- **And it is still one monster, so the game is one fight long.** Kill
-  it, take the six pickups, walk to the exit: that is the whole game,
-  and it is about ninety seconds. What it now has is a beginning, a
+- **More than one — built, budgeted, and the budget said one.**
+  `game.asm`'s `mon_all` swaps each monster through the single-monster
+  state the routines already use, `tools/world.py` holds the cell list
+  with a per-room assert, and `NMON` is whatever the list is long. So
+  the count is a one-line change and a re-fit of two constants.
+
+  "Budget first, then count" was right, and it was **not** the overlay
+  that decided it. `mon_all` also runs inside `game_step`, which
+  `C_TAIL` bounds, and that is where the monsters are expensive:
+
+  | monsters | frame tail | |
+  |---:|---:|---|
+  | 1 | 3977.8 µs | `C_TAIL` 4200, margin +222 |
+  | 2 | 4409.3 | 81 states of 8128512 over budget |
+  | 3 | 4889.0 | `C_TAIL` 4000 — margin **−889** |
+  | 4 | 5091.9 | margin **−1092** |
+
+  ~500 µs of `game_step` each, against a frame with about 2500 µs of
+  spare packing capacity that the minimap has largely spent. Two
+  monsters cost 81 states of 8128512 — 0.001%, and greedy-packing waste
+  rather than a frame running long — and trimming the charges did not
+  move it. So: **one**, and the map shows where it is.
+- **The game is still one fight long.** Kill it, take the six pickups,
+  walk to the exit: about ninety seconds. What it has is a beginning, a
   middle and an end.
 
 ### 2. A reason to be in the maze

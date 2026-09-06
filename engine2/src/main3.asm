@@ -995,8 +995,10 @@ C_MMSEEN    equ 1350        ; THE MAP.  Not a hook of its own: it is
                             ; is drawn once per cell now, into both
                             ; buffers, and never repainted.  See
                             ; hud2.asm:mm_seen.
-C_PIPP      equ 6050        ; THE MAP AND THE PICKUP, on one hook: 5000
-                            ; for pip_draw and C_MMSEEN above.
+C_PIPP      equ 6050        ; THE MAP AND THE PICKUP, on one hook: 4700
+                            ; for pip_draw (measured 4669.4) and
+                            ; C_MMSEEN above.  The assert at the foot of
+                            ; this file is what keeps the sum honest.
                             ;
                             ; A LITERAL, WITH THE SUM AS AN ASSERT, and
                             ; that is not style.  pacemodel.py reads these
@@ -1355,12 +1357,17 @@ start
 ; ---------------------------------------------------------------------
 ;  new_game -- EVERYTHING A LIFE NEEDS, and the death loop re-enters it.
 ;
-;  It has to be all of this and not a subset, because menu.asm's MENUBUF
-;  IS SOLID: painting either screen writes 669 bytes over the map, the
-;  flood's MARK array and the front of the quad list.  So a death screen
-;  cannot be shown and the game resumed -- the world has to be rebuilt,
-;  which is exactly what these five calls do anyway.  What looked like an
-;  awkward constraint turned out to name the right structure.
+;  IT USED TO HAVE TO BE ALL OF THIS, and the reason is gone.  MENUBUF
+;  was SOLID: painting either screen wrote 739 bytes over the map, the
+;  flood's MARK array and the front of the quad list, so a death screen
+;  could not be shown and the game resumed -- the world HAD to be
+;  rebuilt.  MENUBUF is the back buffer now (menu.asm), and nothing the
+;  menu does touches the world.
+;
+;  It is still all of this, because starting a life wants every one of
+;  these calls anyway and a restart is what death and a win both mean.
+;  But it is now a CHOICE and not a constraint, and a future "resume
+;  after a pause screen" is no longer blocked by where a font lives.
 ; ---------------------------------------------------------------------
 new_game
     ld   sp,STACKTOP                ; player_died jumps here out of the
