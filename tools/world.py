@@ -180,6 +180,52 @@ EXIT_CHAR = 'X'
 FLOOR, WALL, DOOR = 0, 1, 2
 
 MAZE_W = len(MAZE_SRC[0])
+
+# ---------------------------------------------------------------------
+#  LEVEL 2.  The same nine 4x4 rooms on the same five-cell pitch, because
+#  the room SHAPE is what roomcost.py measured and what the pacing rests
+#  on -- see the note above MAZE_SRC.  What changes is the doors and the
+#  route: start top right, way out bottom left, and the two door bands
+#  offset so the diagonal is not a straight run.
+# ---------------------------------------------------------------------
+MAZE_SRC_L2 = [
+    "################",
+    "#....#....#....#",
+    "#....+....+.@..#",
+    "#....#....#....#",
+    "#....#....#....#",
+    "###+####+####+##",
+    "#....#....#....#",
+    "#....+....+....#",
+    "#....#....#....#",
+    "#....#....#....#",
+    "#+####+####+####",
+    "#....#....#....#",
+    "#....+....+....#",
+    "#.X..#....#....#",
+    "#....#....#....#",
+    "################",
+]
+
+# ---------------------------------------------------------------------
+#  THE LEVELS, and everything that is per-level is HERE and not spread
+#  across three files.  gen_march.py emits one fixed-size record each
+#  into RAM bank 6; main3.asm's level_load pulls one down.
+#
+#  A LEVEL IS NOT JUST A GRID.  Where you start, where the pickups are,
+#  where the monsters stand and where the way out is are all part of it,
+#  and each is checked against the grid below rather than against a
+#  comment.
+# ---------------------------------------------------------------------
+LEVELS = [
+    dict(src=MAZE_SRC, ammo=[(2, 2), (8, 3), (13, 2),
+                             (3, 8), (12, 7), (7, 13)],
+         monsters=[(2, 7)]),
+    dict(src=MAZE_SRC_L2, ammo=[(2, 2), (8, 3), (13, 8),
+                                (3, 8), (7, 12), (12, 13)],
+         monsters=[(7, 7)]),
+]
+
 MAZE_H = len(MAZE_SRC)
 
 _ACTIVE = MAZE_SRC
@@ -189,6 +235,22 @@ def select_maze(mode):
     """Point the loader at the layout for the target screen mode."""
     global _ACTIVE
     _ACTIVE = MAZE_SRC if mode == 0 else MAZE_SRC_M2
+
+
+def select_level(n):
+    """Point the loader at LEVELS[n].  -> the level's dict.
+
+    The per-level lists (AMMO_CELLS, MONSTER_CELLS) are module globals
+    that four tools already read, so selecting a level rebinds them
+    rather than threading a level index through every caller.
+    """
+    global _ACTIVE, AMMO_CELLS, MONSTER_CELLS, MONSTER_CELL
+    lv = LEVELS[n]
+    _ACTIVE = lv["src"]
+    AMMO_CELLS = list(lv["ammo"])
+    MONSTER_CELLS = list(lv["monsters"])
+    MONSTER_CELL = MONSTER_CELLS[0] if MONSTER_CELLS else None
+    return lv
 
 
 def _check_connected(grid, sx, sy):
@@ -243,7 +305,7 @@ def monster_cells(grid, sx, sy):
     rather than eyeballed: rooms are 4x4 on a five-cell pitch, so the
     room of a cell is (x // 5, y // 5).
     """
-    if _ACTIVE is not MAZE_SRC:
+    if _ACTIVE is MAZE_SRC_M2:
         return []
     home = (sx // 5, sy // 5)
     for (x, y) in MONSTER_CELLS:
@@ -268,7 +330,7 @@ def exit_cell(grid, sx, sy):
     """-> (x, y) for the way out, or None for a layout without one."""
     found = [(x, y) for y, row in enumerate(_ACTIVE)
              for x, ch in enumerate(row) if ch == EXIT_CHAR]
-    if _ACTIVE is not MAZE_SRC:
+    if _ACTIVE is MAZE_SRC_M2:
         return None
     assert len(found) == 1, f"maze needs exactly one {EXIT_CHAR!r}: {found}"
     x, y = found[0]
@@ -284,7 +346,7 @@ def ammo_cells(grid, sx, sy):
 
     Only the mode 0 maze is furnished; the mode 2 disc has no shooting.
     """
-    if _ACTIVE is not MAZE_SRC:
+    if _ACTIVE is MAZE_SRC_M2:
         return []
     for x, y in AMMO_CELLS:
         assert 0 <= x < MAZE_W and 0 <= y < MAZE_H, f"ammo {(x, y)} off map"
