@@ -54,7 +54,17 @@ def build(paced=False):
     """Assemble tst_rast.asm.  `paced` compiles raster.asm's mid-quad yield
     (rq_bchunk / rq_wchunk) against the stub accumulator at the foot of the
     harness -- the same code main3.asm gets, and the reason this is built
-    twice: the hooks must not change a pixel."""
+    twice: the hooks must not change a pixel.
+
+    ALWAYS -DVPCOL=0, AND THAT IS WHAT THIS HARNESS IS.  tst_rast.asm
+    drives raster_quad and raster_frame, and both live inside
+    `if VPCOL == 0` -- the SPAN renderer.  At VPCOL 1 they do not exist
+    and raster_setbuf wants rc_buf/rc_ebuf out of rastcol.asm, which this
+    harness does not include, so it stopped assembling the day the column
+    renderer shipped and BOTH this tool and emu_atomic.py have been dead
+    since.  Neither said so: they printed rasm's six errors and gave up.
+    The shipping renderer's equivalent check is `emu_rcol.py atomic`.
+    """
     blob, layout, _ = gentab.build()
     os.makedirs(BUILD, exist_ok=True)
     open(os.path.join(BUILD, "tab_test.bin"), "wb").write(blob)
@@ -63,11 +73,15 @@ def build(paced=False):
     r = subprocess.run(
         ["rasm", "tst_rast.asm", "-I", "../build", "-I", "../src",
          "-o", "../build/" + out, "-s", "-os", "../build/" + out]
+        + ["-DVPCOL=0"]
         + (["-DPACED=1", "-DRQ_SPLIT=1"] if paced else []),
         cwd=os.path.join(_E2, "test"), capture_output=True, text=True)
     if r.returncode:
         print(r.stdout, r.stderr)
-        raise SystemExit("rasm failed")
+        raise SystemExit(
+            "rasm failed building engine2/test/tst_rast.asm.  That harness "
+            "is the SPAN renderer's -- see the note in build() -- and it is "
+            "assembled with -DVPCOL=0 for that reason.")
     code = open(os.path.join(BUILD, out + ".bin"), "rb").read()
     sym = {}
     for line in open(os.path.join(BUILD, out)):

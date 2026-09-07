@@ -928,6 +928,11 @@ Ordered by what unlocks the most, with the honest cost of each.
   its texture read. A solid-fill variant of `rc_band` would pay for
   itself the moment there is more than one monster.
 - **The moving-door pass.** See the open problem above.
+- ~~**The rasteriser harness.**~~ **Fixed** — `emu_rast.py` and
+  `emu_atomic.py` had not assembled since `VPCOL` went to 1; both drive
+  `tst_rast.asm`, which is the *span* renderer's harness. Built
+  `-DVPCOL=0` now: 130 screens byte-exact, every quad and every interval
+  bounded.
 - **Byte-exact models for the world overlay.** The HUD is verified byte
   for byte against `genhud.py`; `box_draw`, `mon_draw` and `fx_draw` are
   not. Every one of the five bugs found while writing them was found by

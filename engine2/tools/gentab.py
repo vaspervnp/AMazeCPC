@@ -238,18 +238,48 @@ import gunart                                             # noqa: E402
 VPCFG = os.path.join(_ROOT, "engine2", "src", "vpcfg.inc")
 
 
-def load_vpcfg(path=VPCFG):
+def load_vpcfg(path=VPCFG, defines=()):
     """Parse `NAME equ <integer expression>` out of the config include.
 
     rasm's expression syntax and Python's agree on + - * ( ) and on the
     #hex prefix once it is rewritten to 0x; `/` is integer division in
     rasm, so it is rewritten to `//`.  Anything else is a hard error --
     this parser must never silently disagree with the assembler.
+
+    IT UNDERSTANDS ifdef/ifndef RATHER THAN SKIPPING THEM, and `defines`
+    is what a `rasm -DNAME=...` on the command line would have set.  A
+    parser that simply ignored the conditionals would read the DEFAULT
+    branch and go on agreeing with itself while the assembler took the
+    other one -- which is the one thing the paragraph above forbids.
+    vpcfg.inc grew its first conditional when VPCOL had to be
+    overridable so engine2/test/tst_rast.asm could assemble at all.
+
+    Nothing gentab emits depends on a conditional value today, so the
+    module-level _VP below is built with no defines; the argument is for
+    callers that assemble with one.
     """
-    env = {}
+    env, skip = {}, []
     for n, raw in enumerate(open(path), 1):
         line = raw.split(";")[0].strip()
         if not line:
+            continue
+        c = re.match(r"^(ifdef|ifndef|else|endif)\b\s*(\w*)$", line, re.I)
+        if c:
+            what, name = c.group(1).lower(), c.group(2).upper()
+            if what == "ifdef":
+                skip.append(name not in defines)
+            elif what == "ifndef":
+                skip.append(name in defines)
+            elif what == "else":
+                if not skip:
+                    raise SystemExit(f"{path}:{n}: else with no if")
+                skip[-1] = not skip[-1]
+            else:
+                if not skip:
+                    raise SystemExit(f"{path}:{n}: endif with no if")
+                skip.pop()
+            continue
+        if any(skip):
             continue
         m = re.match(r"^(\w+)\s+equ\s+(.+)$", line, re.I)
         if not m:
@@ -259,6 +289,8 @@ def load_vpcfg(path=VPCFG):
         if not re.fullmatch(r"[\w\s+\-*/()&|]+", expr):
             raise SystemExit(f"{path}:{n}: unsupported expression {expr!r}")
         env[name] = eval(expr, {"__builtins__": {}}, dict(env))
+    if skip:
+        raise SystemExit(f"{path}: {len(skip)} unclosed ifdef/ifndef")
     return env
 
 

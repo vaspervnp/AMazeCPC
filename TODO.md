@@ -182,7 +182,8 @@ first; every number here is written down next to the code it constrains.
 | the maps | **`tools/maps/*.json` ARE the source.** `world.py` loads them at import and has no map literal left; filename order is level order. Disc byte-identical across the switch, and editing a file changes it |
 | `emu_verify3.py` | **ALL CHECKS PASS**, period `[10]` on all six named views |
 | `emu_pace.py 600` | **MIXED, and unresolved.** Every frame buckets to 10 vsyncs, but `ctr` spreads 198.8–200.5 ms against a 1.0 ms tolerance. `r12` — the CRTC flip register, i.e. what is on screen — reads a tight [199.5, 199.8] on every flagged state, and `pace_drain` waits for vsync before it returns, so the PERIOD is an exact multiple. The tolerance was derived from sampling error alone and the vsync pulse is ~16 scanlines wide. Not widened to make it pass |
-| `emu_atomic.py` | **DOES NOT ASSEMBLE** — `tst_rast.asm` wants `RASTER_QUAD`, `RASTER_FRAME`, `RC_BUF`, `RC_EBUF`. The rasteriser's per-chunk atomic units are UNCHECKED, and were before any of this |
+| `emu_rast.py` | **PASS** — 130 screens byte-exact over all 16384 bytes, 77 real quads and 12 painter batches. It had not assembled since `VPCOL` went to 1 |
+| `emu_atomic.py 6` | **PASS** — `EVERY QUAD BOUNDED: True`, `EVERY INTERVAL BOUNDED: True`. Same cause, same fix: `tst_rast.asm` is the **span** renderer's harness and is built `-DVPCOL=0` now. The SHIPPING renderer's intervals were never unchecked — that is `emu_rcol.py atomic`, which has been passing all along |
 
 The span renderer is still the fallback and still locks: set
 `VPCOL equ 0` **and** `PACE_FRAMES equ 6` (an `assert` in `main3.asm`
@@ -515,6 +516,26 @@ the same 16K bank; bank 6 is entirely unused.
 ---
 
 ## Traps — do not rediscover these
+
+**A TOOL THAT DIES AT THE ASSEMBLER IS A TOOL NOBODY NOTICES IS DEAD.**
+`emu_rast.py` and `emu_atomic.py` both drive `engine2/test/tst_rast.asm`,
+which calls `raster_quad` and `raster_frame` — and both of those live
+inside `if VPCOL == 0`. The day `VPCOL` went to 1 the harness stopped
+assembling, and neither tool has run since: they printed six rasm errors
+and gave up. `make pace` collected the failure and the line went on
+scrolling past. The status table here recorded one of the two and
+described it as "the rasteriser's per-chunk atomic units are UNCHECKED",
+which was **wrong in both directions** — the shipping renderer's
+intervals were being checked all along by `emu_rcol.py atomic`, and what
+was actually unchecked was the *fallback* span renderer, which is a
+supported configuration (`VPCOL 0` + `PACE_FRAMES 6`).
+
+The fix is three lines: `ifndef VPCOL` around the `equ`, the same idiom
+`RQ_SPLIT` in `raster.asm` already used, and `-DVPCOL=0` where the
+harness is assembled. The lesson is not the fix. It is that a build
+failure inside a *test* is indistinguishable from a test that is merely
+noisy, so when a gate reports a tool as failing, find out whether it
+failed or never ran — and make it say which.
 
 **TWO GREEN SWEEPS OF TWO MAPS CAN BE ONE MEASUREMENT.** A shut door is
 opaque, exactly like a wall. Levels 0 and 1 put their twelve doors in

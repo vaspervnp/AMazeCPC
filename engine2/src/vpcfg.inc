@@ -380,7 +380,18 @@ COURSES      equ 0
 ;  period is the one the whole of main3.asm's pacing note is about:
 ;  119.81 ms, 8.35 fps, locked over the whole reachable state space.
 ; ------------------------------------------------------------------
-VPCOL        equ 1
+    ifndef VPCOL            ; ...and `rasm -DVPCOL=0` builds the SPAN
+VPCOL        equ 1              ; renderer, which is the only way
+    endif                       ; engine2/test/tst_rast.asm assembles at
+                                ; all: raster_quad and raster_frame live
+                                ; inside `if VPCOL == 0`, and at VPCOL 1
+                                ; raster_setbuf wants rc_buf/rc_ebuf out
+                                ; of rastcol.asm, which that harness does
+                                ; not include.  Both emu_rast.py and
+                                ; emu_atomic.py had been dead since the
+                                ; day this went to 1 -- the same idiom as
+                                ; RQ_SPLIT in raster.asm, for the same
+                                ; reason.
 
 ; --------------------------------------------------------------------
 ;  RC_FARH -- THE FAR PLANE, in Q12.4 half-scanlines.  0 turns it off.
