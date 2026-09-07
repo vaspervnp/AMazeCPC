@@ -775,7 +775,7 @@ ms_none                             ; bearing wants -- see there
 ;  follow from the byte is the blip: mon_scan writes it once a frame and
 ;  would write it again next frame, but the radar is drawn from the LAST
 ;  scan, so clearing it here is what stops one frame of a dead monster's
-;  mauve dot.
+;  blip on the radar.
 ; ---------------------------------------------------------------------
 MON_HPMAX   equ 3           ; rounds it takes.  Three of a magazine of
                             ; six, so one monster costs half the ammo a

@@ -50,7 +50,7 @@ SRC := engine2/src/main3.asm engine2/src/game.asm engine2/src/frame.asm \
 # It is COPIED to the disc, not generated, so it needs naming here or a new
 # picture would not rebuild amaze.dsk.
 ART := engine2/tools/gunart.py engine2/tools/pal.py engine2/tools/walltex.py \
-       assets/revive8b.scr
+       assets/revive8b.scr assets/sprites.png
 
 # THE GENERATORS -- AND THIS IS WHERE THE REAL BUILD BUG WAS.  Three of
 # them ran in nobody's recipe: gen_march.py, which owns the MAZE out of
@@ -73,6 +73,8 @@ GEN := engine2/tools/gentab.py engine2/tools/genhud.py \
        engine2/tools/gen_march.py engine2/tools/genmenu.py \
        engine2/tools/gensnd.py engine2/tools/marchmodel.py \
        engine2/tools/genaux.py \
+       engine2/tools/genspr.py engine2/tools/sprcover.py \
+       engine2/tools/sprpng.py engine2/tools/genpal.py \
        tools/world.py
 
 .PHONY: all amaze test verify rast pace gun hud enemy shots editor clean
@@ -100,6 +102,14 @@ amaze: $(SRC) $(ART) $(GEN) engine2/src/amaze.bas
 	@# code segment got down to 22 free bytes.  It imports genhud, so it
 	@# has to run after it.  See engine2/tools/genaux.py.
 	$(PYTHON) engine2/tools/genaux.py
+	@# THE SPRITES, AND genspr.py WAS IN NOBODY'S RECIPE -- the same bug
+	@# the note above GEN is about.  gen_spr.inc was written by hand
+	@# whenever someone remembered, so repainting the monster changed
+	@# nothing on the disc.  It compiles assets/sprites.png now.
+	$(PYTHON) engine2/tools/genspr.py
+	@# ...and the palette that sheet has to be painted against, which is
+	@# generated from the same PEN_INK the gate array is handed.
+	$(PYTHON) engine2/tools/genpal.py
 	@# the title screen's font and words, and the AY's effect tables
 	$(PYTHON) engine2/tools/genmenu.py
 	$(PYTHON) engine2/tools/gensnd.py

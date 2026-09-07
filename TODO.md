@@ -177,6 +177,7 @@ first; every number here is written down next to the code it constrains.
 | the minimap | the flood's cells, one byte each, drawn ONCE when discovered; `C_MMSEEN` 1350 against 899.1 + 255.1 measured |
 | monsters (`tools/world.py`) | **1 a level** — lv0 (2,7), lv1 (7,2), each one room out of the room you start in. Two cost 81 states of 8128512 |
 | the code segment | `game_end` is **#3100 = `BUCK0` exactly — 0 bytes free**; `level_load` spent the last 56. RAM bank 6 has 15,641 free, so the next thing to add goes THERE or something comes out of here first |
+| the sprites (`assets/sprites.png`) | **PAINTED, not coded** — an indexed PNG compiled by `genspr.py` into rectangle records. 4953.6 µs at a 28-row box against the hand art's 5459.2, identical picture. `assets/amaze-mode0.gpl` is the palette for GIMP 3 |
 | the map editor (`editor/`) | **BUILT** — Blazor Server, refuses to save a map that would not build. `make editor` runs its **31** tests |
 | the maps | **`tools/maps/*.json` ARE the source.** `world.py` loads them at import and has no map literal left; filename order is level order. Disc byte-identical across the switch, and editing a file changes it |
 | `emu_verify3.py` | **ALL CHECKS PASS**, period `[10]` on all six named views |

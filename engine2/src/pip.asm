@@ -56,10 +56,14 @@
 ; below to this many iterations each, which is what keeps them loops
 ; instead of multiplies.
 PIP_MAX     equ 5
-PIP_PEN     equ #03         ; pen 8, firmware ink 15: the orange the ammo
-                            ; pips and the scanner already use, so the
-                            ; thing on the floor and the readouts that
-                            ; point at it are the same colour
+PIP_PEN     equ #03         ; pen 8, firmware ink 6: the BRIGHT RED the
+                            ; ammo pips and the scanner already use, so
+                            ; the thing on the floor and the readouts
+                            ; that point at it are the same colour.
+                            ; (It said "ink 15, orange" for a long time
+                            ; and had not been either since the palette
+                            ; moved -- world.py's PEN_INK is what the
+                            ; gate array is handed, and it says 6.)
 PIP_HMAX    equ 12          ; ...nor grows past it, whatever the distance
 
 ; ---------------------------------------------------------------------
@@ -169,17 +173,21 @@ fx_chip
 ;
 ;  Same path as the pickup -- box_draw below -- with three differences:
 ;  it is half a cell tall rather than a quarter (bx_sh 0), three column
-;  pairs wide rather than one (bx_hw 1), and mauve.  Being wider is what
+;  pairs wide rather than one (bx_hw 1), and drawn in MON_PEN.  Being
+;  wider is what
 ;  makes the per-pair cut earn its keep: standing at the edge of a
 ;  doorway it is behind the jamb on one pair and in the opening on the
 ;  next.
 ;
 ;  Clobbers AF BC DE HL IX.
 ; ---------------------------------------------------------------------
-MON_PEN     equ #F3         ; pen 13, firmware ink 9 (mauve) -- the one
-                            ; warm-dark colour nothing else on screen
-                            ; uses, so it reads as flesh against the
-                            ; blue walls and the olive floor
+MON_PEN     equ #F3         ; pen 13, firmware ink 0: BLACK, the same pen
+                            ; as the far ceiling, so the thing reads as a
+                            ; SILHOUETTE against the olive floor and the
+                            ; blue walls rather than as a coloured body.
+                            ; (It said "ink 9, mauve"; it has not been
+                            ; mauve since the palette moved.  world.py's
+                            ; PEN_INK is what the gate array is handed.)
 MON_MAX     equ 6           ; L1 cells: it is not drawn past this
 MON_HMAX    equ 28          ; ...and no taller than this on screen
 MON_HW      equ SPR_MON_HW  ; half width in column PAIRS, so five pairs.
