@@ -172,10 +172,10 @@ first; every number here is written down next to the code it constrains.
 | `pacescan.py` (ONE door moving) | lv0 1,243,133 of 8,128,512 = **15.29%**; lv1 1,195,797 = **14.71%** — honest charge, `rc_mul8` unrolled |
 | the disc, while a door runs | **[13, 12, 12, 11, 11, 10, 10]** vsyncs against 10 |
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
-| `monmodel.py` | **PASS, both levels** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs each, and it RETURNS a verdict now instead of printing one for a human to read. Level 1's **own starting pair never arrives**, though: see *Also open* |
+| `monmodel.py` | **PASS, both levels** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs each, and it RETURNS a verdict now instead of printing one for a human to read. The map's own starting pair, doors open: lv0 **5** steps, lv1 **4** |
 | the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |
 | the minimap | the flood's cells, one byte each, drawn ONCE when discovered; `C_MMSEEN` 1350 against 899.1 + 255.1 measured |
-| monsters (`NMON`, `tools/world.py`) | **1**, at (2,7) — out of the room you start in. Two cost 81 states of 8128512 |
+| monsters (`tools/world.py`) | **1 a level** — lv0 (2,7), lv1 (7,2), each one room out of the room you start in. Two cost 81 states of 8128512 |
 | the code segment | `game_end` is **#3100 = `BUCK0` exactly — 0 bytes free**; `level_load` spent the last 56. RAM bank 6 has 15,641 free, so the next thing to add goes THERE or something comes out of here first |
 | `emu_verify3.py` | **ALL CHECKS PASS**, period `[10]` on all six named views |
 | `emu_pace.py 600` | **MIXED, and unresolved.** Every frame buckets to 10 vsyncs, but `ctr` spreads 198.8–200.5 ms against a 1.0 ms tolerance. `r12` — the CRTC flip register, i.e. what is on screen — reads a tight [199.5, 199.8] on every flagged state, and `pace_drain` waits for vsync before it returns, so the PERIOD is an exact multiple. The tolerance was derived from sampling error alone and the vsync pulse is ~16 scanlines wide. Not widened to make it pass |
@@ -465,18 +465,17 @@ between — something has to come out first, or the word list has to move
 into RAM bank 6 the way `HUDRECTS` did.
 
 
-**LEVEL 1 OPENS WITH THE MONSTER OUT OF REACH, and that is a design
-choice nobody made on purpose.** `monmodel.py` reports the map's own
-starting pair per level: level 0 is *monster (2,7), player (3,12) → 5
-steps* with the doors shut, so the thing is on you inside six seconds.
-Level 1 is *monster (7,7), player (12,2) → **NEVER ARRIVES***: they are
-in different components until the player opens a door, so the second
-level starts silent and the monster wakes up only once you begin
-crossing the map. Both maps still reach the player on **2160/2160**
-doors-shut pairs that a walk could join — the difference is only where
-the two of them are *put*. Decide whether that is the second level's
-character or an accident of where the '@' and the monster's room landed;
-moving either is a one-character edit in `tools/world.py`.
+**THE MONSTER'S OWN STARTING PAIR IS A PER-LEVEL NUMBER, and one of
+the two was wrong.** With the doors SHUT the player is sealed in his own
+16-cell room on both maps, so no monster reaches him at the start either
+way -- that is the design. The number that matters is the doors-OPEN
+one, once he starts opening them: level 0's monster arrives in **5**
+steps and level 1's, at (7, 7), **NEVER** arrived. `mon_move` is greedy
+and has no memory, so from the middle room it walked itself into a
+corner and stopped. Moved to **(7, 2)** -- the top-centre room,
+immediately behind the door at (10, 2), on the way to the exit -- it
+arrives in **4**. `monmodel.py` reports this pair per level, in both
+door states, which is what made the difference visible at all.
 
 
 **`roomcost.py` sizes the flood with the doors SHUT.** It calls

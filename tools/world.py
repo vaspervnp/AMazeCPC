@@ -223,7 +223,20 @@ LEVELS = [
          monsters=[(2, 7)]),
     dict(src=MAZE_SRC_L2, ammo=[(2, 2), (8, 3), (13, 8),
                                 (3, 8), (7, 12), (12, 13)],
-         monsters=[(7, 7)]),
+         # ONE ROOM AWAY, BEHIND THE FIRST DOOR YOU OPEN -- which is what
+         # level 0 does and this level did not.  With the doors SHUT the
+         # player is sealed in his own 16-cell room on BOTH maps, so no
+         # monster reaches him at the start either way; the difference is
+         # what happens once he starts opening doors.  Level 0's monster
+         # then arrives in 5 steps.  This one was at (7, 7) -- the middle
+         # room, two doors away -- and monmodel.py says it NEVER arrives,
+         # doors open or shut: it walks itself into a corner of the
+         # centre room and stops, because mon_move is greedy and has no
+         # memory.  (7, 2) puts it in the top-centre room, immediately
+         # behind the door at (10, 2), on the way to the exit at (2, 13):
+         # 4 steps.  MEASURED -- see monmodel.py, which reports the map's
+         # own starting pair per level.
+         monsters=[(7, 2)]),
 ]
 
 MAZE_H = len(MAZE_SRC)
