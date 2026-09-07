@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Amaze.Editor.Models;
+using Amaze.Editor.Services;
 
 namespace Amaze.Editor.Tests;
 
@@ -36,14 +37,40 @@ public class EngineLimitsTests
     }
 
     [Fact]
-    public void The_grid_is_still_the_size_world_py_says()
+    public void The_grid_is_still_the_size_the_maps_are()
     {
-        // world.py derives MAZE_W from the literal, so the literal is what
-        // is measured: the first row of the first map.
+        // THE MAPS ARE THE SOURCE NOW.  world.py has no map literal left --
+        // it does `MAZE_W = len(LEVELS[0]["src"][0])` on what it loaded from
+        // tools/maps -- so the files are what this measures.
+        //
+        // 16x16 is the ENGINE's shape, not the map's choice: march.asm
+        // indexes SOLID as cy*16 + cx and SOLID is 256 bytes.  A file of
+        // another size would be rejected by MapValidator's size rule; this
+        // catches the other direction, a shipped map the constant no longer
+        // describes.
+        var maps = new MapIo(RepoPaths.Maps);
+        var files = maps.List();
+        Assert.NotEmpty(files);
+        foreach (var f in files)
+        {
+            var g = maps.Load(f).Grid;
+            Assert.Equal(MapCells.Height, g.Count);
+            Assert.All(g, row => Assert.Equal(MapCells.Width, row.Length));
+        }
+    }
+
+    [Fact]
+    public void world_py_has_no_map_literal_left()
+    {
+        // A LITERAL IS A SECOND COPY OF THE MAP, and a second copy is a
+        // thing that can be edited: the editor would write level1.json, the
+        // build would go on shipping the literal, and nothing would say so.
+        // MAZE_SRC_M2 stays -- it is the mono prototype disc's layout, which
+        // has no levels, no pickups and no way out.
         var src = File.ReadAllText(RepoPaths.World);
-        var m = Regex.Match(src, "MAZE_SRC\\s*=\\s*\\[\\s*\r?\n\\s*\"([^\"]+)\"");
-        Assert.True(m.Success, "world.py's MAZE_SRC no longer starts with a row literal");
-        Assert.Equal(MapCells.Width, m.Groups[1].Value.Length);
+        Assert.DoesNotContain("MAZE_SRC = [", src);
+        Assert.DoesNotContain("MAZE_SRC_L2 = [", src);
+        Assert.Contains("load_levels()", src);
     }
 
     /// <summary>NAME equ N out of an asm source.</summary>

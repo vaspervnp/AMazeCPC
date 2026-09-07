@@ -83,24 +83,12 @@ def wall_pen(f, side, door=False):
 # after ANY change to this map: the farthest-bucket line is the one that
 # matters, because march.asm files a face by |dx|+|dy| with no upper bound
 # and a key of 8 would write into the page above the last bucket.
-MAZE_SRC = [
-    "################",
-    "#....#....#..X.#",
-    "#....#....#....#",
-    "#....+....+....#",
-    "#....#....#....#",
-    "##+####+####+###",
-    "#....#....#....#",
-    "#....#....#....#",
-    "#....+....+....#",
-    "#....#....#....#",
-    "##+####+####+###",
-    "#....#....#....#",
-    "#..@.#....#....#",
-    "#....+....+....#",
-    "#....#....#....#",
-    "################",
-]
+#
+# THE MAP ITSELF IS NOT IN THIS FILE.  It is tools/maps/level0.json, and
+# so is every other level -- but the paragraph above is about the SHAPE of
+# a room and not about one map, so it stays here where a person editing
+# the engine will read it.  Re-run roomcost.py after any change, on EVERY
+# level.
 
 # The Mode 2 disc gets its own layout.  It is built around short sight lines
 # and small chambers rather than long corridors: dither density reads as depth
@@ -136,8 +124,9 @@ MAZE_SRC_M2 = [
 #  Six of the nine rooms, so a player who has emptied the magazine has
 #  somewhere to walk to but not one underfoot.  load_maze() asserts every
 #  one of them is FLOOR.
-AMMO_CELLS = [(2, 2), (8, 3), (13, 2),
-              (3, 8), (12, 7), (7, 13)]
+#  The cells are in the level record now -- see LEVELS below, which is
+#  loaded from tools/maps/*.json.  AMMO_CELLS is what select_level() binds
+#  it to, and every tool here reads that.
 
 # ---- THE MONSTERS, one to a room, and NONE IN THE ROOM YOU START IN --
 #  There was one, at (1, 12), two cells west of the start: a test target
@@ -170,8 +159,7 @@ AMMO_CELLS = [(2, 2), (8, 3), (13, 2),
 #  whole spare capacity at about 2500 us before every state gains a
 #  period -- which the minimap and the second monster's drawing have
 #  already spent most of.
-MONSTER_CELLS = [(2, 7)]
-MONSTER_CELL = MONSTER_CELLS[0]     # ...for the exit's assert
+#  Per level, in the map file, and bound here by select_level().
 
 # ---- THE WAY OUT ---------------------------------------------------
 #  'X' in the grid above, a plain FLOOR cell in SOLID: the exit is a
@@ -182,75 +170,45 @@ EXIT_CHAR = 'X'
 
 FLOOR, WALL, DOOR = 0, 1, 2
 
-MAZE_W = len(MAZE_SRC[0])
 
 # ---------------------------------------------------------------------
-#  LEVEL 2.  The same nine 4x4 rooms on the same five-cell pitch, because
-#  the room SHAPE is what roomcost.py measured and what the pacing rests
-#  on -- see the note above MAZE_SRC.  What changes is the doors and the
-#  route: start top right, way out bottom left, and the two door bands
-#  offset so the diagonal is not a straight run.
-# ---------------------------------------------------------------------
-MAZE_SRC_L2 = [
-    "################",
-    "#....#....#....#",
-    "#....+....+.@..#",
-    "#....#....#....#",
-    "#....#....#....#",
-    "###+####+####+##",
-    "#....#....#....#",
-    "#....+....+....#",
-    "#....#....#....#",
-    "#....#....#....#",
-    "#+####+####+####",
-    "#....#....#....#",
-    "#....+....+....#",
-    "#.X..#....#....#",
-    "#....#....#....#",
-    "################",
-]
-
-# ---------------------------------------------------------------------
-#  THE LEVELS, and everything that is per-level is HERE and not spread
-#  across three files.  engine2/tools/genaux.py emits one fixed-size
-#  record each into RAM bank 6; game.asm's level_load pulls one down.
+#  WHAT THE SHIPPED LEVELS LOOK LIKE, since they are no longer in front of
+#  you.  Both are the same nine 4x4 rooms on the same five-cell pitch,
+#  because the room SHAPE is what roomcost.py measured and what the pacing
+#  rests on.  What differs is the doors and the route: level 0 starts
+#  bottom left and leaves top right, level 1 starts top right and leaves
+#  bottom left with the two door bands offset so the diagonal is not a
+#  straight run.
 #
-#  A LEVEL IS NOT JUST A GRID.  Where you start, where the pickups are,
-#  where the monsters stand and where the way out is are all part of it,
-#  and each is checked against the grid below rather than against a
-#  comment.
+#  WITH THE DOORS SHUT THEY ARE THE SAME MAP TO THE MARCH -- a shut door
+#  is opaque exactly like a wall, and the doors sit in different places in
+#  the SAME wall ring -- so their doors-shut sweeps agree to the last
+#  decimal.  That is a property of these two maps and not a rule; see
+#  pacescan.py, which says so before it sweeps.
 # ---------------------------------------------------------------------
-LEVELS = [
-    dict(src=MAZE_SRC, ammo=[(2, 2), (8, 3), (13, 2),
-                             (3, 8), (12, 7), (7, 13)],
-         monsters=[(2, 7)]),
-    dict(src=MAZE_SRC_L2, ammo=[(2, 2), (8, 3), (13, 8),
-                                (3, 8), (7, 12), (12, 13)],
-         # ONE ROOM AWAY, BEHIND THE FIRST DOOR YOU OPEN -- which is what
-         # level 0 does and this level did not.  With the doors SHUT the
-         # player is sealed in his own 16-cell room on BOTH maps, so no
-         # monster reaches him at the start either way; the difference is
-         # what happens once he starts opening doors.  Level 0's monster
-         # then arrives in 5 steps.  This one was at (7, 7) -- the middle
-         # room, two doors away -- and monmodel.py says it NEVER arrives,
-         # doors open or shut: it walks itself into a corner of the
-         # centre room and stops, because mon_move is greedy and has no
-         # memory.  (7, 2) puts it in the top-centre room, immediately
-         # behind the door at (10, 2), on the way to the exit at (2, 13):
-         # 4 steps.  MEASURED -- see monmodel.py, which reports the map's
-         # own starting pair per level.
-         monsters=[(7, 2)]),
-]
 
-MAZE_H = len(MAZE_SRC)
-
-_ACTIVE = MAZE_SRC
-
-
-def select_maze(mode):
-    """Point the loader at the layout for the target screen mode."""
-    global _ACTIVE
-    _ACTIVE = MAZE_SRC if mode == 0 else MAZE_SRC_M2
+# ---------------------------------------------------------------------
+#  THE LEVELS.  THEY ARE FILES, and the module-level load at the foot of
+#  this section is the only place they come from.
+#
+#  There is no literal to fall back on any more, deliberately.  A
+#  fallback is a second copy of the map, and a second copy is a thing
+#  that can be edited: the editor would write tools/maps/level1.json, the
+#  build would go on shipping the literal, and the two would part company
+#  with nothing to say so.  So a missing or malformed map file stops the
+#  build, loudly, which is what it should do.
+#
+#  engine2/tools/genaux.py emits one fixed-size record each into RAM bank
+#  6; game.asm's level_load pulls one down.  A LEVEL IS NOT JUST A GRID:
+#  where you start, where the pickups are, where the monsters stand and
+#  where the way out is are all part of it, and each is checked against
+#  the grid by load_maze / ammo_cells / monster_cells / exit_cell below.
+# ---------------------------------------------------------------------
+LEVELS = []                 # filled at the foot of this section
+AMMO_CELLS = []             # ...and these are LEVELS[n]'s, bound by
+MONSTER_CELLS = []          # select_level()
+MONSTER_CELL = None
+_ACTIVE = None
 
 
 # ---------------------------------------------------------------------
@@ -310,30 +268,63 @@ def level_from_dict(d):
 
 
 def load_levels(path=None):
-    """Replace LEVELS from tools/maps/*.json, sorted by filename.
+    """Fill LEVELS from tools/maps/*.json, sorted by filename.
 
-    NOT CALLED BY THE BUILD YET, and that is deliberate: the literals
-    above are still what ships, so the editor can be wrong without
-    breaking a disc.  The seam is here for the day the files become the
-    source -- see plan.md, "The seam".
+    THE FILENAME ORDER IS THE LEVEL ORDER.  level0.json, level1.json --
+    that is the order the exit walks the player through, and nothing else
+    records it.
+
+    Called at import.  There is no fallback and no `try`: a map file that
+    is missing or malformed stops every tool in the repository with the
+    reason attached, which is the correct outcome for a build whose input
+    has gone.  See the note above LEVELS.
     """
     global LEVELS
     d = path or MAPS_DIR
+    if not os.path.isdir(d):
+        raise ValueError(
+            f"{d} is not there, and it is where the maps live.  "
+            "`git checkout tools/maps` or draw one with editor/.")
     files = sorted(f for f in os.listdir(d) if f.endswith(".json"))
     if not files:
-        raise ValueError(f"no map files in {d}")
-    LEVELS = [level_from_dict(json.load(open(os.path.join(d, f))))
-              for f in files]
+        raise ValueError(f"no map files in {d} -- the game has no levels")
+    out = []
+    for f in files:
+        with open(os.path.join(d, f)) as fh:
+            try:
+                out.append(level_from_dict(json.load(fh)))
+            except ValueError as e:
+                raise ValueError(f"{f}: {e}") from e
+    LEVELS = out
     select_level(0)
     return files
 
 
-def export_levels(path=None):
-    """Write the literals above out as map files.  -> the paths written.
+def select_maze(mode):
+    """Point the loader at the layout for the target screen mode.
 
-    THIS IS THE TESTS' GROUND TRUTH.  The editor's validator is a second
-    implementation of what a legal map is, and the only thing that keeps
-    it honest is being run against the maps that actually ship.
+    Mode 0 is the game and its levels; mode 2 is the mono prototype disc,
+    which has no levels, no pickups and no way out -- see MAZE_SRC_M2.
+    """
+    global _ACTIVE
+    if mode == 0:
+        select_level(0)
+    else:
+        _ACTIVE = MAZE_SRC_M2
+
+
+def export_levels(path=None):
+    """Write LEVELS back out as map files.  -> the paths written.
+
+    A NORMALISER, now that the files ARE the source: it rewrites them in
+    this module's own formatting.  Two things want that.  `make editor`
+    runs it before the C# tests, so those tests compare the editor's
+    writer against a freshly canonical file rather than against whatever
+    was last committed; and round-tripping a file through here and back
+    is the cheapest proof that level_from_dict and level_to_dict agree.
+
+    It is also how a level gets written to somewhere else -- pass a path
+    and it will not touch tools/maps.
     """
     d = path or MAPS_DIR
     os.makedirs(d, exist_ok=True)
@@ -361,6 +352,23 @@ def select_level(n):
     MONSTER_CELLS = list(lv["monsters"])
     MONSTER_CELL = MONSTER_CELLS[0] if MONSTER_CELLS else None
     return lv
+
+
+# ---------------------------------------------------------------------
+#  ...AND HERE IS WHERE THE MAPS ARRIVE.  Every tool in this repository
+#  imports this module, so this one line is what makes tools/maps the
+#  source of the game's levels rather than a copy of them.
+#
+#  MAZE_W AND MAZE_H COME OFF LEVEL 0, and they are not free numbers: the
+#  march indexes SOLID as cy*16 + cx and SOLID is 256 bytes, so 16x16 is
+#  the engine's shape and not the map's choice.  A file of another size
+#  gets past this and is caught by the generators; the editor refuses to
+#  save one at all.
+# ---------------------------------------------------------------------
+load_levels()
+
+MAZE_W = len(LEVELS[0]["src"][0])
+MAZE_H = len(LEVELS[0]["src"])
 
 
 def _check_connected(grid, sx, sy):

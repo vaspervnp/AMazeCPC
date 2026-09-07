@@ -939,11 +939,16 @@ What is done, and what the plan below got right: the JSON format, the
 port of `world.py`'s assertions, and the tests that keep the two honest
 by running the validator against the maps that actually ship.
 
-What is **not** done: the build still ships the literals in `world.py`,
-so the files are a second copy rather than the source — that is step 1
-of "The seam" below and it is the only step still open. The editor also
-does not check pacing (that is `pacescan.py`, minutes on sixteen cores)
-or whether the monster can reach the player (`monmodel.py`).
+**The seam is closed**: `world.py` loads `tools/maps/*.json` at import
+and has no map literal left, so the files ARE the levels. See "The seam"
+below.
+
+What the editor still does not do: check **pacing** (that is
+`pacescan.py`, over all 8,128,512 states, minutes on sixteen cores) or
+whether the monster can reach the player (`monmodel.py`, per level, in
+both door states). Both are offline sweeps that a keystroke-latency UI
+cannot run; the room-size warning is the cheap approximation of the
+first and no substitute for it.
 
 ONE THING THE PLAN BELOW HAD WRONG: it gave the JSON separate `start`
 and `ammo` fields but left `@` in the grid as well. The grid carries the
@@ -1028,16 +1033,31 @@ as JSON, load it in the editor's tests, and assert it validates. That is
 the only thing that keeps the two implementations honest about what a
 legal map is.
 
-### The seam
+### The seam — CLOSED
 
-1. `world.py` gains `load_json(path)` and keeps `MAZE_SRC` as the
-   fallback, so nothing breaks on day one.
-2. The editor writes `tools/maps/level1.json`.
-3. `make` picks the map from an environment variable or a default, and
-   `gen_march.py` is unchanged — it still takes a grid and emits the
-   packed `.inc`.
-4. Only then does multi-level loading become a map-list question rather
-   than an engine question.
+1. ~~`world.py` gains `load_json(path)` and keeps `MAZE_SRC` as the
+   fallback~~ — **and then the fallback went.** `world.py` calls
+   `load_levels()` at import and there is no literal left to fall back
+   on. That was the point: a fallback is a second copy of the map, and a
+   second copy is a thing that can be edited — the editor would write
+   `level1.json`, the build would go on shipping the literal, and the two
+   would part company with nothing to say so. A missing or malformed map
+   file now stops every tool in the repository with the reason attached.
+2. ~~The editor writes `tools/maps/level1.json`.~~ Done.
+3. ~~`make` picks the map~~ — it picks **all** of them: `load_levels()`
+   reads `tools/maps/*.json` sorted by filename, and **the filename order
+   is the level order**. Nothing else records it. `gen_march.py` is
+   unchanged, as predicted: it still takes a grid and emits the packed
+   `.inc`, and `genaux.py` emits one 128-byte record a level into bank 6.
+4. ~~Only then does multi-level loading become a map-list question~~ —
+   it is one. Adding a level is adding a file.
+
+**Proven, not assumed.** The disc built from the files alone is
+byte-identical to the one built from the literals
+(`md5 6b04689d09ce5c2586b149e9664af188`); moving level 1's monster one
+cell in the JSON changes the disc and changing it back gives the original
+md5. `MAZE_SRC_M2` stays a literal — it is the mono prototype disc's
+layout, which has no levels, no pickups and no way out.
 
 ---
 

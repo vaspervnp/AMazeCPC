@@ -40,13 +40,23 @@ can read.
 
 ## The seam
 
-`world.py` gained `export_levels()` and `load_levels()`. **The build still
-ships the literals**, so the editor can be wrong without breaking a disc;
-`load_levels()` is there for the day the files become the source. See
-`plan.md`, "The seam".
+**These files are the game's levels.** `world.py` calls `load_levels()` at
+import and has no map literal left to fall back on — deliberately. A fallback
+is a second copy of the map, and a second copy is a thing that can be edited:
+the editor would write `level1.json`, the build would go on shipping the
+literal, and the two would part company with nothing to say so. A missing or
+malformed map file stops every tool in the repository with the reason
+attached.
+
+Adding a level is adding a file. **Filename order is level order** — it is
+what the exit walks the player through, and nothing else records it.
 
 The generators stay the only writers of the `.inc` files. The editor's output
 is the *input* to them, never a replacement.
+
+Verified across the switch: the disc built from the files alone is
+byte-identical to the one built from the literals, moving a monster one cell
+in the JSON changes the disc, and putting it back gives the original md5.
 
 ## The validator is the interesting part
 
