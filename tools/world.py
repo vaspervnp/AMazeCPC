@@ -1,6 +1,9 @@
 """Palette, maze data and the visibility rules -- shared by the preview and
 the table generator so the Python model and the Z80 cannot drift apart."""
 
+import json
+import os
+
 import cpchw as cpc
 
 # ------------------------------------------------------------- palette ----
@@ -248,6 +251,100 @@ def select_maze(mode):
     """Point the loader at the layout for the target screen mode."""
     global _ACTIVE
     _ACTIVE = MAZE_SRC if mode == 0 else MAZE_SRC_M2
+
+
+# ---------------------------------------------------------------------
+#  THE MAP FILE, which is what the editor writes.
+#
+#  ONE JSON FILE IS ONE ENTRY OF LEVELS ABOVE and nothing more: the same
+#  grid (with its '@' and its 'X' in it, exactly as the literals carry
+#  them), the same pickup list, the same monster list.  It deliberately
+#  does NOT repeat the start and the exit as separate fields -- they are
+#  already IN the grid, and a file that said both would be a file that
+#  could disagree with itself.  Every assertion in this module still runs
+#  on a loaded level, because a loaded level IS a LEVELS entry.
+#
+#  The generators stay the only writers of the .inc.  See plan.md.
+# ---------------------------------------------------------------------
+MAPS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maps")
+
+
+def level_to_dict(n, name=None):
+    """-> the JSON-shaped dict for LEVELS[n]."""
+    lv = LEVELS[n]
+    return {
+        "name": name or f"level {n}",
+        "size": [len(lv["src"][0]), len(lv["src"])],
+        "grid": list(lv["src"]),
+        "ammo": [list(c) for c in lv["ammo"]],
+        "monsters": [list(c) for c in lv["monsters"]],
+    }
+
+
+def level_from_dict(d):
+    """-> a LEVELS entry.  Raises ValueError on anything malformed.
+
+    SHAPE ONLY.  Whether the map is PLAYABLE -- connected, one start, the
+    pickups on floor -- is decided by load_maze/ammo_cells/monster_cells
+    the moment the level is selected, and those are the assertions the
+    engine actually depends on.  Duplicating them here would be a second
+    opinion about what a legal map is, which is the one thing this file
+    exists to prevent.
+    """
+    try:
+        grid = list(d["grid"])
+        ammo = [tuple(c) for c in d["ammo"]]
+        mon = [tuple(c) for c in d["monsters"]]
+    except (KeyError, TypeError) as e:
+        raise ValueError(f"map file is missing or malformed: {e}") from e
+    if not all(isinstance(r, str) for r in grid):
+        raise ValueError("grid must be a list of strings")
+    w = d.get("size", [len(grid[0]) if grid else 0, len(grid)])
+    if [len(grid[0]) if grid else 0, len(grid)] != list(w):
+        raise ValueError(f"size {list(w)} does not match the grid "
+                         f"({len(grid[0]) if grid else 0}x{len(grid)})")
+    for c in ammo + mon:
+        if len(c) != 2 or not all(isinstance(v, int) for v in c):
+            raise ValueError(f"{c!r} is not an (x, y) pair of ints")
+    return dict(src=grid, ammo=ammo, monsters=mon)
+
+
+def load_levels(path=None):
+    """Replace LEVELS from tools/maps/*.json, sorted by filename.
+
+    NOT CALLED BY THE BUILD YET, and that is deliberate: the literals
+    above are still what ships, so the editor can be wrong without
+    breaking a disc.  The seam is here for the day the files become the
+    source -- see plan.md, "The seam".
+    """
+    global LEVELS
+    d = path or MAPS_DIR
+    files = sorted(f for f in os.listdir(d) if f.endswith(".json"))
+    if not files:
+        raise ValueError(f"no map files in {d}")
+    LEVELS = [level_from_dict(json.load(open(os.path.join(d, f))))
+              for f in files]
+    select_level(0)
+    return files
+
+
+def export_levels(path=None):
+    """Write the literals above out as map files.  -> the paths written.
+
+    THIS IS THE TESTS' GROUND TRUTH.  The editor's validator is a second
+    implementation of what a legal map is, and the only thing that keeps
+    it honest is being run against the maps that actually ship.
+    """
+    d = path or MAPS_DIR
+    os.makedirs(d, exist_ok=True)
+    out = []
+    for n in range(len(LEVELS)):
+        p = os.path.join(d, f"level{n}.json")
+        with open(p, "w") as f:
+            json.dump(level_to_dict(n), f, indent=2)
+            f.write("\n")
+        out.append(p)
+    return out
 
 
 def select_level(n):

@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Amaze.Editor.Tests/Amaze.Editor.Tests.csproj" />
+  <Project Path="Amaze.Editor/Amaze.Editor.csproj" />
+</Solution>

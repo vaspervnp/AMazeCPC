@@ -1,0 +1,40 @@
+@* One cell.  Click to paint it with whatever tool is selected. *@
+<button class="cell @CssFor(Ch) @(Lit ? "lit" : "")"
+        title="@($"({X},{Y}) {Ch}")"
+        @onclick="() => OnPaint.InvokeAsync((X, Y))">
+  @if (HasMonster)
+  {
+    <span class="pin mon">M</span>
+  }
+  else if (HasAmmo)
+  {
+    <span class="pin ammo">a</span>
+  }
+  else if (Ch == MapCells.Start)
+  {
+    <span class="pin start">@@</span>
+  }
+  else if (Ch == MapCells.Exit)
+  {
+    <span class="pin exit">X</span>
+  }
+</button>
+
+@code {
+    [Parameter, EditorRequired] public char Ch { get; set; }
+    [Parameter] public bool HasAmmo { get; set; }
+    [Parameter] public bool HasMonster { get; set; }
+    [Parameter] public bool Lit { get; set; }
+    [Parameter, EditorRequired] public int X { get; set; }
+    [Parameter, EditorRequired] public int Y { get; set; }
+    [Parameter] public EventCallback<(int X, int Y)> OnPaint { get; set; }
+
+    // The colours are the CPC's own pens, near enough: walls the cool ramp,
+    // doors the warm one.  See PEN_INK in tools/world.py.
+    private static string CssFor(char c) => c switch
+    {
+        MapCells.Wall => "c-wall",
+        MapCells.Door => "c-door",
+        _ => "c-floor",
+    };
+}

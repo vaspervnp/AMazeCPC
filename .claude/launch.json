@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "editor",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "editor/Amaze.Editor/Amaze.Editor.csproj",
+                      "--urls", "http://localhost:5199"],
+      "port": 5199,
+      "url": "http://localhost:5199"
+    }
+  ]
+}

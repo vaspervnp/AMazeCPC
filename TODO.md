@@ -177,6 +177,7 @@ first; every number here is written down next to the code it constrains.
 | the minimap | the flood's cells, one byte each, drawn ONCE when discovered; `C_MMSEEN` 1350 against 899.1 + 255.1 measured |
 | monsters (`tools/world.py`) | **1 a level** — lv0 (2,7), lv1 (7,2), each one room out of the room you start in. Two cost 81 states of 8128512 |
 | the code segment | `game_end` is **#3100 = `BUCK0` exactly — 0 bytes free**; `level_load` spent the last 56. RAM bank 6 has 15,641 free, so the next thing to add goes THERE or something comes out of here first |
+| the map editor (`editor/`) | **BUILT** — Blazor Server, refuses to save a map that would not build. `make editor` runs its **30** tests. The build still ships `world.py`'s literals, so `tools/maps/*.json` is a second copy, not the source |
 | `emu_verify3.py` | **ALL CHECKS PASS**, period `[10]` on all six named views |
 | `emu_pace.py 600` | **MIXED, and unresolved.** Every frame buckets to 10 vsyncs, but `ctr` spreads 198.8–200.5 ms against a 1.0 ms tolerance. `r12` — the CRTC flip register, i.e. what is on screen — reads a tight [199.5, 199.8] on every flagged state, and `pace_drain` waits for vsync before it returns, so the PERIOD is an exact multiple. The tolerance was derived from sampling error alone and the vsync pulse is ~16 scanlines wide. Not widened to make it pass |
 | `emu_atomic.py` | **DOES NOT ASSEMBLE** — `tst_rast.asm` wants `RASTER_QUAD`, `RASTER_FRAME`, `RC_BUF`, `RC_EBUF`. The rasteriser's per-chunk atomic units are UNCHECKED, and were before any of this |

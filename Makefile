@@ -75,7 +75,7 @@ GEN := engine2/tools/gentab.py engine2/tools/genhud.py \
        engine2/tools/genaux.py \
        tools/world.py
 
-.PHONY: all amaze test verify rast pace gun hud enemy shots clean
+.PHONY: all amaze test verify rast pace gun hud enemy shots editor clean
 all: amaze
 
 amaze: $(SRC) $(ART) $(GEN) engine2/src/amaze.bas
@@ -170,6 +170,17 @@ rast: amaze
 # louder the pacing got the less of it ran.
 #
 # So: collect the exit codes, print a summary, and fail at the end.
+# THE MAP EDITOR, and it is NOT part of `all` on purpose: it needs the .NET
+# SDK, and a machine that can build a CPC disc has no business needing one.
+# `make editor` runs its tests, which is the half that matters here -- the
+# validator is a second implementation of what a legal map is, and these are
+# what stop it drifting from tools/world.py.  Run the editor itself with
+#   dotnet run --project editor/Amaze.Editor --urls http://localhost:5199
+editor:
+	$(PYTHON) -c "import sys; sys.path.insert(0, 'tools'); \
+	              import world; world.export_levels()"
+	dotnet test editor
+
 pace: amaze
 	@rc=0; \
 	for t in "pacescan.py" "pacemodel.py 3000" "emu_pacefit.py 40 worst" \

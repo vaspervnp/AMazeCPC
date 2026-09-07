@@ -927,6 +927,30 @@ Ordered by what unlocks the most, with the honest cost of each.
 
 ## The map editor — C# MVC Blazor
 
+**BUILT — see `editor/README.md`.** `editor/Amaze.Editor` is an ASP.NET
+Core Blazor Server page that draws the maps and refuses to save one that
+would not build; `editor/Amaze.Editor.Tests` is 30 tests. `make editor`
+exports the maps from `world.py` and runs them, and is deliberately not
+part of `all`: a machine that can build a CPC disc has no business
+needing the .NET SDK.
+
+What is done, and what the plan below got right: the JSON format, the
+`world.py` seam (`export_levels` / `load_levels`), the validator as a
+port of `world.py`'s assertions, and the tests that keep the two honest
+by running the validator against the maps that actually ship.
+
+What is **not** done: the build still ships the literals in `world.py`,
+so the files are a second copy rather than the source — that is step 1
+of "The seam" below and it is the only step still open. The editor also
+does not check pacing (that is `pacescan.py`, minutes on sixteen cores)
+or whether the monster can reach the player (`monmodel.py`).
+
+ONE THING THE PLAN BELOW HAD WRONG: it gave the JSON separate `start`
+and `ammo` fields but left `@` in the grid as well. The grid carries the
+start AND the exit, as `@` and `X`, exactly the way the Python literals
+do, and there are no separate fields — a file that said both could
+disagree with itself.
+
 A browser editor that writes the same map the build already consumes, so
 that drawing a level and running it are one step.
 

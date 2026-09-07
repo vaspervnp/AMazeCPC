@@ -1,0 +1,210 @@
+@page "/"
+@page "/editor"
+@inject MapIo Io
+@inject MapValidator Validator
+@rendermode InteractiveServer
+
+<PageTitle>AMazeCPC — map editor</PageTitle>
+
+<div class="ed">
+  <div class="ed-side">
+    <h1>AMazeCPC</h1>
+
+    <label class="ed-label">map</label>
+    <select class="ed-select" @onchange="OnPick">
+      @foreach (var f in _files)
+      {
+        <option value="@f" selected="@(f == _file)">@f</option>
+      }
+    </select>
+    <button class="ed-btn" @onclick="Reload">reload from disc</button>
+
+    <label class="ed-label">paint</label>
+    <div class="ed-palette">
+      @foreach (var t in Tools)
+      {
+        <button class="ed-tool @(t.Key == _tool ? "on" : "")"
+                title="@t.Help" @onclick="() => _tool = t.Key">
+          <span class="sw @t.Css"></span>@t.Name
+        </button>
+      }
+    </div>
+
+    <label class="ed-label">name</label>
+    <input class="ed-input" value="@(_map?.Name ?? "")"
+           @onchange="e => { if (_map is not null) _map.Name = e.Value?.ToString() ?? string.Empty; }" />
+
+    <button class="ed-btn ed-save" disabled="@(!_canSave)" @onclick="Save">
+      save @(_file ?? "")
+    </button>
+    @if (_saved is not null)
+    {
+      <p class="ed-saved">@_saved</p>
+    }
+
+    <div class="ed-findings">
+      @if (_map is null)
+      {
+        <p class="ed-none">no map loaded</p>
+      }
+      else if (_findings.Count == 0)
+      {
+        <p class="ed-ok">this map builds</p>
+      }
+      else
+      {
+        @foreach (var f in _findings)
+        {
+          <div class="f @(f.Severity == Severity.Error ? "err" : "warn")"
+               @onmouseover="() => _lit = f.Cells" @onmouseout="() => _lit = null">
+            <b>@f.Rule</b> @f.Message
+          </div>
+        }
+      }
+    </div>
+
+    <p class="ed-where">@Io.Directory</p>
+  </div>
+
+  <div class="ed-grid-wrap">
+    @if (_map is not null)
+    {
+      <div class="ed-grid">
+        @for (var y = 0; y < _map.Grid.Count; y++)
+        {
+          var yy = y;
+          @for (var x = 0; x < _map.Grid[y].Length; x++)
+          {
+            var xx = x;
+            <GridCell Ch="@_map.Grid[yy][xx]"
+                      HasAmmo="@Has(_map.Ammo, xx, yy)"
+                      HasMonster="@Has(_map.Monsters, xx, yy)"
+                      Lit="@(_lit?.Contains((xx, yy)) ?? false)"
+                      X="xx" Y="yy"
+                      OnPaint="Paint" />
+          }
+        }
+      </div>
+      <p class="ed-legend">
+        left-click paints the selected tool. The start and the exit MOVE
+        rather than multiply — there is exactly one of each.
+      </p>
+    }
+  </div>
+</div>
+
+@code {
+    private sealed record Tool(string Key, string Name, string Css, string Help);
+
+    private static readonly Tool[] Tools =
+    [
+        new("floor",   "floor",   "sw-floor",   "'.' — open"),
+        new("wall",    "wall",    "sw-wall",    "'#' — opaque and solid"),
+        new("door",    "door",    "sw-door",    "'+' — shut until SPACE, and opaque while it is"),
+        new("start",   "start",   "sw-start",   "'@' — moves, there is only one"),
+        new("exit",    "exit",    "sw-exit",    "'X' — moves, there is only one"),
+        new("ammo",    "pickup",  "sw-ammo",    "toggles a pickup on this cell"),
+        new("monster", "monster", "sw-monster", "toggles a monster on this cell"),
+    ];
+
+    private List<string> _files = [];
+    private string? _file;
+    private MapModel? _map;
+    private string _tool = "wall";
+    private IReadOnlyList<Finding> _findings = [];
+    private IReadOnlyList<(int X, int Y)>? _lit;
+    private string? _saved;
+    private bool _canSave;
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        _files = [.. Io.List()];
+        _file ??= _files.FirstOrDefault();
+        if (_file is not null) _map = Io.Load(_file);
+        _saved = null;
+        Revalidate();
+    }
+
+    private void OnPick(ChangeEventArgs e)
+    {
+        _file = e.Value?.ToString();
+        _saved = null;
+        if (_file is not null) _map = Io.Load(_file);
+        Revalidate();
+    }
+
+    private void Revalidate()
+    {
+        _findings = _map is null ? [] : Validator.Validate(_map);
+        _canSave = _map is not null &&
+                   !_findings.Any(f => f.Severity == Severity.Error);
+        _lit = null;
+    }
+
+    private static bool Has(List<int[]> cells, int x, int y) =>
+        cells.Any(c => c.Length == 2 && c[0] == x && c[1] == y);
+
+    private void Paint((int X, int Y) c)
+    {
+        if (_map is null) return;
+        var (x, y) = c;
+        _saved = null;
+
+        switch (_tool)
+        {
+            case "floor": Set(x, y, MapCells.Floor); break;
+            case "wall":  Set(x, y, MapCells.Wall);  break;
+            case "door":  Set(x, y, MapCells.Door);  break;
+
+            // ONE START AND ONE EXIT, so painting one MOVES it.  Letting the
+            // user place a second and then telling him off would be a rule
+            // the editor could simply not break.
+            case "start": Move(MapCells.Start, x, y); break;
+            case "exit":  Move(MapCells.Exit,  x, y); break;
+
+            case "ammo":    Toggle(_map.Ammo, x, y);     break;
+            case "monster": Toggle(_map.Monsters, x, y); break;
+        }
+        Revalidate();
+    }
+
+    private void Set(int x, int y, char ch)
+    {
+        // Painting over the start or the exit would delete it; the grid is
+        // where they live.  Refuse rather than lose it silently.
+        if (_map!.Grid[y][x] is MapCells.Start or MapCells.Exit) return;
+        _map.Grid[y] = MapIo.ReplaceAt(_map.Grid[y], x, ch);
+    }
+
+    private void Move(char marker, int x, int y)
+    {
+        if (_map!.Grid[y][x] == MapCells.Wall) return;   // neither stands in a wall
+        for (var yy = 0; yy < _map.Grid.Count; yy++)
+            if (_map.Grid[yy].Contains(marker))
+                _map.Grid[yy] = new string(
+                    [.. _map.Grid[yy].Select(c => c == marker ? MapCells.Floor : c)]);
+        _map.Grid[y] = MapIo.ReplaceAt(_map.Grid[y], x, marker);
+    }
+
+    private void Toggle(List<int[]> cells, int x, int y)
+    {
+        var at = cells.FindIndex(c => c.Length == 2 && c[0] == x && c[1] == y);
+        if (at >= 0) cells.RemoveAt(at); else cells.Add([x, y]);
+    }
+
+    private void Save()
+    {
+        if (_map is null || _file is null) return;
+        try
+        {
+            Io.Save(_file, _map, Validator);
+            _saved = $"written to {_file} — run `make amaze` to put it on the disc";
+        }
+        catch (Exception ex)
+        {
+            _saved = ex.Message;
+        }
+    }
+}

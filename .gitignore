@@ -7,3 +7,8 @@ __pycache__/
 # rasm drops this beside the source when a build FAILS -- an assert firing
 # is enough.  It is not the disc and nothing reads it.
 rasmoutput.bin
+
+# ---- the map editor (editor/, C# MVC + Blazor Server) -------------------
+# dotnet's build output.  `dotnet build` recreates both from the .csproj.
+editor/**/bin/
+editor/**/obj/
