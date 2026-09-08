@@ -307,8 +307,6 @@ more expensive, so the split's charge grows faster than the budget does.)
                      raster_quad up to the k'th yield and differencing
       guardfit.py    the same exhaustive replay with ONE extra atomic unit
                      at the foot of the frame -- how much enemy fits
-      enemyart.py    the guard: seven poses, five sizes, quantised BY HUE
-                     and cut into per-scanline SEGMENT lists
     prototype/       the Python design study this engine was derived from
     tools/           the Python model the prototype imports
 
@@ -463,13 +461,21 @@ process benching the other's blob: `gun_draw`, which is 2950.4 µs and stays
 
 ## The enemy does not fit in six vsyncs, and the number is not close
 
-`engine2/tools/enemyart.py` reads `engine2/art/guard/*.png` — seven poses on one
-common canvas — quantises them **by hue** (nearest-RGB puts a brown uniform
-closer to grey than to the only warm pen there is, which painted the whole
-figure grey with orange speckles) and cuts each into per-scanline **segment
-lists** at five widths. An enemy is not one run per scanline the way the weapon
-is: a standing figure has a gap between the legs and between an arm and the
-body, and filling those would paint the maze out behind him.
+**The tool that measured this is gone.** `engine2/tools/enemyart.py` read
+`engine2/art/guard/*.png` — seven poses on one common canvas — quantised them
+**by hue** (nearest-RGB puts a brown uniform closer to grey than to the only
+warm pen there is, which painted the whole figure grey with orange speckles)
+and cut each into per-scanline **segment lists** at five widths. An enemy is
+not one run per scanline the way the weapon is: a standing figure has a gap
+between the legs and between an arm and the body, and filling those would
+paint the maze out behind him.
+
+It was never in a recipe and nothing consumed its output, and the monster
+that shipped is `assets/sprites.png` compiled by `genspr.py` into rectangle
+records — a different and much cheaper shape of data. So the tool went; the
+seven PNGs are still in `engine2/art/guard/`, and git has the tool if the
+segment-list approach is ever wanted again. **The measurement below is why
+it was not**, and it is the part worth keeping:
 
     24x41px  worst pose stand   307 bytes   55 segments
     18x31px  worst pose stand   176 bytes   42 segments

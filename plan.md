@@ -911,8 +911,11 @@ Ordered by what unlocks the most, with the honest cost of each.
   (87 µs a call, 63 µs a row) and not rectangles, and beats the hand
   art by 505.6 µs drawing the identical picture.
 
-  `enemyart.py` is still in the tree, still not in the Makefile, and now
-  superseded — it should go.
+  `enemyart.py` is **gone** — it was never in the Makefile, nothing
+  consumed its output, and the segment lists it cut are a different and
+  far dearer shape of data than the rectangle records that shipped. Its
+  seven source PNGs are still in `engine2/art/guard/`, and the
+  measurement that killed the approach is kept in README.md.
 
   `genspr.py` **was in nobody's recipe either**, which is the same bug
   the note above `GEN` in the Makefile is about: `gen_spr.inc` was
