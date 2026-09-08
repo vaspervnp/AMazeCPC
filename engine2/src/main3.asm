@@ -1008,10 +1008,28 @@ C_MMSEEN    equ 1350        ; THE MAP.  Not a hook of its own: it is
                             ; is drawn once per cell now, into both
                             ; buffers, and never repainted.  See
                             ; hud2.asm:mm_seen.
-C_PIPP      equ 6050        ; THE MAP AND THE PICKUP, on one hook: 4700
-                            ; for pip_draw (measured 4669.4) and
-                            ; C_MMSEEN above.  The assert at the foot of
-                            ; this file is what keeps the sum honest.
+C_PIPP      equ 6800        ; THE MAP AND THE PICKUP, on one hook.  It was
+                            ; 6050 -- 4700 for pip_draw (measured 4669.4)
+                            ; plus C_MMSEEN -- and that was a SUM OF TWO
+                            ; SEPARATE MEASUREMENTS, never a measurement
+                            ; of the interval main_loop actually takes.
+                            ;
+                            ; MEASURED AT LAST, and it was UNDER: the
+                            ; three calls under this hook -- mm_seen,
+                            ; mm_plr, pip_draw -- come to 6725.0 us with
+                            ; the map still undiscovered and the pickup
+                            ; one cell away, against a charge of 6050.
+                            ; emu_holes.py section (e) is what found it;
+                            ; nothing had ever benched this hook, and the
+                            ; sprites became something a person PAINTS
+                            ; before anything did.
+                            ;
+                            ; 6800 bounds it by 75 us.  The state is
+                            ; synthetic -- every minimap cell new AND the
+                            ; pickup adjacent may not be reachable at the
+                            ; same moment -- so this is conservative, in
+                            ; the only direction a charge is allowed to
+                            ; be wrong.
                             ;
                             ; A LITERAL, WITH THE SUM AS AN ASSERT, and
                             ; that is not style.  pacemodel.py reads these
@@ -2346,7 +2364,12 @@ body_len    equ game_end-start
 ;  gen_maze.inc, which main3.asm includes AFTER menu.asm -- rasm
 ;  evaluates an assert where it stands, the same trap PLR_HPMAX's assert
 ;  documents at the foot of hud2.asm.
-    assert C_PIPP >= 4700 + C_MMSEEN   ; pip_draw 4669.4 + the map
+    assert C_PIPP >= 4700 + C_MMSEEN   ; pip_draw 4669.4 + the map.  The
+                                    ; sum is kept because it still has to
+                                    ; hold, but it is NOT what sets C_PIPP
+                                    ; any more -- emu_holes.py section (e)
+                                    ; benches the whole hook and read
+                                    ; 6725.0 against this sum's 6050.
     assert NAMMO + 1 <= 9           ; ...the +1 is the monster.  This is
                                     ; LEVEL 0 only -- gen_maze.inc knows
                                     ; one map -- so genaux.py asserts the

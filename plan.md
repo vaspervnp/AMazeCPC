@@ -933,6 +933,13 @@ Ordered by what unlocks the most, with the honest cost of each.
   `tst_rast.asm`, which is the *span* renderer's harness. Built
   `-DVPCOL=0` now: 130 screens byte-exact, every quad and every interval
   bounded.
+- **The world overlay is MEASURED now, and it was under.** `emu_holes.py`
+  grew a section for `C_PIPP` / `C_PIPM` / `C_PIPF`, which nothing had
+  ever benched — and the first honest number showed `C_PIPP` charging
+  6050 for an interval that costs 6725.0. It is 6800. The sprites became
+  something a person paints before anything measured what they cost;
+  `genspr.py`'s budget guard is the cheap model, this is the disc.
+  Still not measured: `C_PIPF`'s worst, which needs a shot in flight.
 - **Byte-exact models for the world overlay.** The HUD is verified byte
   for byte against `genhud.py`; `box_draw`, `mon_draw` and `fx_draw` are
   not. Every one of the five bugs found while writing them was found by

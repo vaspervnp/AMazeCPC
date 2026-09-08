@@ -171,7 +171,8 @@ first; every number here is written down next to the code it constrains.
 | `pacescan.py` (doors OPEN) | lv0 18,344 of 8,792,064 = **0.209%** (worst 197952); lv1 32,312 = **0.367%** (worst 214412) |
 | `pacescan.py` (ONE door moving) | lv0 1,243,133 of 8,128,512 = **15.29%**; lv1 1,195,797 = **14.71%** — honest charge, `rc_mul8` unrolled |
 | the disc, while a door runs | **[13, 12, 12, 11, 11, 10, 10]** vsyncs against 10 |
-| `emu_holes.py` | **PASS** — every constant a one-sided upper bound |
+| `emu_holes.py` | **PASS** — every constant a one-sided upper bound, and it covers the **world overlay** now: `C_PIPP` and `C_PIPM` had never been benched at all. `C_PIPF` is measured on the IDLE path only (no shot in flight) and is excluded from the verdict |
+| `C_PIPP` | **6050 → 6800.** The first measurement of that hook read **6725.0 µs** against a charge of 6050: it had been fitted as a SUM of two separate measurements, never as the interval `main_loop` takes. Margin +75.0 |
 | `monmodel.py` | **PASS, both levels** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs each, and it RETURNS a verdict now instead of printing one for a human to read. The map's own starting pair, doors open: lv0 **5** steps, lv1 **4** |
 | the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |
 | the minimap | the flood's cells, one byte each, drawn ONCE when discovered; `C_MMSEEN` 1350 against 899.1 + 255.1 measured |
@@ -516,6 +517,39 @@ the same 16K bank; bank 6 is entirely unused.
 ---
 
 ## Traps — do not rediscover these
+
+**A ROUTINE BENCHED OUT OF ITS FRAME MEASURES AN EARLY RETURN.**
+`mon_draw` is cut by the floor line the column renderer leaves behind,
+so with `bg_fill` / `march` / `project_all` / `door_lift` /
+`raster_paced` never run, the sprite is clipped away entirely and the
+monster pass costs **475 µs**. The first version of `emu_holes.py`'s
+section (e) did exactly that and reported `C_PIPM 7100 -- margin
++2457.9` — from a state where `mon_bot` came back **zero at every one of
+72 headings**. A comfortable margin measured on nothing is worse than no
+measurement. The section runs the whole frame in front of the hook now,
+**and proves it drew**: every candidate state is run once, `mon_bot` is
+read, only states that put the sprite on screen are benched, the count
+is printed, and none at all is a failure rather than a pass.
+
+**THE ITERATION-COUNT BENCH CANNOT RESOLVE ANYTHING BEHIND A LONG
+PRELUDE.** `Rig._loop` counts whole iterations in a fixed window, so it
+is quantised by one whole iteration — and behind a prelude that renders
+a frame, one iteration is 15 ms. Two different intervals both came back
+as **14285.7 µs**, which is 600000/42: the window over the count, not a
+measurement. `Rig.bench_exact` runs the body an exact number of times
+and sets a flag. Its resolution is then `poll/reps`, and the first run
+of it used poll 2000 with reps 8 and duly reported **6500.0** and
+**500.0** — exact multiples of 500. *Round numbers out of a timer are a
+reading of the timer.*
+
+**A PIECE OF STATE NOBODY PINNED MAKES THE NUMBER UNREPRODUCIBLE.**
+`mm_seen` folds and paints one eighth of the map a frame and `hm_ph` is
+which eighth; it survives between iterations of a bench loop. Two runs
+of the *same* `emu_holes.py` read **5925.0** and **1275.0 µs** for the
+same interval. All eight phases are pinned and swept now. The rule at
+the top of this section says to check that repeating a number gives the
+same answer — nothing in the tool was checking, and the tool is where
+the check belongs.
 
 **A TOOL THAT DIES AT THE ASSEMBLER IS A TOOL NOBODY NOTICES IS DEAD.**
 `emu_rast.py` and `emu_atomic.py` both drive `engine2/test/tst_rast.asm`,

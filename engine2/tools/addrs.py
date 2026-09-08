@@ -64,6 +64,17 @@ _WHERE = {
     "MMVARS": "hud2.asm",
     "MMBITS": "hud2.asm",
     "MONTAB": "hud2.asm",
+    # ...and the sprite drawers' scratch, for emu_holes.py -- which has to
+    # zero mon_bot before the monster pass exactly the way main3.asm does,
+    # or it benches the wrong branch of mon_draw's nearest-wins test.
+    "FXVARS": "pip.asm",
+    "MON_BOT": "pip.asm",
+    # mm_seen folds and paints ONE EIGHTH of the map a frame and hm_ph is
+    # which eighth.  It survives between iterations of a bench loop, so a
+    # bench that does not pin it is not reproducible -- two runs of the
+    # same emu_holes code read 5925.0 and 1275.0 us for the same interval
+    # before this was pinned and swept.
+    "HM_PH": "hud2.asm",
 }
 
 _EQU = r"^\s*%s\s+equ\s+(#?[0-9A-Za-z_]+(?:\s*\+\s*\d+)?)\s*(?:;.*)?$"

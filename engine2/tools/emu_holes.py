@@ -36,6 +36,7 @@ The two additions here:
     the cost of turning and of the collision test is the real one.
 """
 
+import math
 import os
 import addrs
 import random
@@ -57,6 +58,32 @@ import pacemodel as P                                        # noqa: E402
 # guard live in emu_pacefit; importing them means moving the harness
 # window moves it for every rig at once.
 from emu_pacefit import BASE, BASE_TOP, _rc_vars_end          # noqa: E402
+
+
+def _equ_int(path, name):
+    """NAME equ <decimal> out of an asm source.  Read, never copied."""
+    import re as _re
+    for ln in open(path):
+        m = _re.match(r"^%s\s+equ\s+(\d+)" % _re.escape(name), ln)
+        if m:
+            return int(m.group(1))
+    raise KeyError("%s is not an equ in %s" % (name, path))
+
+
+# pip.asm's range guard: the monster is not drawn past this many L1 cells.
+MON_MAX = _equ_int(os.path.join(_E2, "src", "pip.asm"), "MON_MAX")
+
+# HOW WIDE THE HEADING SWEEP IS EITHER SIDE OF THE BEARING.  Only states
+# that put the sprite ON SCREEN are worth benching -- the rest measure an
+# early return -- and off the centre line is where the visible-run clip
+# bites, so a window around the bearing is the interesting part of the
+# axis.  Each step costs three benched intervals at every range.
+HDG_WINDOW = 2          # headings either side of the bearing to sweep
+
+# hm_ph counts 0,4,8..28 -- the phase ALREADY MULTIPLIED, see hud2.asm's
+# mm_seen.  All eight are swept because which eighth of the map is due
+# is what decides whether mm_seen folds a cell or nothing at all.
+PHASES = tuple(range(0, 32, 4))
 
 DSK = os.path.join(_ROOT, "build", "amaze.dsk")
 SYM = os.path.join(_ROOT, "build", "e3", "game3.sym")
@@ -154,6 +181,48 @@ class Rig:
         if not 0 < n < 60000:
             raise RuntimeError("counter unusable: %d" % n)
         return (t / 4.0) / n
+
+    def bench_exact(self, body, pre=(), reps=8, poll=200):
+        """-> us for `body`, from an EXACT repetition count.
+
+        _loop counts whole ITERATIONS inside a fixed window, so it is
+        quantised by one whole iteration.  That is fine for a prelude of
+        a few hundred microseconds and useless behind section (e)'s,
+        which renders a frame: two different intervals both came back as
+        600000/42 = 14285.7 us, which is the window divided by the count
+        and not a measurement of anything.  It is the same fault the note
+        at the top of TODO.md's Traps is about, one prelude later.
+
+        Here the Z80 does the work `reps` times and sets a flag.  The
+        only error left is how far past the flag the last poll ran,
+        divided by reps -- so the RESOLUTION is poll/reps, and the first
+        run of this used poll 2000 with reps 4 and duly reported 6500.0
+        and 500.0 us, both exact multiples of 500.  Round numbers out of
+        a timer are a reading of the timer.  Same idea as emu_rcol.Rig.bench_exact, which
+        cannot be reused because it is wired to tst_rcol.asm's own flags.
+        """
+        # done and cnt live in the first bytes of the harness, jumped
+        # over, so their addresses are known without reading a .sym.
+        done, cnt = BASE + 3, BASE + 4
+        lines = (["    org #%04X" % BASE, "    jp go", "    db 0", "    db 0"]
+                 + ["go"] + self._head()[1:]
+                 + ["    ld a,%d" % reps, "    ld (#%04X),a" % cnt, "lp"]
+                 + list(pre) + list(body)
+                 + ["    ld a,(#%04X)" % cnt, "    dec a",
+                    "    ld (#%04X),a" % cnt, "    jr nz,lp",
+                    "    ld a,#FF", "    ld (#%04X),a" % done,
+                    "hlt jr hlt"])
+        blob = self._asm("holesx", lines)
+        self.c.write_ram(BASE, blob)
+        self.c.poke(done, 0)
+        self.c.set_pc(BASE)
+        ticks, n = 0, 0
+        while self.c.peek(done) != 0xFF:
+            ticks += self.c.run_us(poll)
+            n += 1
+            if n > 200000:
+                raise RuntimeError("bench_exact never finished")
+        return (ticks / 4.0) / reps
 
     def bench(self, target=None, nops=0, pre=(), us=400000):
         """-> us for the call, with the loop AND the prelude removed."""
@@ -418,9 +487,181 @@ def main(nstates=24):
     print("  worst %.1f us at %d hit points" % (php, phpa))
     print("  C_HP %d -- margin %+.1f" % (P.C_HP, P.C_HP - php))
 
+    # ---- (e) THE WORLD OVERLAY: C_PIPP, C_PIPM, C_PIPF.
+    #  NOTHING MEASURED THESE THREE, and that stopped being tolerable the
+    #  day assets/sprites.png made the monster and the pickup something a
+    #  person paints.  genspr.py checks the art against a budget, but that
+    #  is a MODEL -- 87 us a hud_rect call plus 63 a row -- and this
+    #  directory exists because models and discs disagree.
+    #
+    #  THE PRELUDE RUNS THE WHOLE FRAME IN FRONT OF THE HOOK, and that is
+    #  not thoroughness, it is the difference between measuring the thing
+    #  and measuring an early return.  mon_draw is CUT by the floor line
+    #  the column renderer leaves behind, so with bg_fill / march /
+    #  project_all / door_lift / raster_paced never run, the sprite is
+    #  clipped away entirely and the pass costs 475 us.  The first version
+    #  of this section did exactly that and reported C_PIPM 7100 with a
+    #  margin of +2457.9 -- from a state where mon_bot came back ZERO at
+    #  every one of 72 headings.  A comfortable margin measured on nothing
+    #  is worse than no measurement at all.
+    #
+    #  SO IT PROVES IT DREW.  Every candidate state is run once and
+    #  mon_bot read; only states where the monster actually landed on
+    #  screen are benched, the count is printed, and none at all is a
+    #  failure rather than a pass.
+    #
+    #  MMBITS IS ZEROED IN THE PRELUDE for the same family of reason:
+    #  mm_seen draws a cell ONCE and records it, so a second iteration
+    #  finds nothing to do and the bench measures the fold instead of the
+    #  draw -- which is how C_MMSEEN was once fitted at 900 against a real
+    #  1154.2.
+    print("\n=== (e) the world overlay -- C_PIPP, C_PIPM, C_PIPF")
+    mmn = _equ_int(os.path.join(_E2, "src", "gen_hud.inc"), "HUD_MMN")
+    hpmax = _equ_int(os.path.join(_E2, "src", "game.asm"), "MON_HPMAX")
+    mb, mt = addrs.MON_BOT, addrs.MONTAB
+
+    # The frame in front of the hook, verbatim from main_loop.
+    prefix = ["    ld a,#80", "    call #%04X" % s["FRAME_SETBUF"],
+              "    call #%04X" % s["BG_FILL"],
+              "    call #%04X" % s["MARCH"],
+              "    call #%04X" % s["PROJECT_ALL"],
+              "    call #%04X" % s["DOOR_LIFT"],
+              "    call #%04X" % s["RASTER_PACED"]]
+
+    def world(px, py, a, cell, ph=0):
+        """The world as main_loop leaves it, view and all.
+
+        hm_ph IS PINNED, and that is not tidiness.  mm_seen folds and
+        paints ONE EIGHTH of the map a frame and hm_ph is which eighth;
+        it survives between iterations of a bench loop, so leaving it
+        alone makes the map+pip interval depend on whatever the previous
+        section left behind.  Two runs of this file read 5925.0 and
+        1275.0 us for the same state before this line existed -- which
+        the note at the top of TODO.md's Traps says to check for and
+        nothing here was checking.
+        """
+        return rig.pin(px, py, a) + [
+            "    ld a,%d" % ph,
+            "    ld (#%04X),a" % addrs.HM_PH,
+            "    ld a,%d" % cell,
+            "    ld (#%04X),a" % s["MONCELL"],
+            "    ld (#%04X),a" % mt,
+            "    ld a,%d" % hpmax,
+            "    ld (#%04X),a" % (mt + 1),
+            "    ld (#%04X),a" % s["MON_HP"],
+            "    ld a,%d" % cell,
+            "    ld (#%04X),a" % s["AMMO_ST"],
+            "    ld hl,#%04X" % addrs.MMBITS,
+            "    ld de,#%04X" % (addrs.MMBITS + 1),
+            "    ld bc,%d" % (mmn * mmn // 8 - 1),
+            "    ld (hl),0",
+            "    ldir",
+        ] + prefix
+
+    mon_pass = ["    xor a", "    ld (#%04X),a" % mb,
+                "    ld hl,#%04X" % s["MON_DRAW"],
+                "    call #%04X" % s["MON_ALL"]]
+    bodies = (("map+pip", "C_PIPP",
+               ["    call #%04X" % s["MM_SEEN"], "    call #%04X" % s["MM_PLR"],
+                "    call #%04X" % s["PIP_DRAW"]]),
+              ("monsters", "C_PIPM", mon_pass),
+              ("fx", "C_PIPF", ["    call #%04X" % s["FX_DRAW"]]))
+
+    def drew(px, py, a, cell):
+        """Run ONE monster pass and read mon_bot.  0 means nothing landed."""
+        blob = rig._asm("holesdrew", rig._head() + world(px, py, a, cell)
+                        + mon_pass + ["hlt jr hlt"])
+        rig.c.write_ram(BASE, blob)
+        rig.c.set_pc(BASE)
+        rig.c.run_frames(12)
+        return rig.c.peek(mb)
+
+    tgt = None
+    for cell in range(256):
+        if rig.solid[cell] == 0 and all(
+                rig.solid[cell + d] == 0 for d in (-1, 1, -16, 16)
+                if 0 <= cell + d < 256):
+            tgt = cell
+            break
+    if tgt is None:
+        raise SystemExit("no open cell with four open neighbours to stand by")
+    tx, ty = tgt & 15, tgt >> 4
+
+    # WHERE TO STAND AND WHICH WAY TO LOOK.  The box is tallest close, so
+    # the sweep walks away from the target along each axis; the heading is
+    # the BEARING to it plus a few either side, because a sprite off the
+    # centre line is the one the visible-run clip actually bites on.
+    cands = []
+    for r in range(1, MON_MAX + 1):
+        for dx, dy in ((r, 0), (-r, 0), (0, r), (0, -r)):
+            cx, cy = tx + dx, ty + dy
+            if not (0 <= cx < 16 and 0 <= cy < 16):
+                continue
+            if rig.solid[cy * 16 + cx] != 0:
+                continue
+            bear = int(round(math.degrees(math.atan2(-(ty - cy), tx - cx))
+                             / 5.0)) % 72
+            for da in range(-HDG_WINDOW, HDG_WINDOW + 1):
+                cands.append(((cx << 8) | 128, (cy << 8) | 128,
+                              (bear + da) % 72, cx, cy, r))
+
+    live = [c for c in cands if drew(c[0], c[1], c[2], tgt)]
+    print("  %d of %d swept states put the monster on screen"
+          % (len(live), len(cands)))
+    if not live:
+        print("  *** NOTHING WAS DRAWN.  These margins would be measured on\n"
+              "      an early return -- see the note above.")
+        return 1
+
+    # SEEDED WITH THE FIRST LIVE STATE, not with None: fx_draw has
+    # nothing to draw unless a shot is in flight, so its interval is a
+    # few hundred microseconds of noise and `> worst` may never fire.
+    # A crash on the print is not the same thing as "it costs nothing".
+    first = (live[0][3], live[0][4], live[0][2], live[0][5])
+    worst = {name: (0.0, first) for name, _c, _b in bodies}
+    for (px, py, a, cx, cy, r) in live:
+        # THE MONSTER AND THE FLASH do not read hm_ph, so one phase does
+        # for them.  The MAP does, so its eight phases are swept -- but
+        # only at the closest range, where pip_draw's box is tallest and
+        # the interval is worst; mm_seen's own cost does not depend on
+        # where the player is standing.
+        phases = PHASES if r == 1 else (0,)
+        for ph in ((0,) if r != 1 else phases):
+            pre = world(px, py, a, tgt, ph)
+            # ONE cold loop a prelude, not one a body: a fresh one per
+            # body is three quarters of the work for an answer that
+            # cannot differ.
+            cold = rig.bench_exact([], pre)
+            for name, _cname, body in bodies:
+                if name != "map+pip" and ph:
+                    continue
+                v = rig.bench_exact(body, pre) - cold
+                if v > worst[name][0]:
+                    worst[name] = (v, (cx, cy, a, r))
+    for name, cname, _b in bodies:
+        v, at = worst[name]
+        cv = getattr(P, cname)
+        print("  %-8s worst %8.1f us at (%d,%d) h%d, %d cells away"
+              % (name, v, at[0], at[1], at[2], at[3]))
+        print("  %s %d -- margin %+.1f" % (cname, cv, cv - v))
+    # ---- AND WHAT THIS SECTION DOES NOT BOUND, said plainly.
+    #  fx_draw has nothing to draw unless a shot is in flight, and this
+    #  sweep never fires one: the 500 us above is the IDLE path, not the
+    #  worst, so C_PIPF is NOT measured here and is left out of the
+    #  verdict below.  Reporting a margin against an idle path would be
+    #  the same mistake the whole section was rewritten to avoid.
+    print("  ...C_PIPF's number is the IDLE path -- no shot is in flight in\n"
+          "     this sweep -- so it is NOT counted in the verdict below.")
+    print("  ...and the sweep is 4 axes from one cell, %d headings a stop:\n"
+          "     a SAMPLE.  emu_pacefit.py benches whole FRAMES at pacescan's\n"
+          "     exhaustive worst states, which is what covers the rest."
+          % (2 * HDG_WINDOW + 1))
+
     ok = (P.C_TAIL >= tail and P.C_TAIL + cd >= tail + dact
           and P.C_MSETUP >= wrap and P.C_MSETUP >= flat and P.C_HUD >= hw
-          and P.C_HP >= php)
+          and P.C_HP >= php
+          and P.C_PIPP >= worst["map+pip"][0]
+          and P.C_PIPM >= worst["monsters"][0])
     print("\n  EVERY CONSTANT A ONE-SIDED UPPER BOUND: %s" % ok)
     return 0 if ok else 1
 
