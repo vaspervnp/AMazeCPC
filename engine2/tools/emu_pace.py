@@ -523,18 +523,33 @@ def sweep(n=1400, seed=8191, nwalk=90):
             hist[round(p, 1)] += 1
         grid = all(abs(p / VSYNC_MS - round(p / VSYNC_MS)) < 0.06
                    for p in per)
-        # ...INTERNALLY CONSTANT, TO THE SAMPLER'S OWN RESOLUTION.  This
-        # was `< 0.6` ms, a constant chosen when the period was ~120 ms
-        # and never re-derived.  An interval is measured as a whole number
-        # of 250 us samples at each end, so two readings of the SAME
-        # period can differ by nearly two samples; MEASURED, a locked
-        # 199.68 ms frame reads 199.2 .. 200.0, a spread of 0.8, and 0.6
-        # flagged 27 states of 600 as MIXED that were every one of them
-        # [10] vsyncs.  Deriving the tolerance from `step` instead of
-        # writing a number down means it cannot go stale again -- and it
-        # is still far tighter than a whole vsync, which is what `grid`
-        # and `onpace` below actually test against.
-        same = max(per) - min(per) < 4.0 * SAMPLE_US / 1000.0
+        # ...AND THE CADENCE IS TESTED ON THE MEAN, NOT ON THE SPREAD.
+        #
+        # It used to be `max(per) - min(per) < 4 samples`, and that test
+        # measured the SAMPLER far more than it measured the game.  An
+        # edge is reported at the first sample at or after it, so for a
+        # period of 199.68 ms against a 250 us step -- 798.72 samples --
+        # consecutive intervals must land on 798 or 799 whatever the game
+        # does, and the ends add one more each way.  States duly read
+        # {199.2, 199.5, 199.8, 200.0, 200.2} and any that reached all
+        # five spanned exactly 4 samples and were called MIXED.
+        #
+        # MEASURED, and this is what settles it: over eight periods the
+        # SUM lands within 0.31 ms of 8 x 199.68 -- 0.02% -- on every
+        # state that was being flagged.  The jitter is NON-CUMULATIVE, so
+        # it is not the frame moving; it is the instant inside the frame
+        # at which main_loop bumps frame_ctr.  The CRTC flip, which is
+        # what the player actually sees, reads a tight [199.5, 199.8] on
+        # the same states -- see periods_r12.
+        #
+        # So the sum telescopes and the phase noise cancels: the error in
+        # the mean is the sampler's two end samples over n periods, and 3
+        # of them is that with room for the wobble the cancellation does
+        # not quite finish.  A period that WANDERS is still caught, by
+        # `grid` -- every interval has to sit on a vsync multiple to
+        # within 0.06 of one -- and by `onpace` below.
+        mean = sum(per) / len(per)
+        same = abs(mean - PACE_N * VSYNC_MS) < 3.0 * SAMPLE_US / 1000.0 / len(per)
         # ...AND ON THE RIGHT MULTIPLE.  A state that spends every frame
         # at 7 vsyncs is on the grid and is internally constant, so the
         # two tests above both pass it -- and that is exactly the shape of
@@ -553,7 +568,7 @@ def sweep(n=1400, seed=8191, nwalk=90):
             note = ("" if grid and same and onpace
                     else "  <-- LEVEL ENDED MID-MEASUREMENT" if g.ended()
                     else "  <-- NOT A VSYNC MULTIPLE" if not grid
-                    else "  <-- MIXED" if not same
+                    else "  <-- MEAN %.3f ms, NOT %.3f" % (sum(per)/len(per), PACE_N*VSYNC_MS) if not same
                     else "  <-- %d VSYNCS, NOT %d"
                          % (round(max(per) / VSYNC_MS), PACE_N))
             tag = "named" if k < len(named) else "sampled"
