@@ -156,6 +156,16 @@ first; every number here is written down next to the code it constrains.
 
 ## Where it stands
 
+`make pace` is down to **one** failing tool of eight. It was four:
+`emu_atomic.py` had not assembled since `VPCOL` went to 1, `emu_rast.py`
+alongside it, and `emu_pace.py` / `emu_pace3.py` were judging the cadence
+on a spread that measured the sampler. All four were the instrument.
+
+What is left is `pacescan.py`, and that one is the **engine**: doors shut
+it is 0 of 8,128,512 on both levels, doors open 0.209% / 0.367%, one door
+moving 15.29% / 14.71%. That is the real open problem and the numbers are
+honestly charged.
+
 | | |
 |---|---|
 | `VPCOL` (`engine2/src/vpcfg.inc`) | **1** — the column renderer ships |
