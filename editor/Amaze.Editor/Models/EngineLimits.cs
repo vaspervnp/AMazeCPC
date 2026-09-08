@@ -24,9 +24,13 @@ public static class EngineLimits
     public const int MaxScoreDigit = 9;
 
     /// <summary>
-    /// world.py: the march floods to R_MAX and files faces at L1 1..R_MAX+1,
-    /// so a room whose far corner sits past that is drawn as an open field.
-    /// 4x4 works; see the long note in world.py for why W+H &lt;= 7 is too strict.
+    /// The march floods to RMAX (4, in gen_slopes.inc) and files faces at
+    /// L1 1..RMAX+1, so a room whose far corner sits past that is drawn as
+    /// the FAR PLANE -- rastcol.asm's rc_far, a flat band -- and not as a
+    /// wall. 4x4 is already past it and that is deliberate; what the size
+    /// really has to respect is what the flood costs, which
+    /// engine2/tools/roomcost.py measures over every state of every level
+    /// in every door configuration. See the ROOMS note in world.py.
     /// </summary>
     public const int MaxRoomSide = 4;
 }

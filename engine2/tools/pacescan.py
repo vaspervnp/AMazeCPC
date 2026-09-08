@@ -112,10 +112,20 @@ def open_doors(solid, code=0):
     from the map, where every door reads 2 -- i.e. SHUT and opaque -- so
     for its whole life it swept only frames in which the flood stops at
     every doorway.  A door the player has opened is transparent, the
-    flood pours through it into the next room, and the frame is much
-    bigger: MEASURED exhaustively, cells popped 16 -> 36, quads 8 -> 14,
-    and bucket 7 goes from 4.07% of states to 44.25%.  Those are the
-    worst frames in the game and none of them was ever replayed.
+    flood pours through it into the next room, and the frame is bigger.
+
+    HOW MUCH BIGGER, MEASURED TODAY by roomcost.py over all 8128512
+    states of level 0 -- the figures this docstring used to quote were
+    from before R_MAX was cut from 6 to 4 and did not survive it:
+
+                          doors shut   doors open
+        cells popped         max 16      max 25
+        faces filed          max 12      max 13
+        farthest bucket k    max  5      max  5
+        flood stack depth    max  8      max 10
+
+    So the flood goes DEEPER through an open door but no further out --
+    the radius is what bounds the bucket, and the doors do not move it.
     """
     return bytes(code if v == DOOR_SHUT else v for v in solid)
 

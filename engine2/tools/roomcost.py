@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(_HERE)),
 _W = {}
 
 
-def _init(level=0):
+def _init(level=0, doors=0):
     import marchmodel as mm
     import pacescan as ps
     # THE LEVEL TRAVELS IN initargs, and it has to: select_level() rebinds
@@ -40,7 +40,7 @@ def _init(level=0):
     # them.  See the same note in pacescan._init.
     ps.world.select_level(level)
     _W["mm"] = mm
-    _W["solid"], _W["pos"] = ps.positions()
+    _W["solid"], _W["pos"] = ps.positions(doors)
 
 
 def _chunk(args):
@@ -65,14 +65,14 @@ def _chunk(args):
     return cells, faces, far, depth, worst
 
 
-def main(jobs=None, level=0):
+def main(jobs=None, level=0, doors=0, label=""):
     import multiprocessing as mp
     import marchmodel as mm
     import pacescan as ps
     jobs = jobs or os.cpu_count()
-    _init(level)
+    _init(level, doors)
     pos = _W["pos"]
-    print(f"\n==== LEVEL {level} " + "=" * 52)
+    print(f"\n==== LEVEL {level}  DOORS {label or 'ALL SHUT'} " + "=" * 20)
     print(f"R_MAX {mm.R_MAX} -> faces filed at L1 1..{mm.R_MAX + 1}, "
           f"so rooms are bounded by W + H <= {mm.R_MAX + 1}")
     print(f"{len(pos)} standable positions x {mm.N_ANGLES} headings = "
@@ -85,7 +85,7 @@ def main(jobs=None, level=0):
     far = collections.Counter()
     depth = collections.Counter()
     worst = (0, None)
-    with mp.Pool(jobs, initializer=_init, initargs=(level,)) as p:
+    with mp.Pool(jobs, initializer=_init, initargs=(level, doors)) as p:
         for c, f, k, d, w in p.imap_unordered(_chunk, tasks):
             cells.update(c)
             faces.update(f)
@@ -146,11 +146,26 @@ def _stack_entries():
 
 
 def all_levels(jobs=None):
+    """Every level AND every door configuration.
+
+    THE DOORS WERE THE HOLE.  This file sized the march's buckets and its
+    flood stack with `positions()` at its default -- every door SHUT, and
+    therefore opaque -- so "bucket k <= 7 over all 8128512 states" was a
+    claim about the map as it LOADS and about no state a player reaches
+    by opening one.  An open door is transparent to the march: pacescan
+    measured bucket 7 going from 4.07% of states to 44.25% across that
+    same change.  And what is over-run here is not a frame, it is
+    MEMORY -- past the last bucket page faces are dropped, past MSTKTOP
+    the flood stack writes into the buckets themselves.
+    """
     import genaux
+    import pacescan as ps
     rc = 0
     for lv in range(genaux.nlevel()):
-        rc |= main(jobs, lv)
-    print("\nALL LEVELS: " + ("FITS" if not rc else "ONE OR MORE OVERRUN"))
+        for code, label in ps.CONFIGS:
+            rc |= main(jobs, lv, code, label.split(" --")[0])
+    print("\nALL LEVELS, ALL DOOR CONFIGURATIONS: "
+          + ("FITS" if not rc else "ONE OR MORE OVERRUN"))
     return rc
 
 

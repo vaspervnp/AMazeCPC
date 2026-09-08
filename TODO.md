@@ -166,7 +166,7 @@ first; every number here is written down next to the code it constrains.
 | `emu_rcol.py atomic` | **PASS** at rest AND with a moving face at every lift (`atomic n <dlift> 1`) |
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
 | the levels (`tools/world.py`) | **2**, 128-byte records in RAM bank 6; the exit advances, the last wraps; a death does NOT advance |
-| `roomcost.py` | **FITS, both levels** — bucket k max **5 of 7** pages, flood depth **8 of 25** entries, over all 8,128,512 states each |
+| `roomcost.py` | **FITS — both levels, all five door configurations**, 81 million states. Bucket k max **5 of 7** pages; flood depth **8 of 25** shut, **10** open |
 | `pacescan.py` (doors shut) | **PASS, both levels** — 0 of 8,128,512 over budget, worst 177032. The two are **one measurement**: see below |
 | `pacescan.py` (doors OPEN) | lv0 18,344 of 8,792,064 = **0.209%** (worst 197952); lv1 32,312 = **0.367%** (worst 214412) |
 | `pacescan.py` (ONE door moving) | lv0 1,243,133 of 8,128,512 = **15.29%**; lv1 1,195,797 = **14.71%** — honest charge, `rc_mul8` unrolled |
@@ -483,18 +483,22 @@ arrives in **4**. `monmodel.py` reports this pair per level, in both
 door states, which is what made the difference visible at all.
 
 
-**`roomcost.py` sizes the flood with the doors SHUT.** It calls
-`pacescan.positions()` with the default configuration, so "bucket k <= 7,
-flood depth <= 8 over all 8,128,512 states" is a claim about the map as
-it *loads*. An opened door is transparent to the march — that is the
-whole reason `pacescan` grew its door configurations, and it moved the
-worst frame from 4.07% of states in bucket 7 to 44.25%. The same flood
-sizes the **buckets and the flood stack**, and overrunning those is not
-a dropped frame, it is faces dropped and a stack writing into the
-buckets. Sweeping `roomcost` over `CONFIGS` the way `pacescan` does is
-five times the runtime and has not been done. It now prints FITS /
-OVERRUNS against `MSTKBOT`/`MSTKTOP` read out of `march.asm`, and runs
-every level, so the gap is the door configurations and nothing else.
+**~~`roomcost.py` sizes the flood with the doors SHUT.~~ CLOSED.** It
+sweeps every level in every door configuration now — ten passes of
+8,128,512 states, 81 million in all — and all ten **FIT**:
+
+| | doors shut | doors open |
+|---|---|---|
+| cells popped | max 16 | max 25 |
+| faces filed | max 12 | max 13 |
+| farthest bucket k | max **5** of 7 pages | max **5** |
+| flood stack depth | max **8** of 25 entries | max **10** |
+
+An open door makes the flood go **deeper** but no **further out**: the
+radius bounds the bucket and the doors do not move it. That was the
+question worth answering, because overrunning those two is not a dropped
+frame — past the last bucket page faces are dropped, past `MSTKTOP` the
+stack writes into the buckets themselves.
 
 
 **Big rooms.** `R_MAX = 6` (L1 cells, `marchmodel.py`) bounds the sight

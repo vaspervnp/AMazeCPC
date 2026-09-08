@@ -60,29 +60,36 @@ def wall_pen(f, side, door=False):
 # of the 3x4 rooms they replace, and square rather than oblong, which is
 # what makes them read as rooms instead of wide corridors.
 #
-# AND THEY COST THE ENGINE NOTHING.  The obvious rule is that a room W wide
-# and H tall puts its far WALL corner at L1 W+H, so W+H <= R_MAX+1 = 7 and
-# 4x4 is one too far.  THAT RULE IS TOO STRICT, and the thing it gets wrong
-# is worth keeping: the only cell at L1 8 in a 4x4 room is the wall CORNER
-# diagonally opposite, and both of its room-side neighbours are also wall,
-# so it has no face pointing into the room at all.  What has to be inside
-# the march is every VISIBLE face, and those top out at L1 7.
+# R_MAX IS 4 AND THIS NOTE SAID 6 FOR A LONG TIME.  It was 6; cutting it to
+# 4 BUYS A WHOLE VSYNC PERIOD, measured, because the flood's area falls as
+# the square of the radius -- see the note on R_MAX in marchmodel.py, which
+# points back here, and RMAX equ 4 in gen_slopes.inc, which is what the Z80
+# actually tests.  Everything past L1 R_MAX+1 is the FAR PLANE: a flat band
+# at a fixed height drawn by rastcol.asm's rc_far, not a missing wall.
 #
-# MEASURED, exhaustively, by engine2/tools/roomcost.py over all 8128512
-# reachable states of this map -- and measured at R_MAX 6 AND 7, which give
-# byte-identical histograms, so the extra radius files nothing and is not
-# taken:
+# So the arithmetic below is W + H <= R_MAX+1 = 5, and a 4x4 room is well
+# past it -- deliberately.  Its far faces are the far plane, which is the
+# whole reason RC_FARH exists.  What the room size still has to respect is
+# what the FLOOD costs, and that is measured rather than argued:
 #
-#     cells popped        max 16   (was ~15 on the 3x4 map)
-#     faces filed         max 16
-#     farthest bucket k   max  7   <- so seven buckets still, no memory move
-#     flood stack depth   max  8   <- against 128 entries; 16x over-provisioned
+# MEASURED, exhaustively, by engine2/tools/roomcost.py -- over all 8128512
+# reachable states, on EVERY level and in EVERY door configuration, which
+# is 81 million states.  An open door is transparent to the march, so the
+# doors-shut sweep this note used to quote was a claim about the map as it
+# LOADS and about no state a player reaches by opening one:
 #
-# So R_MAX stays 6, march.asm's bucket pages and flood stack are untouched,
-# and the worst march is 16 cells = 11840 us at C_CELL.  Re-run roomcost.py
-# after ANY change to this map: the farthest-bucket line is the one that
-# matters, because march.asm files a face by |dx|+|dy| with no upper bound
-# and a key of 8 would write into the page above the last bucket.
+#                        doors shut   doors open
+#     cells popped          max 16      max 25
+#     faces filed           max 12      max 13
+#     farthest bucket k     max  5      max  5   <- of 7 pages
+#     flood stack depth     max  8      max 10   <- of 25 entries
+#
+# So march.asm's bucket pages and flood stack are untouched,
+# with room to spare in both.  Re-run roomcost.py after ANY change to this
+# map: the farthest-bucket line is the one that matters, because march.asm
+# files a face by |dx|+|dy| and a key past the last page would write into
+# whatever is above it.  It prints FITS or OVERRUNS against MSTKBOT and
+# MSTKTOP read out of march.asm, so it is a verdict and not a reading.
 #
 # THE MAP ITSELF IS NOT IN THIS FILE.  It is tools/maps/level0.json, and
 # so is every other level -- but the paragraph above is about the SHAPE of
