@@ -171,7 +171,7 @@ first; every number here is written down next to the code it constrains.
 | `pacescan.py` (doors OPEN) | lv0 18,344 of 8,792,064 = **0.209%** (worst 197952); lv1 32,312 = **0.367%** (worst 214412) |
 | `pacescan.py` (ONE door moving) | lv0 1,243,133 of 8,128,512 = **15.29%**; lv1 1,195,797 = **14.71%** — honest charge, `rc_mul8` unrolled |
 | the disc, while a door runs | **[13, 12, 12, 11, 11, 10, 10]** vsyncs against 10 |
-| `emu_holes.py` | **PASS** — every constant a one-sided upper bound, and it covers the **world overlay** now: `C_PIPP` and `C_PIPM` had never been benched at all. `C_PIPF` is measured on the IDLE path only (no shot in flight) and is excluded from the verdict |
+| `emu_holes.py` | **PASS** — every constant a one-sided upper bound, and it covers the **world overlay** now: `C_PIPP` 6725.0/6800, `C_PIPM` 6575.0/7100, `C_PIPF` 800.0/1000, all three benched on the disc with a shot in flight and the monster proved on screen. None of them had ever been measured |
 | `C_PIPP` | **6050 → 6800.** The first measurement of that hook read **6725.0 µs** against a charge of 6050: it had been fitted as a SUM of two separate measurements, never as the interval `main_loop` takes. Margin +75.0 |
 | `monmodel.py` | **PASS, both levels** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs each, and it RETURNS a verdict now instead of printing one for a human to read. The map's own starting pair, doors open: lv0 **5** steps, lv1 **4** |
 | the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |

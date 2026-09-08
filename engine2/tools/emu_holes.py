@@ -556,6 +556,27 @@ def main(nstates=24):
             "    ld bc,%d" % (mmn * mmn // 8 - 1),
             "    ld (hl),0",
             "    ldir",
+            # ---- A SHOT IN FLIGHT, so fx_draw is measured on the path
+            #      that DRAWS.  It has two branches -- the muzzle flash
+            #      while gun_recoil lasts, and the mark while fx_timer
+            #      does -- and the worst is both.  Without these it takes
+            #      neither, which is what the first version of this
+            #      section reported 500 us for and then had to exclude
+            #      from the verdict.
+            #
+            #      NEITHER RECTANGLE'S SIZE DEPENDS ON THIS STATE: both
+            #      are FX_W x FX_H, fixed, so fx_row only decides WHERE
+            #      and 46 is simply inside the viewport.  fx_timer is set
+            #      high because fx_draw decrements it every call and the
+            #      bench calls it `reps` times.
+            "    ld a,%d" % 255,
+            "    ld (#%04X),a" % addrs.FXVARS,          # fx_timer
+            "    ld a,46",
+            "    ld (#%04X),a" % (addrs.FXVARS + 1),    # fx_row
+            "    ld a,#FF",
+            "    ld (#%04X),a" % (addrs.FXVARS + 2),    # fx_pen
+            "    ld a,1",
+            "    ld (#%04X),a" % s["GUN_RECOIL"],
         ] + prefix
 
     mon_pass = ["    xor a", "    ld (#%04X),a" % mb,
@@ -644,24 +665,17 @@ def main(nstates=24):
         print("  %-8s worst %8.1f us at (%d,%d) h%d, %d cells away"
               % (name, v, at[0], at[1], at[2], at[3]))
         print("  %s %d -- margin %+.1f" % (cname, cv, cv - v))
-    # ---- AND WHAT THIS SECTION DOES NOT BOUND, said plainly.
-    #  fx_draw has nothing to draw unless a shot is in flight, and this
-    #  sweep never fires one: the 500 us above is the IDLE path, not the
-    #  worst, so C_PIPF is NOT measured here and is left out of the
-    #  verdict below.  Reporting a margin against an idle path would be
-    #  the same mistake the whole section was rewritten to avoid.
-    print("  ...C_PIPF's number is the IDLE path -- no shot is in flight in\n"
-          "     this sweep -- so it is NOT counted in the verdict below.")
-    print("  ...and the sweep is 4 axes from one cell, %d headings a stop:\n"
-          "     a SAMPLE.  emu_pacefit.py benches whole FRAMES at pacescan's\n"
-          "     exhaustive worst states, which is what covers the rest."
-          % (2 * HDG_WINDOW + 1))
+    print("  ...the sweep is 4 axes from one cell, %d headings a stop, with a\n"
+          "     shot in flight throughout: a SAMPLE.  emu_pacefit.py benches\n"
+          "     whole FRAMES at pacescan's exhaustive worst states, which is\n"
+          "     what covers the combinations." % (2 * HDG_WINDOW + 1))
 
     ok = (P.C_TAIL >= tail and P.C_TAIL + cd >= tail + dact
           and P.C_MSETUP >= wrap and P.C_MSETUP >= flat and P.C_HUD >= hw
           and P.C_HP >= php
           and P.C_PIPP >= worst["map+pip"][0]
-          and P.C_PIPM >= worst["monsters"][0])
+          and P.C_PIPM >= worst["monsters"][0]
+          and P.C_PIPF >= worst["fx"][0])
     print("\n  EVERY CONSTANT A ONE-SIDED UPPER BOUND: %s" % ok)
     return 0 if ok else 1
 
