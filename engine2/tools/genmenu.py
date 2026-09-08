@@ -190,7 +190,23 @@ WIN = [
     (17, P_GO,    None, "PRESS SPACE TO PLAY AGAIN"),
 ]
 
-SCREENS = [("TEXT", MENU), ("DEAD", DEAD), ("WIN", WIN)]
+#  ---- ...AND THE ONE FOR REACHING THE EXIT OF A LEVEL THAT IS NOT THE
+#       LAST.  It said YOU ESCAPED both times before this existed: the
+#       player was told he had won halfway through and told exactly the
+#       same thing at the end.  main3.asm's player_won already had the
+#       `cp NLEVEL` branch; it just had nothing different to say.
+#
+#       IT DOES NOT SAY "WELL DONE".  The line has to tell the player
+#       what SPACE will do, and what it will do is put him somewhere new
+#       with the map blank again -- see new_game, which rebuilds the
+#       world for a level change exactly as it does for a death.
+LEVEL = [
+    (7,  P_TITLE, None, "LEVEL COMPLETE"),
+    (11, P_TEXT,  None, "SCORE @"),
+    (17, P_GO,    None, "PRESS SPACE TO GO ON"),
+]
+
+SCREENS = [("TEXT", MENU), ("DEAD", DEAD), ("WIN", WIN), ("LEVEL", LEVEL)]
 
 #  ---- THE SCORE DIGIT -----------------------------------------------
 #  '@' IS NOT A GLYPH, it is a hole in the string.  A character the font
@@ -328,6 +344,7 @@ def write_inc(path):
          f"MN_O_TEXT    equ {off['TEXT']}",
          f"MN_O_DEAD    equ {off['DEAD']}",
          f"MN_O_WIN     equ {off['WIN']}",
+         f"MN_O_LEVEL   equ {off['LEVEL']}",
          "",
          f"MN_GSCORE    equ {MN_GSCORE}   ; mn_char swaps this for (scr_g)",
          f"MN_G0        equ {CHARSET.index('0')}   ; ...and 0 is this glyph",

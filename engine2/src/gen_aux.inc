@@ -25,4 +25,6 @@ LVO_NAMMO   equ 68
 LVO_NMON    equ 77
 MAXAMMO_LV  equ 8
 MAXMON_LV   equ 4
-AUXEND      equ #42E7
+MENUTB      equ #42E7          ; the title screen's font and words
+                                 ; -- see genmenu.blob()
+AUXEND      equ #4603

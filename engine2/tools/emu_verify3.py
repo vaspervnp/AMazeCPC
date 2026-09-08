@@ -262,6 +262,15 @@ def _menubuf():
 
 
 MENUBUF = _menubuf()
+
+# WHICH WORD LIST IS WHICH.  main3.asm's nl_screen used to hold the
+# address of one of four trampolines -- menu_show, menu_dead, menu_win,
+# menu_level -- and this file compared against their .sym entries.  The
+# trampolines are gone: nl_screen holds the LIST, so the thing to compare
+# against is MENUBUF plus genmenu's own offset for that screen, which is
+# read from the generator rather than from a symbol that no longer exists.
+MNLIST = {name: MENUBUF + off
+          for name, off in _GMENU.blob()[1].items()}
 P_TEXT = _GMENU.PENS.index(_GMENU.P_TEXT)
 
 
@@ -1005,10 +1014,10 @@ def main():
     # painted MENU_WIN, and this section passed. nl_screen names the
     # screen and cur_level says the level did not move.
     scr = struct.unpack("<H", c.read_ram(g.s["NL_SCREEN"], 2))[0]
-    check(scr == g.s["MENU_DEAD"] and c.peek(g.s["CUR_LEVEL"]) == lvl0,
+    check(scr == MNLIST["DEAD"] and c.peek(g.s["CUR_LEVEL"]) == lvl0,
           "...on the DEATH screen, and the level does NOT advance",
-          f"nl_screen #{scr:04X} (menu_dead #{g.s['MENU_DEAD']:04X}, "
-          f"menu_win #{g.s['MENU_WIN']:04X}), "
+          f"nl_screen #{scr:04X} (DEAD #{MNLIST['DEAD']:04X}, "
+          f"WIN #{MNLIST['WIN']:04X}, LEVEL #{MNLIST['LEVEL']:04X}), "
           f"cur_level {lvl0} -> {c.peek(g.s['CUR_LEVEL'])}")
 
     # ---- (c) ...AND SPACE STARTS A NEW LIFE, world and all.  MENUBUF is
@@ -1126,9 +1135,20 @@ def main():
     f0 = g3.frames()
     g3.c.run_frames(4 * PACE_N)
     check((x >> 8, y >> 8) == (ex, ey) and g3.frames() == f0,
-          "walking onto it stops the frame loop -- the win screen is up",
+          "walking onto it stops the frame loop -- an end screen is up",
           f"player at ({x>>8},{y>>8}), exit ({ex},{ey}), "
           f"{(g3.frames() - f0) & 0xFFFF} game frames in {4*PACE_N} CPC")
+    # ---- ...AND IT IS THE RIGHT ONE.  Level 0 is not the last, so
+    #      leaving it is LEVEL COMPLETE and not YOU ESCAPED.  Both
+    #      screens stop the frame loop and both restart the world, so
+    #      "the loop stopped" cannot tell them apart -- which is how the
+    #      player came to be told he had won halfway through the game
+    #      and told exactly the same thing at the end.
+    scr0 = struct.unpack("<H", g3.c.read_ram(g3.s["NL_SCREEN"], 2))[0]
+    check(scr0 == MNLIST["LEVEL"],
+          "...and leaving a level that is NOT the last says LEVEL COMPLETE",
+          f"nl_screen #{scr0:04X} (LEVEL #{MNLIST['LEVEL']:04X}, "
+          f"WIN #{MNLIST['WIN']:04X})")
 
     # ---- ...AND THE SCORE IS ON THE SCREEN, byte for byte against the
     #      FONT.  Checking (scr_g) only proves the game counted; this
@@ -1211,6 +1231,7 @@ def main():
     g3.c.run_frames(40 * PACE_N)
     g3.c.key_up(cpcmod.KEY_UP)
     g3.c.run_frames(2 * PACE_N)
+    scr1 = struct.unpack("<H", g3.c.read_ram(g3.s["NL_SCREEN"], 2))[0]
     g3.c.key_down(cpcmod.KEY_SPACE)
     g3.c.run_frames(PACE_N + 5)
     g3.c.key_up(cpcmod.KEY_SPACE)
@@ -1220,6 +1241,10 @@ def main():
     x, y, a = g3.player()
     f0 = g3.frames()
     g3.c.run_frames(4 * PACE_N)
+    check(scr1 == MNLIST["WIN"],
+          "...and leaving the LAST one says YOU ESCAPED",
+          f"nl_screen #{scr1:04X} (WIN #{MNLIST['WIN']:04X}, "
+          f"LEVEL #{MNLIST['LEVEL']:04X})")
     check(back == 0 and (x >> 8, y >> 8) == rec0["start"]
           and g3.c.peek(g3.s["LV_EXIT"]) == rec0["exit"]
           and g3.frames() != f0,

@@ -46,6 +46,7 @@ import genhud                                                   # noqa: E402
 import world                                                    # noqa: E402
 import marchmodel                                               # noqa: E402
 import gen_march                                                # noqa: E402
+import genmenu                                                  # noqa: E402
 
 BANK_BASE = 0x4000
 LVREC = 128             # bytes a level; a power of two so the index
@@ -186,6 +187,18 @@ def build():
             rec[78 + i] = y * 16 + x
         blob += bytes(rec)
     world.select_level(0)
+    # ---- THE TITLE SCREEN'S FONT AND WORDS -------------------------
+    #  796 bytes read ONCE, at startup and again at every end screen,
+    #  and never on the frame path -- which is this bank's whole rule.
+    #  They were in bank 5 until a fourth screen took it to 16390 of
+    #  16384, and bank 5 is TEXTURES: the column renderer reads them
+    #  every frame, so it is full because it is doing its job.  Here
+    #  there are fifteen thousand bytes spare.  menu.asm pages this bank
+    #  in for exactly one LDIR and pages bank 4 back, the same as before
+    #  -- only the config byte changed.
+    at["MENUTB"] = BANK_BASE + len(blob)
+    blob += genmenu.blob()[0]
+
     # ...AND THE TWO READINGS OF LEVEL 0 MUST AGREE.  packed_maze() parses
     # the bytes gen_march.py commented into gen_maze.inc; the loop above
     # packs them again out of world.py.  Both are still wanted -- three
@@ -230,6 +243,8 @@ LVO_NAMMO   equ 68
 LVO_NMON    equ 77
 MAXAMMO_LV  equ {maxammo}
 MAXMON_LV   equ {maxmon}
+MENUTB      equ #{menutb:04X}          ; the title screen's font and words
+                                 ; -- see genmenu.blob()
 AUXEND      equ #{auxend:04X}
 """
 
@@ -284,7 +299,8 @@ def main():
         ramcfg=RAMCFG, hudrects=at["HUDRECTS"], nrect=at["HUD_NRECT"],
         hudndl=at["HUDNDL"], ndot=at["HUD_NDOT"], maze=at["MAZEDATA"],
         levels=at["LEVELS"], nlevel=at["NLEVEL"], lvrec=LVREC,
-        maxammo=MAXAMMO, maxmon=MAXMON, auxend=at["AUXEND"]))
+        maxammo=MAXAMMO, maxmon=MAXMON, menutb=at["MENUTB"],
+        auxend=at["AUXEND"]))
     print(f"bank 6: {len(blob)} of {BANK_SIZE} bytes, "
           f"{BANK_SIZE - len(blob)} free")
     print(f"  HUDRECTS  #{at['HUDRECTS']:04X}  {at['HUD_NRECT']} rectangles, "

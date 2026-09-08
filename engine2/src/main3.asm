@@ -1380,10 +1380,12 @@ start
                                     ; state; silence it before the menu
     call set_palette
 
-    ld   hl,menu_show               ; ---- WHICH SCREEN COMES FIRST.  At
-    ld   (nl_screen),hl             ; boot it is the title; after the last
-                                    ; hit point, player_died points this
-                                    ; at menu_dead and jumps back here.
+    ; ---- WHICH SCREEN COMES FIRST is nl_screen's INITIAL VALUE now, and
+    ;      not two instructions here.  It is a `dw` in the body, which the
+    ;      boot stub copies down like everything else, and `start` runs
+    ;      exactly once -- new_game is jumped to, never `start` -- so
+    ;      writing the same constant at run time bought nothing.  Six
+    ;      bytes, which is what the LEVEL COMPLETE screen cost.
 
 ; ---------------------------------------------------------------------
 ;  new_game -- EVERYTHING A LIFE NEEDS, and the death loop re-enters it.
@@ -1586,7 +1588,7 @@ main_loop
 ; start.  player_won goes AFTER this block, and the cost of the reorder
 ; is nothing -- pw_screen's `jr pd_set` reaches backwards just as well.
 player_died
-    ld   hl,menu_dead               ; both screens destroy the map (see
+    ld   hl,MNDEAD                  ; both screens destroy the map (see
 pd_set                              ; MENUBUF) and both therefore restart
     ld   (nl_screen),hl             ; the world, which is what "the level
     jp   new_game                   ; ends" means.  new_game resets SP,
@@ -1601,24 +1603,38 @@ pd_set                              ; MENUBUF) and both therefore restart
 player_won
     ld   a,(cur_level)
     inc  a
-    cp   NLEVEL
-    jr   nc,pw_last
-    ld   (cur_level),a              ; on to the next one
-    jr   pw_screen
-pw_last
-    xor  a
-    ld   (cur_level),a              ; ...and back to the first for the
-pw_screen                           ; next game
-    ld   hl,menu_win                ; the ONLY difference between winning
-    jr   pd_set                     ; and dying is which word list gets
-                                    ; painted
+    ; ---- ASSUME THE NEXT LEVEL AND TAKE IT BACK, which is TWO BYTES
+    ;      SMALLER than the branch it replaces even though it now has
+    ;      two screens to choose between: both arms end up storing
+    ;      cur_level, so the store is shared instead of written twice.
+    ;      The code segment was at game_end == BUCK0 exactly when this
+    ;      screen was added and every byte had to come from somewhere.
+    ld   hl,MNLEVEL                 ; it SAYS "LEVEL COMPLETE" now.  It
+    cp   NLEVEL                     ; said YOU ESCAPED both times before:
+    jr   c,pw_keep                  ; the player was told he had won
+    xor  a                          ; halfway through and told exactly
+    ld   hl,MNWIN                   ; the same thing at the end.  This
+pw_keep                             ; branch already existed -- it just
+    ld   (cur_level),a              ; had nothing different to say.
+    jr   pd_set
 
-; --- CALL THE ROUTINE IN HL.  Three bytes, and the alternative is a
-;     branch on a flag that means the same thing twice.
+; --- PAINT THE WORD LIST IN HL.  It was `jp (hl)` into one of four
+;     trampolines in menu.asm, each of which loaded a list and jumped to
+;     mn_at; this jumps there itself and the four are gone.  One byte
+;     dearer here, eighteen cheaper there, and menu.asm is on the far
+;     side of rastcol.asm's align pad where the difference is real.
 nl_call
-    jp   (hl)
+    jp   mn_at
 
-nl_screen   dw 0                    ; -> menu_show or menu_dead
+nl_screen   dw MNTEXT               ; WHICH WORD LIST new_game paints --
+                                    ; MNTEXT, MNDEAD, MNWIN or MNLEVEL,
+                                    ; and not a routine that would then
+                                    ; load one.  INITIALISED HERE: `start`
+                                    ; used to write it at boot and runs
+                                    ; exactly once, so the constant may as
+                                    ; well be in the body the stub copies
+                                    ; down.  player_died and player_won
+                                    ; are the only things that move it.
 
 
 ; ---------------------------------------------------------------------

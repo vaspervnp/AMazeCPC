@@ -66,6 +66,7 @@ MNFONT      equ MENUBUF+MN_O_FONT
 MNTEXT      equ MENUBUF+MN_O_TEXT
 MNDEAD      equ MENUBUF+MN_O_DEAD
 MNWIN       equ MENUBUF+MN_O_WIN
+MNLEVEL     equ MENUBUF+MN_O_LEVEL
 
 ; ---------------------------------------------------------------------
 ;  TWO SCREENS, ONE BLITTER.  genmenu.py emits the words as a list of
@@ -81,24 +82,34 @@ MNWIN       equ MENUBUF+MN_O_WIN
 ;              That is not a limitation being worked around, it is why
 ;              the death screen restarts rather than continues.
 ; ---------------------------------------------------------------------
-menu_win
-    ld   hl,MNWIN
-    jr   mn_at
-menu_dead
-    ld   hl,MNDEAD
-    jr   mn_at
-menu_show
-    ld   hl,MNTEXT
+; ---------------------------------------------------------------------
+;  mn_at -- IN HL = the word list.  Paints it, waits for SPACE, returns.
+;
+;  THERE USED TO BE FOUR TRAMPOLINES IN FRONT OF THIS -- menu_show,
+;  menu_dead, menu_win, menu_level -- each of them `ld hl,<list>` and a
+;  jump here, and main3.asm's nl_screen held the address of one of THEM.
+;  Eighteen bytes to say a thing HL could say directly.  They went when
+;  the fourth screen arrived and the code segment was at game_end ==
+;  BUCK0 exactly: nl_screen holds the LIST now and nl_call jumps here.
+;
+;  This file is included AFTER rastcol.asm's align pad, so bytes saved
+;  here are bytes the body actually gets back -- which is not true of
+;  everything before it.  See the note in main3.asm's memory map.
+; ---------------------------------------------------------------------
 mn_at
     ld   (mn_list),hl
     ; ---- FETCH IT OUT OF BANK 5 FIRST.  The font, the colour tables and
     ;      the words are 568 bytes that are read once and never again, so
-    ;      they live in the renderer's table bank rather than in a code
-    ;      segment that has hit its ceiling thirteen times.  Bank 5 goes
-    ;      over &4000 for exactly one LDIR -- and LINETAB, which the blit
-    ;      below needs, is in bank 4 underneath it, which is why this is
-    ;      a copy and not a read in place.
-    ld   bc,#7F00+TEXCFG
+    ;      they live in RAM BANK 6 rather than in a code segment that has
+    ;      hit its ceiling thirteen times.  It was bank 5 until a fourth
+    ;      screen took that to 16390 of 16384 -- and bank 5 is TEXTURES,
+    ;      which the column renderer reads every frame, so it is full
+    ;      because it is doing its job.  Bank 6 is for exactly this: data
+    ;      the frame path never touches.  It goes over &4000 for one LDIR
+    ;      -- and LINETAB, which the blit below needs, is in bank 4
+    ;      underneath it, which is why this is a copy and not a read in
+    ;      place.
+    ld   bc,#7F00+AUXCFG
     out  (c),c
     ld   hl,MENUTB
     ld   de,MENUBUF

@@ -66,6 +66,30 @@ VSYNC_MS = 19.968                       # 312 lines x 64 us
 # did when PACE_FRAMES went to 10.
 SAMPLE_US = 250
 
+
+def _mntext():
+    """menu.asm's MNTEXT -- the title screen's word list.
+
+    nl_screen used to hold the address of a TRAMPOLINE (menu_show), which
+    was in the .sym; it holds the LIST now, so this is MENUBUF plus
+    genmenu's offset.  Both halves are read from the source that owns
+    them: a copy of either would go stale silently, and this value is
+    what ended() tests the whole sweep against.
+    """
+    import re
+    src = open(os.path.join(_E2, "src", "menu.asm")).read()
+    m = re.search(r"^MENUBUF\s+equ\s+(\w+)", src, re.M)
+    name = m.group(1)
+    if name.startswith("#"):
+        base = int(name[1:], 16)
+    else:
+        m2 = re.search(r"^%s\s+equ\s+#([0-9A-Fa-f]+)" % name,
+                       open(os.path.join(_E2, "src", "main3.asm")).read(),
+                       re.M)
+        base = int(m2.group(1), 16)
+    import genmenu
+    return base + genmenu.blob()[1]["TEXT"]
+
 # game.asm's, read from the source: place() restores it -- see there.
 PLR_HPMAX = int([l.split()[2] for l in open(os.path.join(_E2, "src",
                                                          "game.asm"))
@@ -358,7 +382,7 @@ class Rig:
         from a map that is now the menu's pen tables.
         """
         got = struct.unpack("<H", self.c.read_ram(self.s["NL_SCREEN"], 2))[0]
-        return got != self.s["MENU_SHOW"]
+        return got != _mntext()
 
     def periods(self, nframes=8, step=SAMPLE_US):
         """-> [RAW MILLISECONDS] between successive (frame_ctr) increments.

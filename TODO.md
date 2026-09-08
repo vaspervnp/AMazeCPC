@@ -184,10 +184,10 @@ honestly charged.
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound, and it covers the **world overlay** now: `C_PIPP` 6725.0/6800, `C_PIPM` 6575.0/7100, `C_PIPF` 800.0/1000, all three benched on the disc with a shot in flight and the monster proved on screen. None of them had ever been measured |
 | `C_PIPP` | **6050 → 6800.** The first measurement of that hook read **6725.0 µs** against a charge of 6050: it had been fitted as a SUM of two separate measurements, never as the interval `main_loop` takes. Margin +75.0 |
 | `monmodel.py` | **PASS, both levels** — greedy pursuit reaches the player on 2160/2160 doors-shut pairs each, and it RETURNS a verdict now instead of printing one for a human to read. The map's own starting pair, doors open: lv0 **5** steps, lv1 **4** |
-| the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen |
+| the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen. Leaving a level that is not the last says **LEVEL COMPLETE**; the last says **YOU ESCAPED**; dying says **YOU ARE DEAD** and does not advance |
 | the minimap | the flood's cells, one byte each, drawn ONCE when discovered; `C_MMSEEN` 1350 against 899.1 + 255.1 measured |
 | monsters (`tools/world.py`) | **1 a level** — lv0 (2,7), lv1 (7,2), each one room out of the room you start in. Two cost 81 states of 8128512 |
-| the code segment | `game_end` is **#3100 = `BUCK0` exactly — 0 bytes free**; `level_load` spent the last 56. RAM bank 6 has 15,641 free, so the next thing to add goes THERE or something comes out of here first |
+| the code segment | `game_end` **#30F3, 13 bytes** under `BUCK0`. It was 0: the LEVEL COMPLETE screen paid for itself by deleting `menu.asm`'s four screen trampolines — `nl_screen` holds the word LIST now, not a routine that loads one. RAM bank 6 has 14,845 free |
 | the sprites (`assets/sprites.png`) | **PAINTED, not coded** — an indexed PNG compiled by `genspr.py` into rectangle records. 4953.6 µs at a 28-row box against the hand art's 5459.2, identical picture. `assets/amaze-mode0.gpl` is the palette for GIMP 3 |
 | the map editor (`editor/`) | **BUILT** — Blazor Server, refuses to save a map that would not build. `make editor` runs its **31** tests |
 | the maps | **`tools/maps/*.json` ARE the source.** `world.py` loads them at import and has no map literal left; filename order is level order. Disc byte-identical across the switch, and editing a file changes it |
@@ -468,16 +468,6 @@ of 4224 bytes — but background in column order costs 5.125 µs/byte against
 ---
 
 ## Also open
-
-**FINISHING A LEVEL AND FINISHING THE GAME LOOK IDENTICAL.** `player_won`
-paints `menu_win` whether it advanced to level 1 or wrapped back to level
-0, so the player is told "you won" halfway through and told exactly the
-same thing at the end. `menu.asm`'s word lists make a second screen
-cheap in *data*, but the code segment is at **`game_end` = `BUCK0`, zero
-bytes free**, so the `cp NLEVEL` branch that already exists in
-`player_won` cannot currently be given a second `ld hl,` to choose
-between — something has to come out first, or the word list has to move
-into RAM bank 6 the way `HUDRECTS` did.
 
 
 **THE MONSTER'S OWN STARTING PAIR IS A PER-LEVEL NUMBER, and one of
