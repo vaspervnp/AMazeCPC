@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.join(_ROOT, "tools"))
 sys.path.insert(0, os.path.expanduser("~/cpcemu"))
 
 import addrs                                                # noqa: E402
+import pacemodel as _P
 import colmodel                                             # noqa: E402
 import emu_rast                                             # noqa: E402
 import gentab                                               # noqa: E402
@@ -498,6 +499,10 @@ def atomic(nstates=3, seed=1337, dlift=0, moving=None):
         worst += bad
     worst.sort(reverse=True)
     print(f"\n=== worst under-charge over {nstates} states ===")
+    if not worst:
+        # A HEADING WITH NOTHING UNDER IT READS AS A TRUNCATED REPORT,
+        # and this one is the whole verdict: an empty list is the PASS.
+        print("  none -- every interval of every state was inside its charge")
     for d, i, cc, meas in worst[:6]:
         print(f"  charged {cc:6d}  measured {meas:8.0f}  under by {d:7.0f}")
     return worst
@@ -685,13 +690,32 @@ def solve(rows, nstates=0):
     print(f"\n{len(rows)} intervals measured over {nstates} states")
     for k in ("frame", "face", "skip", "step", "pair"):
         print(f"    {k:6s} {len(by.get(k, [])):5d} hooks")
-    print("  the one-sided constants that cover every one:")
-    for t in TERMS:
-        print(f"    {CNAME[t]:10s} equ {out[t]:6d}      (fitted {co[t]:9.1f})")
     slack = [sum(out[t] * dict(zip(TERMS, x))[t] for t in TERMS) - y
              for x, y in rows]
+    covers = min(slack) >= 0
+    # ...AND SAY WHICH IT IS.  This printed "the one-sided constants that
+    # cover every one" and then, on the very next line, a worst margin of
+    # -930 us.  Both cannot be true: the ridge fit minimises squared
+    # error and is only pushed one-sided afterwards, so on a term the
+    # states do not separate well it can land UNDER.  A header that
+    # asserts what the line below it denies is worse than no header.
+    print("  the fitted constants%s:"
+          % ("" if covers else " -- WHICH DO NOT COVER EVERY INTERVAL, "
+             "see the margin below"))
+    for t in TERMS:
+        ship = getattr(_P, CNAME[t], None)
+        note = ""
+        if ship is not None:
+            note = ("  shipped %d%s" % (ship, ", and the fit wants MORE"
+                                        if out[t] > ship else ""))
+        print(f"    {CNAME[t]:10s} equ {out[t]:6d}      "
+              f"(fitted {co[t]:9.1f}){note}")
     print(f"  worst margin {min(slack):+.0f} us "
           f"(negative = UNDER), largest over-charge {max(slack):.0f} us")
+    if not covers:
+        print("  ...so these are a DIAGNOSTIC, not a drop-in.  What says the\n"
+              "     SHIPPED constants hold is `emu_rcol.py atomic`, which\n"
+              "     differences consecutive prefixes on the real machine.")
     return out
 
 

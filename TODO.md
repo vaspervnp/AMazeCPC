@@ -96,11 +96,49 @@ frame of a door run charges 11.15 budgets and it decomposes:
 ```
 
 Zeroing `C_COLSO` outright would buy 13200 µs — two thirds of one
-period. The three that are left are in the 33 drawn pairs and the 2657
-charged rows, and the honest next question is whether a door one cell
-away has to be drawn as 2657 rows at all.
-`engine2/tools/whopays.py` prints both halves of that table straight off
-the current constants; run it before choosing the next lever.
+period. The rest is in the drawn pairs and the charged rows.
+
+**RE-MEASURED, and the numbers above have moved.** `whopays.py` on the
+current constants, door at `dlift` 213, frame 194037 µs = 9.97 budgets:
+
+| | |
+|---|---|
+| the column renderer | **67.2%** of the frame, 68 hooks |
+| ...`pair` | **35 × 1800 = 59400 µs, 45.5%** |
+| ...`rows` | 1249 × 21 = 26229, 20.1% |
+| ...`colso` | 22 × 600 = 13200, 10.1% |
+| ...`farp` | 12 × 1000 = 12000, 9.2% |
+
+**35 pair-draws over a 22-pair viewport is not overdraw to delete.** A
+column two faces touch needs two draws — they paint different row ranges
+— so what is repaid is the fixed per-pair SETUP, and that is inherently
+per (face, pair): each face has its own texture *u*, its own slope, its
+own row range. There is no shared setup to hoist.
+
+**So the only lever left on `pair` is making the setup itself cheaper**,
+and `emu_rcol.py fit` says how much of it is over-charge and how much is
+work — 718 intervals over 14 states:
+
+| | shipped | fitted |
+|---|---|---|
+| `C_CFRAME` | 600 | 423 |
+| `C_CFACE` | 1520 | 1489 |
+| `C_CSKIP` | 560 | **928 — the fit wants MORE** |
+| `C_COLS` | 1800 | **1706** |
+| `C_CEDGE` | 168 | 160 |
+| `C_CSTEP` | 260 | 0 |
+
+Tightening every term the fit wants *lower* is about **4.8 ms**, a
+quarter of a period — and it cannot be done as a drop-in, because
+`C_CSKIP` wants to go **up**. The fit is a ridge regression pushed
+one-sided afterwards and it lands under on terms the states do not
+separate; its own output says so now. What says the SHIPPED constants
+hold is `emu_rcol.py atomic`, and it does hold: every interval of every
+state, at rest **and** with a door in motion at `dlift` 128.
+
+So the 15% is honest charging of real work, not a defect, and the next
+lever is `rc_column`'s setup — 1706 µs measured, about 6800 T-states for
+one pair of byte columns.
 
 **And running `make pace` to check the unroll found that the harness has
 been lying since I added the exit.** `emu_pace.py 600` reported 47 states
