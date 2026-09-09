@@ -136,9 +136,35 @@ separate; its own output says so now. What says the SHIPPED constants
 hold is `emu_rcol.py atomic`, and it does hold: every interval of every
 state, at rest **and** with a door in motion at `dlift` 128.
 
-So the 15% is honest charging of real work, not a defect, and the next
-lever is `rc_column`'s setup — 1706 µs measured, about 6800 T-states for
-one pair of byte columns.
+So the 15% is honest charging of real work, not a defect.
+
+**AND THE INSTRUMENT FOR "WHERE DOES IT GO" DID NOT EXIST.** `atomic`
+measured every interval and knew every hook's kind, and printed a
+yes/no; the only breakdown was the ridge `fit`, which does not cover and
+says so. It reports the intervals now — measured, not regressed, with a
+door in motion at `dlift` 128 over 6 states:
+
+| kind | hooks | mean µs | worst | worst charge | margin | share |
+|---|---|---|---|---|---|---|
+| `pair` | 54 | 2464 | 3249 | 3816 | +134 | **55.8%** |
+| `farp` | 86 | 921 | 936 | 1000 | +64 | **33.2%** |
+| `face` | 9 | 1319 | 1464 | 1520 | +56 | 5.0% |
+| `skip` | 13 | 537 | 893 | 1340 | +446 | 2.9% |
+
+**A THIRD OF THE COLUMN RENDERER IS THE FAR PLANE**, and that is not
+where anyone has been looking. 86 far-pair fills at 921 µs each, against
+54 real pair-draws. The far plane is what `rc_far` paints where no face
+reached — and it is that big *because* `R_MAX` was cut from 6 to 4. That
+cut bought a whole vsync period on the flood, measured; what it did to
+the far pass was never measured, and this is the bill. `RC_FARH` is 144
+scanlines and `C_CFAR` was once derived at 96 and not re-derived — see
+`_atomic_states`, which exists because of exactly that.
+
+The two honest next levers, then, and they are different in kind: make
+`rc_far` cheaper per pair (33% of the render, and it is a flat fill —
+the cheapest thing this machine does), or ask whether `R_MAX` 4 is still
+the right trade now that both sides of it can be measured. `rc_column`'s
+own setup is the third — 1706 µs, about 6800 T-states for one pair.
 
 **And running `make pace` to check the unroll found that the harness has
 been lying since I added the exit.** `emu_pace.py 600` reported 47 states

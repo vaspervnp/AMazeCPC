@@ -446,6 +446,14 @@ def atomic(nstates=3, seed=1337, dlift=0, moving=None):
     if moving is None:
         moving = bool(dlift)
     worst = []
+    # ---- WHERE THE TIME ACTUALLY GOES, by hook kind.
+    #  This loop already measures every interval and already knows which
+    #  kind of hook each one is; it just threw both away and printed a
+    #  yes/no.  So the only instrument for "what is C_COLS' 1706 us made
+    #  of" was emu_rcol.py's own ridge FIT -- which does not cover, says
+    #  so, and wants C_CSKIP to go UP.  Regression is the wrong tool for
+    #  a question measurement can answer directly.
+    by_kind = {}
     for px, py, a, qs in _atomic_states(nstates, seed, c):
         if moving and qs:
             # PROMOTE THE NEAREST FACE TO A DOOR IN MOTION.  Nothing in
@@ -475,6 +483,20 @@ def atomic(nstates=3, seed=1337, dlift=0, moving=None):
             rig.bench_exact(qs, reps=1)
             z80.append(struct.unpack(
                 "<H", rig.c.read_ram(rig.s("HOOKBC"), 2))[0])
+        # iv IS OFFSET BY ONE FROM ch, and getting that wrong put five
+        # NEGATIVE margins in this table under a verdict of "every
+        # interval inside its charge".  A hook charges BEFORE the work it
+        # pays for, so hook i's charge covers iv[i+1] -- which is what
+        # the under-charge check twenty lines below has always done.
+        for t, cc, m in zip(_terms, ch, iv[1:]):
+            # THE KIND IS THE TERM THAT IS 1.  rows/edges/bands are
+            # per-hook MULTIPLIERS, not kinds -- a pair hook carries all
+            # three -- so they are not candidates.
+            kind = next((k for k in ("frame", "face", "skip", "pair",
+                                     "steps", "far", "farp", "fars",
+                                     "farend", "colso")
+                         if t.get(k)), "?")
+            by_kind.setdefault(kind, []).append((m, cc))
         print(f"\nstate ({px:04X},{py:04X},{a})  dlift {dlift}"
               f"{' moving' if moving else ''}  "
               f"{len(qs)} quads, "
@@ -498,6 +520,17 @@ def atomic(nstates=3, seed=1337, dlift=0, moving=None):
             print("  every interval inside its charge")
         worst += bad
     worst.sort(reverse=True)
+    print(f"\n=== measured intervals by hook, over {nstates} states ===")
+    print("  kind      hooks     mean    worst   worst    worst        share")
+    print("                        us       us  charge   margin   of render")
+    for kind in sorted(by_kind, key=lambda k: -sum(m for m, _c in by_kind[k])):
+        v = by_kind[kind]
+        tot = sum(m for m, _c in v)
+        mgn = min(cc - m for m, cc in v)
+        print(f"  {kind:9s} {len(v):5d} {tot/len(v):8.0f} "
+              f"{max(m for m, _c in v):8.0f} "
+              f"{max(cc for _m, cc in v):9.0f} {mgn:+13.0f}"
+              f"   {100.0*tot/sum(sum(m for m, _c in w) for w in by_kind.values()):5.1f}%")
     print(f"\n=== worst under-charge over {nstates} states ===")
     if not worst:
         # A HEADING WITH NOTHING UNDER IT READS AS A TRUNCATED REPORT,
