@@ -34,6 +34,14 @@
 ;  is an upper bound on the interval that follows it, by construction:
 ;
 ;    C_CFRAME   raster_colframe, before its own setup, once a frame
+                            ; TIGHTENED, and the margin spent is stated:
+                            ; emu_rcol.py atomic over 24 states at rest
+                            ; AND 24 with a door moving -- 30 hooks of
+                            ; this kind -- put the SMALLEST margin any
+                            ; one of them had at +110 us.  Half of that
+                            ; is taken and half is kept, because a
+                            ; sample cannot vouch for a state it did not
+                            ; visit.  Reversible: the old value is 600.
 ;    C_CFACE    the TOP of rc_face, before the record is even read --
 ;               so every record pays it, degenerate ones too, and it is
 ;               FLAT because np is not known yet
@@ -41,6 +49,14 @@
 ;      skipped  C_CSKIP -- the pair's rc_pnext step, the next pair's
 ;               occlusion test and the next pair's own charge arithmetic
 ;      drawn    C_COLS + C_CBAND*bands + C_COLR*rows + C_CEDGE*edges,
+                            ; TIGHTENED, and the margin spent is stated:
+                            ; emu_rcol.py atomic over 24 states at rest
+                            ; AND 24 with a door moving -- 404 hooks of
+                            ; this kind -- put the SMALLEST margin any
+                            ; one of them had at +116 us.  Half of that
+                            ; is taken and half is kept, because a
+                            ; sample cannot vouch for a state it did not
+                            ; visit.  Reversible: the old value is 1800.
 ;               where bands/rows/edges are UPPER BOUNDS computed in
 ;               rc_charge from what is known before any setup runs:
 ;               (rc_h) +- (rc_hq)+1 bounds the two byte columns' half
@@ -96,7 +112,7 @@
 ;  rather than the mean.  Re-run it after ANY change to rastcol.asm and
 ;  paste the answer here; `atomic` on a different seed is the check that
 ;  the sample was big enough.
-C_CFRAME    equ 600         ; raster_colframe's own setup, once a frame:
+C_CFRAME    equ 545         ; raster_colframe's own setup, once a frame:
                             ; the two LDIRs that clear the occlusion
                             ; state, the bank switch and the walk's head.
                             ; MEASURED 389 with no moving face on the
@@ -118,7 +134,15 @@ C_CFACE     equ 1520        ; rc_face TOP to the first pair hook: the
                             ; half-height Bresenham needs, and the first
                             ; pair's occlusion test and charge
                             ; arithmetic.  MEASURED 1449.
-C_CSKIP     equ 560         ; one pair a nearer face already owns:
+C_CSKIP     equ 366         ; one pair a nearer face already owns:
+                            ; TIGHTENED, and the margin spent is stated:
+                            ; emu_rcol.py atomic over 24 states at rest
+                            ; AND 24 with a door moving -- 98 hooks of
+                            ; this kind -- put the SMALLEST margin any
+                            ; one of them had at +389 us.  Half of that
+                            ; is taken and half is kept, because a
+                            ; sample cannot vouch for a state it did not
+                            ; visit.  Reversible: the old value is 560.
                             ; rc_pnext's whole-pair step, the loop, the
                             ; next pair's occlusion test -- and the next
                             ; pair's rc_charge arithmetic, which runs
@@ -132,7 +156,7 @@ C_CSKIP     equ 560         ; one pair a nearer face already owns:
                             ; Skipped pairs are few and cheap, so
                             ; over-charging them is the affordable way
                             ; to be wrong.
-C_COLS      equ 1800        ; ONE DRAWN PAIR, fixed part: rc_column's
+C_COLS      equ 1742        ; ONE DRAWN PAIR, fixed part: rc_column's
                             ; whole setup (the u division, the two
                             ; Bresenham probes, CTABT, the row range),
                             ; the band setup, its rc_pnext step and the
@@ -232,7 +256,15 @@ C_CEDGE     equ 168         ; per possible EDGE row, bounded by
                             ; rebuild-the-address-every-row loop.
                             ; MEASURED 160, and 8*C_COLR = 168 covers it
                             ; while making the whole bound one multiply.
-C_CFAR      equ 300         ; THE FAR PLANE'S ENTRY: the step and page
+C_CFAR      equ 226         ; THE FAR PLANE'S ENTRY: the step and page
+                            ; TIGHTENED, and the margin spent is stated:
+                            ; emu_rcol.py atomic over 24 states at rest
+                            ; AND 24 with a door moving -- 30 hooks of
+                            ; this kind -- put the SMALLEST margin any
+                            ; one of them had at +148 us.  Half of that
+                            ; is taken and half is kept, because a
+                            ; sample cannot vouch for a state it did not
+                            ; visit.  Reversible: the old value is 300.
                             ; setup and the walk down to the first pair's
                             ; hook.  The 22-iteration loop is NOT in here
                             ; any more -- every pair takes its own hook,
@@ -279,10 +311,26 @@ C_CFAR      equ 300         ; THE FAR PLANE'S ENTRY: the step and page
                             ; One hook per FILLED pair fixes both, and it
                             ; is what every other thing this renderer
                             ; draws already does.
-C_CFARP     equ 1000        ; ...one pair of it that FILLS.  MEASURED
+C_CFARP     equ 968        ; ...one pair of it that FILLS.  MEASURED
+                            ; TIGHTENED, and the margin spent is stated:
+                            ; emu_rcol.py atomic over 24 states at rest
+                            ; AND 24 with a door moving -- 370 hooks of
+                            ; this kind -- put the SMALLEST margin any
+                            ; one of them had at +64 us.  Half of that
+                            ; is taken and half is kept, because a
+                            ; sample cannot vouch for a state it did not
+                            ; visit.  Reversible: the old value is 1000.
                             ; 776.2 us of band by the fit, 928 worst as a
                             ; whole interval; 72 us of margin.
-C_CFAREND   equ 400         ; ...and the way out of the pass: rc_far's own
+C_CFAREND   equ 376         ; ...and the way out of the pass: rc_far's own
+                            ; TIGHTENED, and the margin spent is stated:
+                            ; emu_rcol.py atomic over 24 states at rest
+                            ; AND 24 with a door moving -- 30 hooks of
+                            ; this kind -- put the SMALLEST margin any
+                            ; one of them had at +48 us.  Half of that
+                            ; is taken and half is kept, because a
+                            ; sample cannot vouch for a state it did not
+                            ; visit.  Reversible: the old value is 400.
                             ; return, raster_colframe's move to the
                             ; overlay pass, and -- when no moving door
                             ; follows -- the frame epilogue.  MEASURED

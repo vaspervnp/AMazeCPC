@@ -160,6 +160,42 @@ the far pass was never measured, and this is the bill. `RC_FARH` is 144
 scanlines and `C_CFAR` was once derived at 96 and not re-derived — see
 `_atomic_states`, which exists because of exactly that.
 
+### The charges were more generous than the machine needed
+
+Zero bytes, and it is the biggest single move since `PACE_FRAMES` 10.
+`emu_rcol.py atomic`'s by-hook table over **24 states at rest and 24
+with a door moving** gives, for each kind, the *smallest* margin any one
+of its hooks had — which is exactly how far that constant can come down,
+because reducing it reduces every hook of that kind by the same amount:
+
+| | hooks | min margin | shipped → now |
+|---|---|---|---|
+| `C_COLS` | 404 | +116 | 1800 → **1742** |
+| `C_CSKIP` | 98 | +389 | 560 → **366** |
+| `C_CFARP` | 370 | +64 | 1000 → **968** |
+| `C_CFRAME` | 30 | +110 | 600 → **545** |
+| `C_CFAR` | 30 | +148 | 300 → **226** |
+| `C_CFAREND` | 30 | +48 | 400 → **376** |
+
+**Half of each margin is taken and half is kept**, because a sample
+cannot vouch for a state it did not visit; every old value is recorded
+beside the new one in `costcol.inc`, so the judgement is reversible.
+
+**Two were left alone, for different reasons.** `C_CSTEP`'s multiplier
+varies 0..3, so the aggregate minimum says nothing about how far it can
+fall — which is the mistake the ridge `fit` made when it wanted it at
+zero. `C_CFACE` had **+26 µs**.
+
+What it bought, measured over all 8,128,512 states of both maps:
+
+| | before | after |
+|---|---|---|
+| doors shut, worst frame | 177782 | **174239** |
+| doors open, lv0 | 0.209% | **0.057%** |
+| doors open, lv1 | 0.367% | **0.134%** |
+| one moving, lv0 | 15.29% | **13.75%** |
+| one moving, lv1 | 14.71% | **13.14%** |
+
 ### The flat blitter: WRITTEN, MEASURED, AND NOT WORTH IT
 
 It works. `rc_farfil` plus `COLFLAT`/`COLFLATT` — three instructions a
@@ -337,9 +373,9 @@ honestly charged.
 | `emu_march.py` | **PASS** — 516/516 states exact against `marchmodel.py` |
 | the levels (`tools/world.py`) | **2**, 128-byte records in RAM bank 6; the exit advances, the last wraps; a death does NOT advance |
 | `roomcost.py` | **FITS — both levels, all five door configurations**, 81 million states. Bucket k max **5 of 7** pages; flood depth **8 of 25** shut, **10** open |
-| `pacescan.py` (doors shut) | **PASS, both levels** — 0 of 8,128,512 over budget, worst 177032. The two are **one measurement**: see below |
-| `pacescan.py` (doors OPEN) | lv0 18,344 of 8,792,064 = **0.209%** (worst 197952); lv1 32,312 = **0.367%** (worst 214412) |
-| `pacescan.py` (ONE door moving) | lv0 1,243,133 of 8,128,512 = **15.29%**; lv1 1,195,797 = **14.71%** — honest charge, `rc_mul8` unrolled |
+| `pacescan.py` (doors shut) | **PASS, both levels** — 0 of 8,128,512 over budget, worst **174239**. The two are **one measurement**: see below |
+| `pacescan.py` (doors OPEN) | lv0 **5,004** of 8,792,064 = **0.057%**; lv1 **11,765** = **0.134%** — was 0.209% / 0.367% before the charges were tightened |
+| `pacescan.py` (ONE door moving) | lv0 **1,117,853** = **13.75%**; lv1 **1,068,281** = **13.14%** — was 15.29% / 14.71% |
 | the disc, while a door runs | **[13, 12, 12, 11, 11, 10, 10]** vsyncs against 10 |
 | `emu_holes.py` | **PASS** — every constant a one-sided upper bound, and it covers the **world overlay** now: `C_PIPP` 6725.0/6800, `C_PIPM` 6575.0/7100, `C_PIPF` 800.0/1000, all three benched on the disc with a shot in flight and the monster proved on screen. None of them had ever been measured |
 | `C_PIPP` | **6050 → 6800.** The first measurement of that hook read **6725.0 µs** against a charge of 6050: it had been fitted as a SUM of two separate measurements, never as the interval `main_loop` takes. Margin +75.0 |
