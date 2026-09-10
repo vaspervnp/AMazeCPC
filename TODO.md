@@ -197,11 +197,24 @@ byte of `jp rc_go`; a third block either joins that page (which is full
 `jp` site with both bytes patched, which frees the placement and costs a
 few instructions more.
 
-So the next move is not the blitter, it is **finding 80 bytes** — and
-the precedent is there: `HUDRECTS`, the compass needle, the level
-records and now the menu blob all left the code segment for RAM bank 6,
-which has **14,845 free**. What is still in the body that the frame path
-never reads?
+**FOUND: 128 bytes, and they cost nothing at all.** `SCANPEN`,
+`SCANPOS`, `RADPOS`, `TICKTAB` and `HUDDESC` were **115 bytes of `db`
+emitted straight into the body** by `genhud.py`. They are in **bank 4**
+now — `gentab.py`'s `SPEC`, last, so no address above them moved — and
+`game_end` went **#30F3 → #3080**.
+
+**Bank 4 and not bank 6, and that is why it is free.** Bank 6 is for
+data the frame path never touches; these are read *every frame* by
+`hud_scan` and `hud_radar`, so bank 6 would have bought a page-in and a
+page-out per lookup. Bank 4 is the TABLE bank and it is **already paged
+in at that moment**, because `hud_rect` reads `LINETAB` out of it to
+draw with. No copy, no paging, an address change. Bank 4 has 65 bytes
+left; bank 6 still has 14,845.
+
+Proven identical: the whole 16K screen, **byte for byte**, at the same
+GAME frame on both builds. (At the same *CPC* frame four bytes differ —
+the smaller `GAME3.BIN` loads faster, so the two are a game frame apart.
+Comparing on the wrong clock invents a defect.)
 
 ### And the other two levers
 
@@ -295,7 +308,7 @@ honestly charged.
 | the game loop | **CLOSED** — kill it, clear the maze, walk out; score 0–7 on the end screen. Leaving a level that is not the last says **LEVEL COMPLETE**; the last says **YOU ESCAPED**; dying says **YOU ARE DEAD** and does not advance |
 | the minimap | the flood's cells, one byte each, drawn ONCE when discovered; `C_MMSEEN` 1350 against 899.1 + 255.1 measured |
 | monsters (`tools/world.py`) | **1 a level** — lv0 (2,7), lv1 (7,2), each one room out of the room you start in. Two cost 81 states of 8128512 |
-| the code segment | `game_end` **#30F3, 13 bytes** under `BUCK0`. It was 0: the LEVEL COMPLETE screen paid for itself by deleting `menu.asm`'s four screen trampolines — `nl_screen` holds the word LIST now, not a routine that loads one. RAM bank 6 has 14,845 free |
+| the code segment | `game_end` **#3080, 128 bytes** under `BUCK0` — enough for the far-plane blitter. The HUD's five lookup tables went to bank 4, which was already paged in where they are read. Bank 4 has 65 free, bank 6 has 14,845 |
 | the sprites (`assets/sprites.png`) | **PAINTED, not coded** — an indexed PNG compiled by `genspr.py` into rectangle records. 4953.6 µs at a 28-row box against the hand art's 5459.2, identical picture. `assets/amaze-mode0.gpl` is the palette for GIMP 3 |
 | the map editor (`editor/`) | **BUILT** — Blazor Server, refuses to save a map that would not build. `make editor` runs its **31** tests |
 | the maps | **`tools/maps/*.json` ARE the source.** `world.py` loads them at import and has no map literal left; filename order is level order. Disc byte-identical across the switch, and editing a file changes it |

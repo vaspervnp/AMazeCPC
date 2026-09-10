@@ -41,6 +41,22 @@ STACK   equ #7FF0
 ;  because hud2.asm sizes a `ds` with it.
 MAXAMMO equ 6
 
+;  ...AND TWO MORE THAT ARRIVED LATER AND KILLED THIS HARNESS.  hud2.asm
+;  grew a monster table and a health bar, so it now sizes MMVARS' tail
+;  with NMON and asserts PLR_HPMAX == HUD_HPN -- both owned by game.asm
+;  and gen_maze.inc, neither of which this file includes.  It stopped
+;  assembling and stayed that way: rasm printed three errors, emu_hud.py
+;  printed "rasm failed", and nothing else noticed.  Same shape as
+;  tst_rast.asm, which had not assembled since VPCOL went to 1.
+NMON    equ 1           ; only sizes mm_plc here; the real build's own
+                        ; assert is what keeps MMVARS inside its hole
+PLR_HPMAX equ HUD_HPN   ; TAUTOLOGICAL ON PURPOSE, and it has to be said:
+                        ; the assert below it exists to catch game.asm
+                        ; and genhud.py disagreeing about how many hit
+                        ; points there are, and with game.asm absent
+                        ; there is no second opinion to compare.  The
+                        ; real build makes that check; this one cannot.
+
     org #8000
 
     di
@@ -258,5 +274,22 @@ ammo_blip ds MAXAMMO            ; ...and this array, which the radar draws
                                 ; from.  e_radar below pokes it.
 mon_blip  db #FF                ; ...and the monster's own bearing, which
                                 ; the radar draws in its own colour
+
+; ---- AND THE MINIMAP'S, which arrived with mm_seen and are owned by
+;      march.asm and game.asm.  mm_seen folds the flood's MARK array into
+;      the map and mm_plr reads where the player is standing, so a HUD
+;      harness now needs four things a HUD has no business owning.  That
+;      is what a byte-exact checker costs when the thing it checks grows
+;      a dependency; the alternative was the checker staying dead, which
+;      is what it did.
+plr_x   dw #0380                ; 8.8, mid-cell: march.asm's, and mm_plr
+plr_y   dw #0C80                ; reads only the high byte of each
+m_gen   db 1                    ; march.asm's generation stamp.  MARK is
+                                ; all zero below, so no cell reads as
+                                ; seen and mm_seen walks the full fold --
+                                ; which is its WORST case and the right
+                                ; one to measure.
+    align 256
+MARK    ds 256                  ; the flood's marks, one byte a cell
 
     include "hud2.asm"

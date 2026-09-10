@@ -605,6 +605,21 @@ def t_bobh():
 
 
 # name, width (1 = byte, 2 = LE word), alignment, builder
+def _hud(name):
+    """A thunk onto genhud's table builders, imported AT CALL TIME.
+
+    genhud imports this module, so naming it at module scope here is a
+    cycle: SPEC would be evaluated while genhud was still half-built and
+    the attribute would not exist yet.  Deferring the import to the call
+    costs nothing -- build() runs these once -- and keeps the geometry
+    where it belongs, in genhud.
+    """
+    def f():
+        import genhud
+        return getattr(genhud, "t_" + name)()
+    return f
+
+
 SPEC = [
     ("QSQ",     2, 256, t_qsq),
     ("HTAB",    2, 256, t_htab),
@@ -632,6 +647,19 @@ SPEC = [
     ("GUNPIX",  1,   1, t_gunpix),
     ("BOBV",    1,   1, t_bobv),
     ("BOBH",    1,   1, t_bobh),
+    # ---- AND THE HUD'S FIVE, WHICH USED TO BE `db` IN THE CODE SEGMENT.
+    #  115 bytes of body, and the body ran out -- the far-plane blitter
+    #  needs about 80 it does not have (TODO.md).  They come here and not
+    #  to bank 6 because they are read EVERY FRAME, by hud_scan and
+    #  hud_radar, and BANK 4 IS ALREADY PAGED IN AT THAT MOMENT: hud_rect
+    #  reads LINETAB out of it to draw with.  Bank 6 would have bought a
+    #  page-in and a page-out per lookup for data that is already under
+    #  the window.  Last in SPEC, so no address above them moves.
+    ("SCANPEN", 1,   1, _hud("scanpen")),
+    ("SCANPOS", 1,   1, _hud("scanpos")),
+    ("RADPOS",  1,   1, _hud("radpos")),
+    ("TICKTAB", 1,   1, _hud("ticktab")),
+    ("HUDDESC", 1,   1, _hud("huddesc")),
 ]
 
 

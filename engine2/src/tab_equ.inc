@@ -61,8 +61,13 @@ GUNBAND      equ #7E00   ; 31 x byte  (31 bytes)
 GUNPIX       equ #7E1F   ; 262 x byte  (262 bytes)
 BOBV         equ #7F25   ; 16 x byte  (16 bytes)
 BOBH         equ #7F35   ; 23 x byte  (23 bytes)
+SCANPEN      equ #7F4C   ; 3 x byte  (3 bytes)
+SCANPOS      equ #7F4F   ; 16 x byte  (16 bytes)
+RADPOS       equ #7F5F   ; 48 x byte  (48 bytes)
+TICKTAB      equ #7F8F   ; 40 x byte  (40 bytes)
+HUDDESC      equ #7FB7   ; 8 x byte  (8 bytes)
 
 TAB_BASE     equ #4000
-TAB_END      equ #7F4C
-TAB_SIZE     equ 16204
-TAB_FREE     equ 180
+TAB_END      equ #7FBF
+TAB_SIZE     equ 16319
+TAB_FREE     equ 65

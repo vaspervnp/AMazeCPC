@@ -689,6 +689,59 @@ def scan_pad(state):
     return out
 
 
+# ---------------------------------------------------------------------
+#  THE FIVE TABLES THAT LEFT THE CODE SEGMENT.
+#
+#  SCANPEN, SCANPOS, RADPOS, TICKTAB and HUDDESC were 115 bytes of `db`
+#  emitted straight into the body, and the body ran out: the far-plane
+#  blitter needs about 80 bytes it does not have (see TODO.md).
+#
+#  THEY WENT TO BANK 4 AND NOT BANK 6, and that is the whole reason this
+#  is free.  Bank 6 is for data the frame path never touches, and these
+#  are read EVERY FRAME by hud_scan and hud_radar -- putting them there
+#  would buy a page-in and a page-out per lookup.  Bank 4 is the TABLE
+#  bank and it is ALREADY paged in at that moment, because hud_rect
+#  reads LINETAB out of it to draw with.  So the move costs nothing at
+#  all: no copy, no paging, an address change.
+#
+#  gentab.py walks SPEC to lay the bank out and to emit the addresses,
+#  so these are five more entries in it and nothing else moves.
+# ---------------------------------------------------------------------
+def t_scanpen():
+    return [SOLID[p] for p in pal.HUD_SCAN]
+
+
+def t_scanpos():
+    out = []
+    for col, row in SCAN_CELL:
+        x, y = scan_xy(col, row)
+        out += [x, y]
+    return out
+
+
+def t_radpos():
+    out = []
+    for o in range(8):
+        for b in range(3):
+            x, y = radar_pos(o, b)
+            out += [x, y]
+    return out
+
+
+def t_ticktab():
+    out = []
+    for (x, y, w, h, b) in tick_rects():
+        out += [x, y, w, h, b]
+    return out
+
+
+def t_huddesc():
+    out = []
+    for (_f, h, p) in NDL_DOTS:
+        out += [h, SOLID[p]]
+    return out
+
+
 def write_inc(path, rects, tab):
     radar_check()               # every blip must land on DIAL_BG
     cxb, cy = dial_centre()
@@ -774,13 +827,7 @@ def write_inc(path, rects, tab):
     L.append(f"HUD_SCOFF    equ #{SOLID[SCAN_OFF]:02X}   "
              f"; an unlit bearing -- what hud_scan restores")
     L.append(f"HUD_SCN      equ {len(SCAN_CELL)}   ; bearings on the pad")
-    L.append("SCANPEN                     ; by distance band: near, mid, far")
-    L.append("    db " + ",".join("#%02X" % SOLID[p] for p in pal.HUD_SCAN))
-    L.append("SCANPOS                     ; by RELATIVE bearing: 0 is dead")
-    L.append("                            ; ahead, then clockwise")
-    for i, (col, row) in enumerate(SCAN_CELL):
-        x, y = scan_xy(col, row)
-        L.append("    db %3d,%4d   ; %d" % (x, y, i))
+    L.append("; ---- SCANPEN and SCANPOS are in BANK 4: see tab_equ.inc ----")
     assert sx0 == scan_xy(0, 0)[0] and sy0 == scan_xy(0, 0)[1]
 
 
@@ -801,17 +848,7 @@ def write_inc(path, rects, tab):
     L.append(f"HUD_SWPEN    equ #{SOLID[SWEEP_PEN]:02X}   "
              f"; the lit tick")
     L.append(f"HUD_NSECT    equ 8   ; sectors round the dial")
-    L.append("RADPOS                      ; db x, y -- by sector*3 + band,")
-    L.append("                            ; band 0 near (inner ring)")
-    for o in range(8):
-        row = []
-        for b in range(3):
-            x, y = radar_pos(o, b)
-            row.append(f"{x:3d},{y:4d}")
-        L.append("    db " + ", ".join(row) + f"   ; sector {o}")
-    L.append("TICKTAB                     ; db x, y, w, h, resting byte")
-    for (x, y, w, h, b) in tick_rects():
-        L.append(f"    db {x:3d},{y:4d},{w:3d},{h:3d},#{b:02X}")
+    L.append("; ---- RADPOS and TICKTAB are in BANK 4: see tab_equ.inc ----")
 
     L.append("")
     # ---- THE FURNITURE IS NOT HERE ANY MORE.  It was 71 records of five
@@ -829,8 +866,7 @@ def write_inc(path, rects, tab):
     L.append(f"HUD_BG       equ #{SOLID[DIAL_BG]:02X}   "
              f"; ... and is erased with this byte")
     L.append("")
-    L.append("HUDDESC      db " + ",".join(
-        f"{h},#{SOLID[p]:02X}" for (_f, h, p) in NDL_DOTS))
+    L.append("; ---- HUDDESC is in BANK 4 too: see tab_equ.inc ----")
     L.append("")
     L.append("; ---- needle, headings 0..18: db dx (bytes), dy (lines) ----")
     # ---- THE NEEDLE TABLE IS NOT HERE EITHER.  Like the furniture, it
