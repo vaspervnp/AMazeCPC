@@ -521,15 +521,24 @@ def atomic(nstates=3, seed=1337, dlift=0, moving=None):
         worst += bad
     worst.sort(reverse=True)
     print(f"\n=== measured intervals by hook, over {nstates} states ===")
-    print("  kind      hooks     mean    worst   worst    worst        share")
-    print("                        us       us  charge   margin   of render")
+    print("  kind      hooks     mean    worst     mean    worst    worst"
+          "        share")
+    print("                        us       us   charge   charge   margin"
+          "    of render")
     for kind in sorted(by_kind, key=lambda k: -sum(m for m, _c in by_kind[k])):
         v = by_kind[kind]
         tot = sum(m for m, _c in v)
         mgn = min(cc - m for m, cc in v)
+        # ...AND THE MEAN CHARGE BESIDE THE MEAN MEASURED.  The margin
+        # column is the tightest single hook, which is what says how far
+        # a CONSTANT can fall.  The gap between these two is a different
+        # thing entirely: it is how loose the BOUND's shape is -- how
+        # much rc_charge bills for rows a pair turns out not to draw --
+        # and no amount of tightening constants touches it.
         print(f"  {kind:9s} {len(v):5d} {tot/len(v):8.0f} "
               f"{max(m for m, _c in v):8.0f} "
-              f"{max(cc for _m, cc in v):9.0f} {mgn:+13.0f}"
+              f"{sum(cc for _m, cc in v)/len(v):8.0f} "
+              f"{max(cc for _m, cc in v):8.0f} {mgn:+8.0f}"
               f"   {100.0*tot/sum(sum(m for m, _c in w) for w in by_kind.values()):5.1f}%")
     print(f"\n=== worst under-charge over {nstates} states ===")
     if not worst:

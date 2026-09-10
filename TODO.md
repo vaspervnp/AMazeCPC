@@ -160,6 +160,39 @@ the far pass was never measured, and this is the bill. `RC_FARH` is 144
 scanlines and `C_CFAR` was once derived at 96 and not re-derived — see
 `_atomic_states`, which exists because of exactly that.
 
+### Where the last period is: the BOUND's SHAPE, not its constants
+
+`atomic`'s table prints the mean charge beside the mean measured now,
+and the gap between those two is a different quantity from the margin
+column. The margin is the tightest single hook — how far a CONSTANT can
+fall. The gap is how much `rc_charge` bills for work that does not
+happen, and no amount of tightening constants touches it:
+
+| kind | mean measured | mean charge | gap | a frame |
+|---|---|---|---|---|
+| `pair` | 2430 | 2878 | **+448** | 33 × = **14.8 ms** |
+| `skip` | 557 | 886 | +329 | 6 × = 2.0 ms |
+| `face` | 1200 | 1520 | +320 | 4 × = 1.3 ms |
+| `farp` | 921 | 968 | +47 | 12 × = 0.6 ms |
+| everything else | | | | 0.7 ms |
+| | | | | **19.3 ms = 0.97 periods** |
+
+**That is the whole remaining problem, and it is four times the flat
+blitter (0.13) and five times the constant tightening (0.18).** `pair`
+alone is three quarters of it.
+
+`rc_charge` bills `C_COLS + C_COLR*(rows + 8*edges)`, where `rows` and
+`edges` are upper bounds computed from `(rc_h) ± (rc_hq)+1` before any
+setup runs. At `C_COLR` 21 a row, a 448 µs mean gap is **about 21 rows
+a pair** that get billed and not drawn. The bound is doing its job — it
+is one-sided and `atomic` proves it — it is simply loose.
+
+**And the obstacle is the same one byte.** `rc_charge` is in
+`rastcol.asm` in front of the `align 256`, whose pad is one byte, so a
+tighter bound has to be computed in **no more instructions than the
+loose one**, or it costs a 256-byte page before it saves anything.
+That, not the arithmetic, is what makes this hard.
+
 ### The charges were more generous than the machine needed
 
 Zero bytes, and it is the biggest single move since `PACE_FRAMES` 10.
