@@ -160,6 +160,45 @@ the far pass was never measured, and this is the bill. `RC_FARH` is 144
 scanlines and `C_CFAR` was once derived at 96 and not re-derived — see
 `_atomic_states`, which exists because of exactly that.
 
+### The flat blitter: WRITTEN, MEASURED, AND NOT WORTH IT
+
+It works. `rc_farfil` plus `COLFLAT`/`COLFLATT` — three instructions a
+scanline instead of ten, no second register bank, the byte fetched once
+— renders **166 of 166 screens byte for byte**, 24 of them with a door
+in motion, and every interval still inside its charge. Then the numbers
+came in and killed it:
+
+| | |
+|---|---|
+| a far pair, before | 921 µs mean |
+| a far pair, after | **705 µs** — 23% off, not the 55% predicted |
+| the door-run frame's 12 far pairs | **2.59 ms = 0.13 periods** |
+| what it costs | **196 bytes**, against 128 free |
+
+**THE PREDICTION WAS WRONG AND THE MEASUREMENT SAYS WHY.** 1.20 periods
+came from treating the whole `farp` interval as inner loop. Solve the
+two measurements — `before = S + 18F`, `after = S + 8F` — and a far pair
+is **21.6 scanlines of fill on 532 µs of setup**. The fill was never the
+cost. The setup is: `rf_pair`'s own bookkeeping and two band entries,
+each rebuilding a screen address from `VPLINE`.
+
+So the lever was misidentified, and the *shape* of the mistake is worth
+keeping: a hook's interval is everything between two hooks, and reading
+it as "the loop" is an assumption, not a measurement. The by-hook table
+in `emu_rcol.py atomic` is what let both numbers be taken; solving for
+`S` and `F` needed only that the same interval be measured twice.
+
+**AND THE ALIGN PAD IS ONE BYTE.** `RC_DLIFT` sits at `#19FF` and
+`COLBLK` is page-aligned at `#1A00`, so a single instruction added
+anywhere *before* that align costs a whole 256-byte page — measured
+twice on the way here, once for a dispatch branch in `rc_band` and once
+for seven bytes in `rc_far`. Freeing bytes before it does not help
+either: the pad just grows and the boundary does not move. Only code
+*after* `rastcol.asm`'s align can pay for code after it, and there is no
+data left there to move — 21 bytes of `db`/`ds` in the whole region.
+
+The next lever is that **532 µs of setup**, not the fill.
+
 ### The far plane samples a constant byte through the textured path
 
 **`rc_far` sets `rc_step` to ZERO** — "step 0 -> one byte, every row",
