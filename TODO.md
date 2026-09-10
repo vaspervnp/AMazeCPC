@@ -160,11 +160,55 @@ the far pass was never measured, and this is the bill. `RC_FARH` is 144
 scanlines and `C_CFAR` was once derived at 96 and not re-derived — see
 `_atomic_states`, which exists because of exactly that.
 
-The two honest next levers, then, and they are different in kind: make
-`rc_far` cheaper per pair (33% of the render, and it is a flat fill —
-the cheapest thing this machine does), or ask whether `R_MAX` 4 is still
-the right trade now that both sides of it can be measured. `rc_column`'s
-own setup is the third — 1706 µs, about 6800 T-states for one pair.
+### The far plane samples a constant byte through the textured path
+
+**`rc_far` sets `rc_step` to ZERO** — "step 0 -> one byte, every row",
+its own comment — and then calls `rc_band`, the same painter the real
+faces use. So every far scanline runs the full ten-instruction `COLBLK`
+unit to produce **the same byte it produced last row**, and its
+`add hl,bc` adds nothing. The author knew: the note at `rc_far` says
+*"no second inner loop"*. That was a choice of BYTES over speed, made
+before anything measured what the far plane costs.
+
+What it costs, on the CPC's 4T grid:
+
+```
+  ld e,h  4   ld a,(de)  8   add hl,bc 12   exx 4   ld d,a 4     the
+  ld e,a  4   ld sp,hl   8   push de   12   add hl,bc 12  exx 4  unit
+                                                     72 T = 18.00 us
+  a FLAT unit is three of those ten:
+  ld sp,hl 8  push de 12  add hl,bc 12      32 T =  8.00 us
+```
+
+**55.6% of a far scanline**, and the far pass is 33.2% of the renderer
+which is 67.2% of the frame:
+
+| | |
+|---|---|
+| of the column renderer | **18.4%** |
+| of the frame | **12.4%** |
+| of a 194037 µs door-run frame | **24.1 ms = 1.20 vsync periods** |
+
+**WHAT IT COSTS TO TAKE.** A second unrolled pair — `COLFLAT` and its
+tail — is about 80 bytes, and the body has **13**. `COLBLK` and
+`COLTAIL` share one page because the dispatch self-modifies only the LOW
+byte of `jp rc_go`; a third block either joins that page (which is full
+— `COLTAIL` ends at +179 and `bg_fill` starts at +180) or gets its own
+`jp` site with both bytes patched, which frees the placement and costs a
+few instructions more.
+
+So the next move is not the blitter, it is **finding 80 bytes** — and
+the precedent is there: `HUDRECTS`, the compass needle, the level
+records and now the menu blob all left the code segment for RAM bank 6,
+which has **14,845 free**. What is still in the body that the frame path
+never reads?
+
+### And the other two levers
+
+`R_MAX` is 4. Cutting it from 6 bought a whole vsync period on the flood
+and was measured; what it did to the far pass was not, and the table
+above is the bill. Both sides can be measured now. `rc_column`'s own
+setup is the third — 1706 µs, about 6800 T-states for one pair.
 
 **And running `make pace` to check the unroll found that the harness has
 been lying since I added the exit.** `emu_pace.py 600` reported 47 states
