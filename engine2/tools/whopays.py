@@ -126,7 +126,10 @@ def main(lifts):
         agg = {}
         for t in cm.charge_terms(quads, rm.cfg(), dlift=dl):
             for kk, n in t.items():
-                agg[kk] = agg.get(kk, 0) + n
+                if kk in K:            # charge_terms also reports the
+                    agg[kk] = agg.get(kk, 0) + n   # DRAWN counts, which
+                                       # carry no constant -- see its z
+
         sub = [(f"{kk:7s} {agg[kk]:5d} x {K[kk]}", agg[kk] * K[kk])
                for kk in agg]
         table(f"...of which the column renderer, dlift {dl}",

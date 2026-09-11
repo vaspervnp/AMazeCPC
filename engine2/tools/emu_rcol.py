@@ -77,6 +77,13 @@ FRONT = 0xC000
 SCRSZ = 0x4000
 
 
+P = _P                  # the same module line 44 already has,
+                        # under the name the charge formulas read in
+
+PERIOD = 19968.0        # one vsync, the unit every over-charge is
+                        # finally measured in -- see pacemodel.py
+
+
 def build(paced=False):
     blob, layout, _ = gentab.build()
     os.makedirs(BUILD, exist_ok=True)
@@ -355,7 +362,6 @@ def time_it(nstates=24):
 
 # ---------------------------------------------------------------- atomic --
 def charges_for(quads, c, dlift=0):
-    import pacemodel as P
     return colmodel.charge(quads, c, P.C_CFRAME, P.C_CFACE, P.C_CSKIP,
                            P.C_COLS, P.C_CBAND, P.C_COLR, P.C_CEDGE,
                            P.C_CSTEP, dlift=dlift, c_colso=P.C_COLSO,
@@ -496,7 +502,16 @@ def atomic(nstates=3, seed=1337, dlift=0, moving=None):
                                      "steps", "far", "farp", "fars",
                                      "farend", "colso")
                          if t.get(k)), "?")
-            by_kind.setdefault(kind, []).append((m, cc))
+            # ...AND THE SAME CHARGE RECOMPUTED AT THE ROWS THE PAIR
+            # ACTUALLY DREW.  cc - cd is the bound's SHAPE (rows billed
+            # and not drawn); cd - m is its CONSTANTS (C_COLS and
+            # C_COLR sized for the worst pair and paid at every one).
+            # Those are two different repairs and the sum alone cannot
+            # tell them apart -- reading the whole gap as shape is how
+            # this file came to blame the wrong one.
+            cd = cc + P.C_COLR * (t["rows_a"] - t["rows"]) \
+                    + P.C_CEDGE * (t["edges_a"] - t["edges"])
+            by_kind.setdefault(kind, []).append((m, cc, cd))
         print(f"\nstate ({px:04X},{py:04X},{a})  dlift {dlift}"
               f"{' moving' if moving else ''}  "
               f"{len(qs)} quads, "
@@ -521,14 +536,15 @@ def atomic(nstates=3, seed=1337, dlift=0, moving=None):
         worst += bad
     worst.sort(reverse=True)
     print(f"\n=== measured intervals by hook, over {nstates} states ===")
-    print("  kind      hooks     mean    worst     mean    worst    worst"
+    print("  kind      hooks     mean    drawn     mean    worst    worst"
           "        share")
-    print("                        us       us   charge   charge   margin"
+    print("                        us   charge   charge   charge   margin"
           "    of render")
-    for kind in sorted(by_kind, key=lambda k: -sum(m for m, _c in by_kind[k])):
+    for kind in sorted(by_kind,
+                       key=lambda k: -sum(m for m, _c, _d in by_kind[k])):
         v = by_kind[kind]
-        tot = sum(m for m, _c in v)
-        mgn = min(cc - m for m, cc in v)
+        tot = sum(m for m, _c, _d in v)
+        mgn = min(cc - m for m, cc, _d in v)
         # ...AND THE MEAN CHARGE BESIDE THE MEAN MEASURED.  The margin
         # column is the tightest single hook, which is what says how far
         # a CONSTANT can fall.  The gap between these two is a different
@@ -536,10 +552,28 @@ def atomic(nstates=3, seed=1337, dlift=0, moving=None):
         # much rc_charge bills for rows a pair turns out not to draw --
         # and no amount of tightening constants touches it.
         print(f"  {kind:9s} {len(v):5d} {tot/len(v):8.0f} "
-              f"{max(m for m, _c in v):8.0f} "
-              f"{sum(cc for _m, cc in v)/len(v):8.0f} "
-              f"{max(cc for _m, cc in v):8.0f} {mgn:+8.0f}"
-              f"   {100.0*tot/sum(sum(m for m, _c in w) for w in by_kind.values()):5.1f}%")
+              f"{sum(d for _m, _c, d in v)/len(v):8.0f} "
+              f"{sum(cc for _m, cc, _d in v)/len(v):8.0f} "
+              f"{max(cc for _m, cc, _d in v):8.0f} {mgn:+8.0f}"
+              f"   {100.0*tot/sum(sum(m for m, _c, _d in w) for w in by_kind.values()):5.1f}%")
+    # ---- AND THE SPLIT, WHICH IS THE WHOLE POINT OF THE DRAWN COLUMN.
+    shp = sum(cc - d for v in by_kind.values() for _m, cc, d in v)
+    con = sum(d - m for v in by_kind.values() for m, _c, d in v)
+    # THE DENOMINATOR IS THE FRAMES THAT RENDERED, NOT nstates.
+    # _atomic_states yields states whose quad list is empty, and
+    # charge_terms returns NO hooks at all for one of those -- so
+    # dividing by nstates quietly scaled every number here by 7/12 and
+    # called the answer microseconds a frame.  `frame` is emitted
+    # exactly once per render, so its count IS the denominator, and it
+    # is printed so a short run cannot look like a full one.
+    nst = len(by_kind.get("frame", [])) or 1
+    print(f"\n  over-charge, per RENDERED frame ({nst} of {nstates} "
+          f"states rendered, {len(by_kind.get('pair', []))/nst:.0f} "
+          f"drawn pairs each):")
+    print(f"    shape (rows billed, not drawn) {shp/nst:9.0f} us"
+          f"   {shp/nst/PERIOD:5.2f} periods")
+    print(f"    constants (worst pair, paid at every one) "
+          f"{con/nst:9.0f} us   {con/nst/PERIOD:5.2f} periods")
     print(f"\n=== worst under-charge over {nstates} states ===")
     if not worst:
         # A HEADING WITH NOTHING UNDER IT READS AS A TRUNCATED REPORT,

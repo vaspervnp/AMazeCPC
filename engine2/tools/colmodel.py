@@ -709,7 +709,19 @@ def charge_terms(quads, c, dlift=0):
         return out                       # raster_colframe rets before
     z = {"frame": 0, "face": 0, "skip": 0, "pair": 0,
          "bands": 0, "rows": 0, "edges": 0, "steps": 0,
-         "far": 0, "farp": 0, "fars": 0, "farend": 0, "colso": 0}
+         "far": 0, "farp": 0, "fars": 0, "farend": 0, "colso": 0,
+         # ...AND WHAT THE PAIR ACTUALLY DRAWS, beside what it is
+         # charged for.  These are NOT regressors and carry no
+         # constant: `rows`/`edges` are rc_charge's BOUND, these two
+         # are the row counts pair_walk really emits, and the whole
+         # point is the difference.  A charge is one-sided, so the
+         # bound is always >= these; how much bigger is the only
+         # measure of how loose the bound's SHAPE is, which is a
+         # different quantity from how loose its CONSTANTS are and
+         # was invisible until they sat side by side.  Consumers key
+         # off their own column lists (emu_rcol.TERMS, charge()'s
+         # arguments, whopays.K) and skip these.
+         "rows_a": 0, "edges_a": 0}
     out.append(dict(z, frame=1))         # its hook on an empty list
     # TWO PASSES, in raster_colframe's own order.  rc_face is entered for
     # every record in BOTH passes but returns before the charge on the
@@ -771,7 +783,11 @@ def charge_terms(quads, c, dlift=0):
                 # on the PASS, exactly as rc_charge keys it on (rc_over).
                 out.append(dict(z, pair=1, bands=nb, rows=rows,
                                 colso=1 if over is True else 0,
-                                edges=min(2 * (jhi - jlo), free)))
+                                edges=min(2 * (jhi - jlo), free),
+                                rows_a=sum(b[1] - b[0] + 1
+                                           for b in i["bands"]),
+                                edges_a=sum(e[1] - e[0] + 1
+                                            for e in i["edges"])))
             if 1 <= i["delta"] <= 3:
                 out.append(dict(z, skip=1, steps=i["delta"]))
     return out

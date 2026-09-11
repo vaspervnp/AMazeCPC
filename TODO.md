@@ -160,13 +160,13 @@ the far pass was never measured, and this is the bill. `RC_FARH` is 144
 scanlines and `C_CFAR` was once derived at 96 and not re-derived — see
 `_atomic_states`, which exists because of exactly that.
 
-### Where the last period is: the BOUND's SHAPE, not its constants
+### Where the last period is: NOT the bound's shape, and mostly not reachable
 
-`atomic`'s table prints the mean charge beside the mean measured now,
-and the gap between those two is a different quantity from the margin
+`atomic`'s table prints the mean charge beside the mean measured, and
+the gap between those two is a different quantity from the margin
 column. The margin is the tightest single hook — how far a CONSTANT can
-fall. The gap is how much `rc_charge` bills for work that does not
-happen, and no amount of tightening constants touches it:
+fall. The gap is 19.3 ms a frame, **0.97 periods**, of which `pair` at
+448 µs × 33 is three quarters:
 
 | kind | mean measured | mean charge | gap | a frame |
 |---|---|---|---|---|
@@ -177,21 +177,54 @@ happen, and no amount of tightening constants touches it:
 | everything else | | | | 0.7 ms |
 | | | | | **19.3 ms = 0.97 periods** |
 
-**That is the whole remaining problem, and it is four times the flat
-blitter (0.13) and five times the constant tightening (0.18).** `pair`
-alone is three quarters of it.
+**I read that whole gap as the bound's SHAPE — rows billed and not
+drawn — and it is not.** `charge_terms` now reports `rows_a`/`edges_a`,
+the rows `pair_walk` really emits, beside the bound it charges, and
+`atomic` recomputes the charge at the drawn counts. That third column
+splits the gap in two, and the split is lopsided the other way:
 
-`rc_charge` bills `C_COLS + C_COLR*(rows + 8*edges)`, where `rows` and
-`edges` are upper bounds computed from `(rc_h) ± (rc_hq)+1` before any
-setup runs. At `C_COLR` 21 a row, a 448 µs mean gap is **about 21 rows
-a pair** that get billed and not drawn. The bound is doing its job — it
-is one-sided and `atomic` proves it — it is simply loose.
+| | µs a pair | of the 448 |
+|---|---|---|
+| shape — rows billed and not drawn | **29** | 6% |
+| constants — worst pair's cost, paid at every pair | **419** | 94% |
 
-**And the obstacle is the same one byte.** `rc_charge` is in
-`rastcol.asm` in front of the `align 256`, whose pad is one byte, so a
-tighter bound has to be computed in **no more instructions than the
-loose one**, or it costs a 256-byte page before it saves anything.
-That, not the arithmetic, is what makes this hard.
+Over 305 measured pairs the bound over-counts by 2.96 band rows and
+0.20 edge rows a pair: 62 + 34 = **96 µs**, and the `min(…, free)` clip
+binds on only 48 of 305. There is no 21 rows a pair being billed and
+not drawn. There never was.
+
+**So the constants are the money — and they are already optimal for the
+regressors they have.** Least squares on the 305 measured pairs gives
+`1345 + 23.8·rows + 107·edges`; lifted until nothing is under, that
+model still over-charges **425 µs a pair on average**, against the
+shipped charge's 419. The shipped constants are *at* the linear
+optimum. `bands` came out 2 on all 305 pairs, so `C_CBAND == 0` is
+right and the term is dead weight to even measure.
+
+**One regressor does cut it, and the bound cannot see it.** Add "does
+this pair draw any edge rows at all" and the one-sided over-charge
+falls 425 → **226 µs**: there is a fixed ~426 µs that only edge-drawing
+pairs pay, folded today into `C_COLS` and charged to all of them. But
+`rc_charge` runs before the work and only knows `jhi > jlo`, which
+fires on **70 of 305 pairs while only 43 really draw edges**. Charging
+off the bound's version instead of the truth gets 425 → 344: **81 µs a
+pair, 2.7 ms a frame, 0.13 periods** — the same as the flat blitter,
+which was already judged not worth its bytes, and this one costs ~7
+bytes in front of the `align 256` whose pad is one byte. **A 256-byte
+page for 0.13 periods.** No.
+
+And the 226 µs floor is what remains *with perfect knowledge of what
+the pair will draw*. It is per-pair variance that no count explains —
+tested `bands`, `colso`, wholly-occluded, edge-present, and nothing
+moved it. That is not a bound that is too loose; that is a cost that is
+not linear in anything `rc_charge` can hold.
+
+**Conclusion: the pair charge is finished.** The remaining 0.97 periods
+are not a defect to be tightened out of `rc_charge`; they are the price
+of charging an upper bound before the work, at a grain this coarse. If
+that period is ever wanted, it has to come from doing less work — the
+far plane's 86 fills at 921 µs is the one candidate with real mass —
+not from billing the same work more precisely.
 
 ### The charges were more generous than the machine needed
 
